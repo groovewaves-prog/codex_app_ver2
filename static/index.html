@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Secure Network Review</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="hero">
+        <p class="eyebrow">Secure AI Review</p>
+        <h1>Review network designs and configs with local sanitization first</h1>
+        <p class="lead">
+          Files are parsed locally, sensitive values are masked, and only sanitized text is sent to the AI review layer.
+        </p>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Input</h2>
+          <p>Supported: .txt, .cfg, .conf, .log, .json, .yaml, .yml, .csv, .html, .xml, .docx</p>
+        </div>
+        <label class="upload">
+          <input id="file-input" type="file" multiple />
+          <span>Select review files</span>
+        </label>
+        <div id="file-list" class="file-list"></div>
+        <button id="review-button" class="primary">Sanitize and review</button>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Security status</h2>
+          </div>
+          <div id="security-card" class="security-card muted">
+            No review has been run yet.
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Review results</h2>
+          </div>
+          <div id="summary" class="summary muted">Waiting for input.</div>
+          <div id="issues" class="issues"></div>
+        </article>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Sanitization preview</h2>
+          </div>
+          <div id="documents" class="documents muted">
+            Original and sanitized excerpts will appear here after review.
+          </div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <h2>Warnings</h2>
+          </div>
+          <ul id="warnings" class="warnings muted">
+            <li>Not executed yet.</li>
+          </ul>
+        </article>
+      </section>
+    </main>
+
+    <template id="issue-template">
+      <article class="issue">
+        <div class="issue-meta">
+          <span class="badge"></span>
+          <span class="source"></span>
+        </div>
+        <h3></h3>
+        <p class="details"></p>
+        <p class="recommendation"></p>
+      </article>
+    </template>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>

@@ -19,11 +19,21 @@
       <section class="panel">
         <div class="panel-head">
           <h2>Input</h2>
-          <p>Supported: .txt, .cfg, .conf, .log, .json, .yaml, .yml, .csv, .html, .xml, .docx</p>
+          <p>Supported: .txt, .md, .py, .ps1, .sh, .bsh, .vba, .bas, .cls, .vbs, .cfg, .conf, .log, .json, .yaml, .yml, .csv, .html, .xml, .docx, .xlsx, .pptx, and common image files</p>
         </div>
         <label class="upload">
           <input id="file-input" type="file" multiple />
           <span>Select review files</span>
+        </label>
+        <label class="upload">
+          <span>Review profile</span>
+          <select id="document-profile">
+            <option value="">Auto detect</option>
+            <option value="design">Design / document</option>
+            <option value="change_runbook">Change runbook</option>
+            <option value="operations_runbook">Operations runbook</option>
+            <option value="source_code">Source code / script</option>
+          </select>
         </label>
         <div id="file-list" class="file-list"></div>
         <button id="review-button" class="primary">Sanitize and review</button>

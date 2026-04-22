@@ -4,13 +4,13 @@ import argparse
 import json
 import os
 import sys
+import urllib.parse
 import urllib.error
 import urllib.request
 
 
 OPENAI_URL = "https://api.openai.com/v1/responses"
-HF_ROUTER_URL = "https://router.huggingface.co/v1/chat/completions"
-DEFAULT_GEMMA_MODEL = "google/gemma-4-E4B-it"
+DEFAULT_GEMMA_MODEL = "gemma-4-31b-it"
 
 
 def main() -> int:
@@ -24,7 +24,7 @@ def main() -> int:
     parser.add_argument(
         "--gemma-model",
         default=DEFAULT_GEMMA_MODEL,
-        help="Gemma model to test via Hugging Face Inference Providers.",
+        help="Gemma model to test via Gemini API.",
     )
     args = parser.parse_args()
 
@@ -76,33 +76,43 @@ def run_openai_test() -> int:
 
 
 def run_gemma_test(model: str) -> int:
-    hf_token = os.getenv("HF_TOKEN", "").strip()
-    if not hf_token:
-        print("[gemma] SKIP: HF_TOKEN is not set.")
+    api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
+    if not api_key:
+        print("[gemma] SKIP: GEMINI_API_KEY or GOOGLE_API_KEY is not set.")
         return 1
 
+    endpoint = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{urllib.parse.quote(model, safe='.-')}:generateContent"
+    )
     payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "Reply with exactly: GEMMA_OK"}],
-        "max_tokens": 20,
-        "temperature": 0,
+        "contents": [
+            {
+                "role": "user",
+                "parts": [{"text": "Reply with exactly: GEMMA_OK"}],
+            }
+        ],
+        "generationConfig": {
+            "maxOutputTokens": 20,
+            "temperature": 0,
+        },
     }
 
-    print(f"[gemma] Testing {model} via Hugging Face router...")
+    print(f"[gemma] Testing {model} via Gemini API...")
     try:
         response = post_json(
-            HF_ROUTER_URL,
+            endpoint,
             payload,
             {
-                "Authorization": f"Bearer {hf_token}",
                 "Content-Type": "application/json",
+                "x-goog-api-key": api_key,
             },
         )
     except RuntimeError as exc:
         print(f"[gemma] FAIL: {exc}")
         return 1
 
-    output_text = extract_chat_output_text(response)
+    output_text = extract_gemini_output_text(response)
     print(f"[gemma] PASS: response_text={output_text!r}")
     return 0
 
@@ -139,18 +149,15 @@ def extract_openai_output_text(payload: dict) -> str:
     return "\n".join(chunks).strip()
 
 
-def extract_chat_output_text(payload: dict) -> str:
-    choices = payload.get("choices", [])
-    if not choices:
-        return ""
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
-    if isinstance(content, str):
-        return content.strip()
-    if isinstance(content, list):
-        chunks = [item.get("text", "") for item in content if isinstance(item, dict)]
-        return "\n".join(chunk for chunk in chunks if chunk).strip()
-    return ""
+def extract_gemini_output_text(payload: dict) -> str:
+    chunks: list[str] = []
+    for candidate in payload.get("candidates", []):
+        content = candidate.get("content", {})
+        for part in content.get("parts", []):
+            text = part.get("text")
+            if text:
+                chunks.append(text)
+    return "\n".join(chunks).strip()
 
 
 if __name__ == "__main__":

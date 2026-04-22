@@ -7,6 +7,20 @@ const warnings = document.getElementById("warnings");
 const documents = document.getElementById("documents");
 const securityCard = document.getElementById("security-card");
 const issueTemplate = document.getElementById("issue-template");
+const documentProfile = document.getElementById("document-profile");
+const binaryExtensions = new Set([
+  ".docx",
+  ".xlsx",
+  ".pptx",
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".bmp",
+  ".gif",
+  ".tif",
+  ".tiff",
+  ".webp",
+]);
 
 const selectedFiles = [];
 
@@ -15,11 +29,12 @@ fileInput.addEventListener("change", async (event) => {
   fileList.innerHTML = "";
 
   for (const file of event.target.files) {
-    const content = await readFile(file);
+    const payload = await readFile(file);
     selectedFiles.push({
       name: file.name,
-      content,
+      content: payload.content,
       contentType: file.type || "text/plain",
+      transferEncoding: payload.transferEncoding,
     });
     renderFileChip(file.name, file.size);
   }
@@ -41,7 +56,10 @@ reviewButton.addEventListener("click", async () => {
     const response = await fetch("/api/review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ documents: selectedFiles }),
+      body: JSON.stringify({
+        documents: selectedFiles,
+        documentProfile: documentProfile?.value || "",
+      }),
     });
     const payload = await response.json();
 
@@ -68,7 +86,7 @@ function renderFileChip(name, size) {
 
 function renderReview(payload) {
   summary.className = "summary";
-  summary.textContent = `${payload.review.summary} Provider: ${payload.review.provider}`;
+  summary.textContent = `${payload.review.summary} Provider: ${payload.review.provider} Rubric: ${payload.review.rubric_name || "-"} Classification: ${payload.review.document_profile || "-"} (${payload.review.classification_confidence || "unknown"})`;
 
   issues.innerHTML = "";
   for (const item of payload.review.issues) {
@@ -109,7 +127,7 @@ function renderReview(payload) {
           <pre>${escapeHtml(doc.sanitized_excerpt)}</pre>
         </section>
       </div>
-      <p class="doc-meta">Replacement count: ${doc.replacements.length}</p>
+      <p class="doc-meta">Replacement count: ${doc.replacements.length} | Estimated input tokens: ${doc.estimated_input_tokens} | Outbound risk: ${escapeHtml(doc.outbound_risk)} | Local sensitivity: ${escapeHtml(doc.local_sensitivity_decision || "unknown")}</p>
     `;
     documents.appendChild(article);
   }
@@ -117,19 +135,30 @@ function renderReview(payload) {
   securityCard.className = "security-card";
   securityCard.innerHTML = `
     <strong>Outbound protection:</strong> ${escapeHtml(payload.security.message)}<br />
-    <strong>Total replacements:</strong> ${payload.security.replacements}
+    <strong>Total replacements:</strong> ${payload.security.replacements}<br />
+    <strong>Estimated input tokens:</strong> ${payload.security.estimated_input_tokens}<br />
+    <strong>Highest outbound risk:</strong> ${escapeHtml(payload.security.max_outbound_risk)}<br />
+    <strong>Local sensitivity provider:</strong> ${escapeHtml(payload.security.local_sensitivity_provider || "-")}<br />
+    <strong>Classification reason:</strong> ${escapeHtml(payload.review.classification_reason || "-")}
   `;
 }
 
 async function readFile(file) {
-  if (file.name.toLowerCase().endsWith(".docx")) {
+  if (isBinaryFile(file)) {
     const binary = await readArrayBuffer(file);
-    return toLatin1(binary);
+    return {
+      content: toBase64(binary),
+      transferEncoding: "base64",
+    };
   }
 
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
+    reader.onload = () =>
+      resolve({
+        content: reader.result,
+        transferEncoding: "text",
+      });
     reader.onerror = () => reject(new Error(`Failed to read ${file.name}.`));
     reader.readAsText(file);
   });
@@ -144,13 +173,24 @@ function readArrayBuffer(file) {
   });
 }
 
-function toLatin1(buffer) {
+function toBase64(buffer) {
   const bytes = new Uint8Array(buffer);
-  let result = "";
-  for (const byte of bytes) {
-    result += String.fromCharCode(byte);
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
   }
-  return result;
+  return btoa(binary);
+}
+
+function isBinaryFile(file) {
+  const lower = file.name.toLowerCase();
+  for (const extension of binaryExtensions) {
+    if (lower.endsWith(extension)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function escapeHtml(value) {

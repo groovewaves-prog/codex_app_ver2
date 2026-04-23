@@ -1,22 +1,33 @@
 # Secure Network Review
 
-ネットワーク設計書や機器 Config を読み込み、機密情報を匿名化した上で AI レビューに渡すアプリケーションです。
+社内文書や設定情報をローカルで秘匿化してから、外部 LLM でレビューするための PoC です。
 
-## 入口
+## 構成
 
-- 基本設計書: `docs/basic_design.md`
-- 設計とコードの対応表: `docs/traceability.md`
-- 引き継ぎ書: `docs/handoff.md`
+- ローカル前処理: Ollama `gemma3:12b`
+- 外部レビュー: Gemma 4 class model
 
-## 現在の実装
+ローカル側では次を行います。
 
-- ローカル Web UI の MVP
-- ファイル読込
-- テキスト抽出
-- 機密情報の匿名化
-- モックレビュー
-- 外部 LLM API 接続用の土台
-- API 疎通確認スクリプト
+- 一次マスキング
+- `gemma3:12b` による追加クレンジング
+- `gemma3:12b` による社外送信可否の確認
+
+外部 LLM には、置換済みテキストだけを送ります。
+
+## セットアップ
+
+```powershell
+Copy-Item .env.example .env
+```
+
+`.env` を確認し、少なくとも `GEMINI_API_KEY` を設定してください。
+
+ローカル Ollama 側でモデル未取得なら、別セッションで次を実行します。
+
+```powershell
+ollama pull gemma3:12b
+```
 
 ## 起動
 
@@ -24,19 +35,38 @@
 python server.py
 ```
 
-ブラウザで `http://127.0.0.1:8000` を開きます。
+起動時にカレントディレクトリの `.env` を自動読込します。ブラウザで `http://127.0.0.1:8000` を開いてください。
 
-## API 接続テスト
+## ローカル前処理の確認
+
+組み込みサンプルで確認:
 
 ```powershell
-$env:OPENAI_API_KEY="..."
-$env:HF_TOKEN="..."
-python scripts\api_smoke_test.py --provider both
+python scripts\local_ollama_precheck.py
 ```
 
-## 今後の主方針
+実ファイルで確認:
 
-- Gemma 4 は自己配備前提
-- UI は Streamlit へ移行予定
-- 重い推論処理は Google Cloud 側へ寄せる
-- PDF / Excel 対応は前処理パイプラインで実現する
+```powershell
+python scripts\local_ollama_precheck.py --input-file C:\path\to\your-document.docx
+```
+
+詳しい手順は [local_ollama_verification.md](/c:/Users/S023649/OneDrive%20-%20KDDI株式会社/SecurePC/Documents/codex/docs/local_ollama_verification.md) を参照してください。
+
+## 主な環境変数
+
+- `LOCAL_SANITIZER_PROVIDER=ollama`
+- `LOCAL_SANITIZER_API_URL=http://127.0.0.1:11434/v1/responses`
+- `LOCAL_SANITIZER_MODEL=gemma3:12b`
+- `LOCAL_SENSITIVITY_PROVIDER=ollama`
+- `LOCAL_SENSITIVITY_API_URL=http://127.0.0.1:11434/v1/responses`
+- `LOCAL_SENSITIVITY_MODEL=gemma3:12b`
+- `REVIEW_PROVIDER=gemma4`
+- `GEMMA_MODEL=gemma-4-31b-it`
+- `GEMINI_API_KEY=...`
+
+## テスト
+
+```powershell
+python -m unittest tests.test_env_loader tests.test_sanitizer tests.test_sensitivity tests.test_reviewer
+```

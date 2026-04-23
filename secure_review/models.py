@@ -35,6 +35,7 @@ class SanitizedDocument:
     findings: list[str] = field(default_factory=list)
     estimated_input_tokens: int = 0
     outbound_risk: str = "low"
+    local_sanitizer_provider: str = ""
     local_sensitivity_decision: str = "unknown"
     local_sensitivity_reasons: list[str] = field(default_factory=list)
     local_sensitivity_provider: str = ""
@@ -48,6 +49,7 @@ class SanitizedDocument:
             "findings": list(self.findings),
             "estimated_input_tokens": self.estimated_input_tokens,
             "outbound_risk": self.outbound_risk,
+            "local_sanitizer_provider": self.local_sanitizer_provider,
             "local_sensitivity_decision": self.local_sensitivity_decision,
             "local_sensitivity_reasons": list(self.local_sensitivity_reasons),
             "local_sensitivity_provider": self.local_sensitivity_provider,

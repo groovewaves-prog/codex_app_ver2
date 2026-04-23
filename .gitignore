@@ -13,3 +13,6 @@ Thumbs.db
 venv/
 
 .streamlit/secrets.toml
+
+output/
+tests/ui-smoke.png

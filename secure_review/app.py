@@ -9,7 +9,7 @@ from pathlib import Path
 from secure_review.extractor import extract_text
 from secure_review.models import UploadedDocument
 from secure_review.reviewer import choose_provider
-from secure_review.sanitizer import SensitiveDataSanitizer
+from secure_review.sanitizer import SensitiveDataSanitizer, choose_local_sanitization_enhancer
 from secure_review.sensitivity import choose_sensitivity_classifier
 
 
@@ -66,6 +66,7 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
                 return
 
             sanitizer = SensitiveDataSanitizer()
+            local_sanitizer = choose_local_sanitization_enhancer()
             sensitivity_classifier = choose_sensitivity_classifier()
             sanitized_documents = []
             extraction_warnings: list[str] = []
@@ -79,6 +80,12 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
                 )
                 extraction_warnings.extend(warnings)
                 sanitized = sanitizer.sanitize(document.name, extracted_text)
+                sanitized = local_sanitizer.enhance(
+                    document.name,
+                    extracted_text,
+                    sanitized,
+                    sanitizer,
+                )
                 assessment = sensitivity_classifier.assess(document.name, extracted_text, sanitized)
                 sanitized.local_sensitivity_decision = assessment.decision
                 sanitized.local_sensitivity_reasons = assessment.reasons
@@ -119,6 +126,7 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
                     "estimated_input_tokens": sum(
                         doc.estimated_input_tokens for doc in sanitized_documents
                     ),
+                    "local_sanitizer_provider": local_sanitizer.name,
                     "local_sensitivity_provider": sensitivity_classifier.name,
                 },
             }

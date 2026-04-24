@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from secure_review.models import ReviewIssue, ReviewResult, SanitizedDocument
+from secure_review.network_guard import UpstreamHttpError, post_json_safely
 from secure_review.rubric import ReviewRubric, classify_documents, choose_rubric, render_rubric_for_prompt
+
+
+LOGGER = logging.getLogger("secure_review.reviewer")
 
 
 SYSTEM_PROMPT = """You are a senior network, infrastructure, and code review agent.
@@ -21,6 +27,15 @@ Output format:
 SUMMARY: overall summary
 ISSUE|severity|title|details|recommendation|source_document
 """
+
+
+# Gemini free-tier quota messages we want to surface nicely to the user.
+_GEMINI_QUOTA_MARKERS = (
+    "RESOURCE_EXHAUSTED",
+    "quota",
+    "rate limit",
+    "Resource has been exhausted",
+)
 
 
 class ReviewProvider:
@@ -108,7 +123,7 @@ class MockReviewProvider(ReviewProvider):
                     )
                 )
 
-            if "aaa new-model" not in lowered and "aaa authentication" not in lowered:
+            if rubric.document_profile == "design" and "aaa new-model" not in lowered and "aaa authentication" not in lowered:
                 issues.append(
                     ReviewIssue(
                         severity="medium",
@@ -163,6 +178,87 @@ class MockReviewProvider(ReviewProvider):
                     )
                 )
 
+            if rubric.document_profile == "operations_runbook" and not _has_operational_handover_signals(lowered):
+                issues.append(
+                    ReviewIssue(
+                        severity="medium",
+                        title="運用ハンドオーバー要素の記載が不足",
+                        details=(
+                            "運用手順書ですが、SLO/SLA、監視→ランブックのリンク、"
+                            "オーナーシップ/RACI、エスカレーション先のいずれかに言及が見当たりません。"
+                        ),
+                        recommendation=(
+                            "SLO、監視項目と対応手順のリンク、運用オーナーと"
+                            "エスカレーション先を明記してください。"
+                        ),
+                        source_document=document.name,
+                    )
+                )
+
+            if rubric.document_profile == "change_runbook" and _has_irreversible_operation_signals(lowered) and not _has_rollback_signals(lowered):
+                issues.append(
+                    ReviewIssue(
+                        severity="high",
+                        title="不可逆な作業が含まれる可能性があり、補償処置が不明",
+                        details=(
+                            "DB破壊的変更、データ削除、設定の上書きなど不可逆と思われる処理が"
+                            "記載されている一方、切戻し/補償処置の記述が見当たりません。"
+                        ),
+                        recommendation=(
+                            "可逆/不可逆を区別し、不可逆処理には補償処置や代替手段を明記してください。"
+                        ),
+                        source_document=document.name,
+                    )
+                )
+
+            if rubric.document_profile == "change_runbook" and not _has_environment_distinction(lowered):
+                issues.append(
+                    ReviewIssue(
+                        severity="medium",
+                        title="作業対象環境の区別が不明確",
+                        details=(
+                            "作業計画書ですが、本番・検証・ステージングなど作業対象環境の"
+                            "区別が読み取れませんでした。"
+                        ),
+                        recommendation=(
+                            "作業対象環境（本番／検証／ステージング等）を明記してください。"
+                        ),
+                        source_document=document.name,
+                    )
+                )
+
+            if rubric.document_profile == "change_runbook" and not _has_risk_level_with_approval(lowered):
+                issues.append(
+                    ReviewIssue(
+                        severity="medium",
+                        title="リスクレベルと承認プロセスの記載が不足",
+                        details=(
+                            "変更のリスクレベル分類と、それに対応する承認経路（誰の承認が必要か）"
+                            "が読み取れませんでした。"
+                        ),
+                        recommendation=(
+                            "リスクレベル（例: 高／中／低）と、各レベルに必要な承認者を明示してください。"
+                        ),
+                        source_document=document.name,
+                    )
+                )
+
+            if rubric.document_profile == "change_runbook" and not _has_document_update_list(lowered):
+                issues.append(
+                    ReviewIssue(
+                        severity="low",
+                        title="作業後に修正対象となるドキュメントの事前一覧が無い",
+                        details=(
+                            "作業後に更新が必要となるドキュメントの事前一覧が見当たりませんでした。"
+                        ),
+                        recommendation=(
+                            "変更対象ドキュメント（設計書、構成管理、運用手順書など）を計画段階で"
+                            "リスト化してください。"
+                        ),
+                        source_document=document.name,
+                    )
+                )
+
         if not issues:
             issues.append(
                 ReviewIssue(
@@ -211,13 +307,14 @@ class HttpLlmReviewProvider(ReviewProvider):
                 {"role": "user", "content": prompt},
             ],
         }
-        response = _post_json(
+        response = post_json_safely(
             self.api_url,
             payload,
             {
                 "Content-Type": "application/json",
                 **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             },
+            context_label="HTTP LLM provider",
         )
         content = _extract_openai_like_text(response)
         issues = _parse_issue_blocks(content, documents)
@@ -234,11 +331,32 @@ class HttpLlmReviewProvider(ReviewProvider):
 
 
 class GeminiApiReviewProvider(ReviewProvider):
+    """Gemini / Gemma via Google Generative Language API.
+
+    Stability improvements over the previous version:
+
+    - Retry once on 429 / 5xx with a short backoff (free-tier rate limits
+      are short-lived).
+    - Convert quota errors into a clearly-labelled ``RuntimeError`` so the UI
+      can display "Quota exceeded, please retry later" instead of a raw
+      provider message.
+    - Default to a Gemini flash model (which is actually on the free tier) if
+      the user selects the "gemini-free" provider without overriding model.
+    - Never echo the response body into exceptions.
+    """
+
     name = "gemini-api"
+    default_model = "gemma-4-31b-it"
+    max_retries = 1
+    retry_backoff_seconds = 2.0
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
-        self.model = os.getenv("GEMMA_MODEL", "").strip() or os.getenv("GEMINI_MODEL", "").strip() or "gemma-4-31b-it"
+        self.model = (
+            os.getenv("GEMMA_MODEL", "").strip()
+            or os.getenv("GEMINI_MODEL", "").strip()
+            or self.default_model
+        )
         self.max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
         self.temperature = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
 
@@ -263,15 +381,15 @@ class GeminiApiReviewProvider(ReviewProvider):
                 "maxOutputTokens": self.max_output_tokens,
             },
         }
-        response = _post_json(
-            _build_gemini_endpoint(self.model),
-            payload,
-            {
-                "Content-Type": "application/json",
-                "x-goog-api-key": self.api_key,
-            },
-        )
+
+        response = self._post_with_retry(payload)
         content = _extract_gemini_text(response)
+        if not content.strip():
+            finish_reason = _first_finish_reason(response)
+            raise RuntimeError(
+                f"Gemini returned no text (finish_reason={finish_reason or 'unknown'}). "
+                "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
+            )
         issues = _parse_issue_blocks(content, documents)
         return _build_review_result(
             summary=f"Received review result from Gemini API model {self.model}.",
@@ -284,13 +402,51 @@ class GeminiApiReviewProvider(ReviewProvider):
             prompt=prompt,
         )
 
+    def _post_with_retry(self, payload: dict) -> dict:
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return post_json_safely(
+                    _build_gemini_endpoint(self.model),
+                    payload,
+                    {
+                        "Content-Type": "application/json",
+                        "x-goog-api-key": self.api_key,
+                    },
+                    context_label=f"Gemini ({self.model})",
+                )
+            except UpstreamHttpError as exc:
+                last_error = exc
+                message = str(exc)
+                if _looks_like_quota(message):
+                    # Quota errors do not help by retrying.
+                    raise RuntimeError(
+                        "Gemini free-tier quota appears to be exhausted. "
+                        "Wait a minute and try again, or switch to a paid tier."
+                    ) from None
+                if attempt < self.max_retries:
+                    LOGGER.info("Gemini call failed (attempt %s); retrying: %s", attempt + 1, exc)
+                    time.sleep(self.retry_backoff_seconds)
+                    continue
+                raise
+        # Defensive: loop above always either returns or raises.
+        raise last_error or RuntimeError("Gemini call failed with no error captured.")
+
 
 class GeminiHostedGemmaProvider(GeminiApiReviewProvider):
     name = "gemma-4-gemini-api"
+    default_model = "gemma-4-31b-it"
 
 
 class GeminiFreeTierProvider(GeminiApiReviewProvider):
+    """Gemini 2.x flash model variants are the ones that actually hit free-tier.
+
+    If no model is configured, use ``gemini-2.0-flash`` as a saner default
+    than the Gemma model the previous code used.
+    """
+
     name = "gemini-free-tier"
+    default_model = "gemini-2.0-flash"
 
 
 def build_prompt(documents: list[SanitizedDocument], rubric: ReviewRubric | None = None) -> str:
@@ -356,23 +512,9 @@ def _build_gemini_endpoint(model: str) -> str:
     )
 
 
+# Backwards-compat shim for tests/callers that patched this symbol.
 def _post_json(url: str, payload: dict, headers: dict[str, str]) -> dict:
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Network error: {exc.reason}") from exc
-
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON response: {raw[:400]}") from exc
+    return post_json_safely(url, payload, headers, context_label="LLM provider")
 
 
 def _extract_openai_like_text(payload: dict) -> str:
@@ -386,7 +528,16 @@ def _extract_openai_like_text(payload: dict) -> str:
             text = content.get("text")
             if text:
                 chunks.append(text)
-    return "\n".join(chunks).strip() or json.dumps(payload, ensure_ascii=False)
+
+    for choice in payload.get("choices", []):
+        message = choice.get("message") or {}
+        text = message.get("content")
+        if isinstance(text, str) and text:
+            chunks.append(text)
+
+    # Return empty string on no-content rather than the whole payload; the
+    # previous behavior allowed provider diagnostics to surface as user text.
+    return "\n".join(chunks).strip()
 
 
 def _extract_gemini_text(payload: dict) -> str:
@@ -397,7 +548,20 @@ def _extract_gemini_text(payload: dict) -> str:
             text = part.get("text")
             if text:
                 chunks.append(text)
-    return "\n".join(chunks).strip() or json.dumps(payload, ensure_ascii=False)
+    return "\n".join(chunks).strip()
+
+
+def _first_finish_reason(payload: dict) -> str | None:
+    for candidate in payload.get("candidates", []):
+        reason = candidate.get("finishReason")
+        if reason:
+            return str(reason)
+    return None
+
+
+def _looks_like_quota(message: str) -> bool:
+    lower = message.lower()
+    return any(marker.lower() in lower for marker in _GEMINI_QUOTA_MARKERS)
 
 
 def _parse_issue_blocks(content: str, documents: list[SanitizedDocument]) -> list[ReviewIssue]:
@@ -445,12 +609,134 @@ def _has_purpose_at_beginning(beginning: str) -> bool:
 def _has_configuration_information(text: str) -> bool:
     return any(
         keyword in text
-        for keyword in ("構成図", "接続図", "ネットワーク構成", "システム構成", "機器一覧", "network diagram", "topology")
+        for keyword in (
+            "構成図",
+            "接続図",
+            "ネットワーク構成",
+            "システム構成",
+            "機器一覧",
+            "network diagram",
+            "topology",
+            "概要図",
+            "全体概要",
+            "体制図",
+        )
     )
 
 
 def _has_timechart_reference(text: str) -> bool:
     return any(keyword in text for keyword in ("タイムチャート", "time chart", "timeline", "別紙", "スケジュール"))
+
+
+def _has_operational_handover_signals(text: str) -> bool:
+    """SLO/SLA / monitoring-runbook link / ownership のいずれかに言及があるか。"""
+    keywords = (
+        "slo",
+        "sla",
+        "service level",
+        "サービス目標",
+        "稼働率目標",
+        "オーナー",
+        "owner",
+        "raci",
+        "責任分担",
+        "エスカレーション",
+        "escalation",
+        "ランブック",
+        "runbook",
+        "on-call",
+        "オンコール",
+        "アラート",
+        "alert",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
+def _has_irreversible_operation_signals(text: str) -> bool:
+    """不可逆と推定される作業キーワード。"""
+    keywords = (
+        "drop table",
+        "truncate",
+        "rm -rf",
+        "delete from",
+        "format ",
+        "破棄",
+        "削除",
+        "データ削除",
+        "物理削除",
+        "上書き",
+        "overwrite",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
+def _has_rollback_signals(text: str) -> bool:
+    keywords = (
+        "切戻し",
+        "切り戻し",
+        "rollback",
+        "roll back",
+        "backout",
+        "補償処置",
+        "リカバリ",
+        "fallback",
+        "代替手段",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
+def _has_environment_distinction(text: str) -> bool:
+    """作業対象環境の区別が記載されているか（本番/検証/ステージング等）。"""
+    keywords = (
+        "本番",
+        "検証",
+        "ステージング",
+        "staging",
+        "production",
+        "prod",
+        "preprod",
+        "開発環境",
+        "qa環境",
+        "評価環境",
+    )
+    return any(keyword in text for keyword in keywords)
+
+
+def _has_risk_level_with_approval(text: str) -> bool:
+    """リスクレベル分類と承認プロセスの両方の言及があるか。"""
+    risk_keywords = (
+        "リスクレベル",
+        "risk level",
+        "リスク分類",
+        "リスク区分",
+    )
+    approval_keywords = (
+        "承認",
+        "approval",
+        "approved by",
+        "オーソライズ",
+        "サインオフ",
+        "sign-off",
+        "決裁",
+    )
+    has_risk = any(keyword in text for keyword in risk_keywords)
+    has_approval = any(keyword in text for keyword in approval_keywords)
+    return has_risk and has_approval
+
+
+def _has_document_update_list(text: str) -> bool:
+    """作業後に修正するドキュメントの事前一覧があるか。"""
+    keywords = (
+        "変更対象ドキュメント",
+        "修正対象ドキュメント",
+        "更新対象ドキュメント",
+        "改訂対象",
+        "documents to update",
+        "documents affected",
+        "ドキュメント更新計画",
+        "ドキュメント修正計画",
+    )
+    return any(keyword in text for keyword in keywords)
 
 
 def _has_hardcoded_secret(text: str) -> bool:

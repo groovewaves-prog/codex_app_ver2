@@ -1,4 +1,5 @@
 import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -6,34 +7,48 @@ from unittest.mock import patch
 from secure_review.env_loader import load_dotenv
 
 
-class EnvLoaderTests(unittest.TestCase):
-    def test_load_dotenv_reads_key_values(self) -> None:
-        dotenv_path = Path("tests") / ".tmp_env_loader_reads.env"
-        self.addCleanup(lambda: dotenv_path.unlink(missing_ok=True))
-        dotenv_path.write_text(
-            "\n".join(
-                [
-                    "LOCAL_SANITIZER_PROVIDER=ollama",
-                    "GEMMA_MODEL='gemma-4-31b-it'",
-                ]
-            ),
-            encoding="utf-8",
-        )
+class LoadDotenvTests(unittest.TestCase):
+    def test_loads_values_from_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text(
+                "# comment\n"
+                "FOO=bar\n"
+                "QUOTED=\"value with spaces\"\n"
+                "SINGLE='single quoted'\n"
+                "EMPTY_LINES_BETWEEN=\n"
+                "\n"
+                "WITH_EQUALS=a=b=c\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                result = load_dotenv(path)
+                self.assertEqual(result, path)
+                self.assertEqual(os.environ["FOO"], "bar")
+                self.assertEqual(os.environ["QUOTED"], "value with spaces")
+                self.assertEqual(os.environ["SINGLE"], "single quoted")
+                self.assertEqual(os.environ["EMPTY_LINES_BETWEEN"], "")
+                self.assertEqual(os.environ["WITH_EQUALS"], "a=b=c")
 
-        with patch.dict(os.environ, {}, clear=True):
-            loaded = load_dotenv(dotenv_path)
-            self.assertEqual(loaded, dotenv_path)
-            self.assertEqual(os.environ["LOCAL_SANITIZER_PROVIDER"], "ollama")
-            self.assertEqual(os.environ["GEMMA_MODEL"], "gemma-4-31b-it")
+    def test_does_not_override_existing_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text("FOO=fromfile\n", encoding="utf-8")
+            with patch.dict(os.environ, {"FOO": "preexisting"}, clear=True):
+                load_dotenv(path)
+                self.assertEqual(os.environ["FOO"], "preexisting")
 
-    def test_load_dotenv_keeps_existing_values_by_default(self) -> None:
-        dotenv_path = Path("tests") / ".tmp_env_loader_existing.env"
-        self.addCleanup(lambda: dotenv_path.unlink(missing_ok=True))
-        dotenv_path.write_text("GEMMA_MODEL=gemma-4-31b-it", encoding="utf-8")
+    def test_override_flag(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text("FOO=fromfile\n", encoding="utf-8")
+            with patch.dict(os.environ, {"FOO": "preexisting"}, clear=True):
+                load_dotenv(path, override=True)
+                self.assertEqual(os.environ["FOO"], "fromfile")
 
-        with patch.dict(os.environ, {"GEMMA_MODEL": "custom-model"}, clear=True):
-            load_dotenv(dotenv_path)
-            self.assertEqual(os.environ["GEMMA_MODEL"], "custom-model")
+    def test_missing_file_returns_none(self) -> None:
+        result = load_dotenv(Path("/this/path/definitely/does/not/exist.env"))
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

@@ -1,72 +1,98 @@
-# Operations Policy
+# Operations policy
 
-本ツールを業務データで使う際の最低限の運用ルールです。
+Last updated: 2026-04-24
 
-## 1. 投入してよい資料
+## 1. Deployment stance
 
-まずは次の順で段階的に使います。
+- Run `secure_review` on a single-user machine, or on a shared host
+  behind an authentication proxy. The HTTP API and the Streamlit UI do
+  not enforce authentication themselves.
+- Bind the HTTP server and Streamlit to `127.0.0.1` (the default).
+  Exposing either on a non-loopback interface without an auth layer is
+  a policy violation.
+- Run as a dedicated low-privilege user. Give that user read access
+  only to the review input directory.
 
-1. ダミー文書
-2. 既に匿名化済みの文書
-3. 実データの一部抜粋
-4. 実データ全体
+## 2. Mandatory environment settings
 
-## 2. 事前に分割した方がよい資料
+Production deployments **must** have:
 
-次のような資料は、章単位またはシート単位に分割して投入します。
+- `MASK_AND_CONTINUE_REQUIRE_CONFIRM=true` (default). Setting this to
+  `false` disables R2's confirmation gate and is only allowed in
+  offline test environments.
+- `LOCAL_SANITIZER_API_URL` and `LOCAL_SENSITIVITY_API_URL` pointing
+  at `127.0.0.1`, `::1`, or `localhost` when they are set at all. The
+  application will refuse to start the request otherwise, but
+  operators should still confirm at deploy time.
 
-- 顧客固有の構成図が多い設計書
-- 1ファイルが非常に長い手順書
-- 顧客名、拠点名、案件名が密に出てくる Excel
-- OCR が必要な画像を多数含む資料
+## 3. Confirmation gate workflow
 
-## 3. ローカル前処理結果の扱い
+When the local sensitivity gate returns `mask_and_continue` for a
+document, the operator must:
 
-### `safe`
+1. Open the sanitized excerpt in the preview step.
+2. Verify that no remaining identifier would let an external party
+   reconstruct the customer, project, site, or person.
+3. Tick the per-document confirmation checkbox (Streamlit) or set
+   `documentConfirmations: {"<n>": true}` in the HTTP request.
 
-- 外部レビューへ進めてよい
-- ただし初期運用では送信対象の抜粋を目視確認する
+Only after every `mask_and_continue` document is confirmed will the
+external LLM receive any content. Blocked documents cannot be
+confirmed — they must be re-sanitized at source.
 
-### `mask_and_continue`
+## 4. Incident response
 
-- 外部レビュー前に人手確認する
-- 拠点名、案件名、担当者名、装置名、系統名が残っていないかを見る
-- 必要なら資料を分割するか、前段でより一般化する
+If the UI shows a document the operator did not expect to be safe:
 
-### `block`
+1. **Do not click Send.** Reset the session from the sidebar.
+2. Check `LOCAL_SANITIZER_API_URL` and `LOCAL_SENSITIVITY_API_URL`.
+   A non-loopback value will have been rejected at startup; a
+   partially-configured local LLM can leave the heuristic gate as
+   the only defense.
+3. Re-run with `REVIEW_PROVIDER=mock` to confirm the pipeline is
+   still reporting the same decisions.
 
-- 外部レビューへ進めない
-- より強い秘匿化版を作る
-- 明示的な社外秘表記や、顧客特定につながる構成文脈を削る
+If a `high` outbound risk document reaches the review step anyway, it
+is refused by `_enforce_outbound_guard` before the provider is called;
+the UI will show the refusal text. No content has been sent.
 
-## 4. 人手で重点確認する項目
+## 5. Logging
 
-- 顧客名
-- 会社名の略称や内部呼称
-- 拠点名、ビル名、ラック名
-- 案件名、移行名、施策名
-- 担当者名、連絡先
-- チケット番号、変更番号
-- 装置名、系統名、トポロジ識別子
+- stdout carries pipeline-level INFO and provider-level INFO.
+- Upstream HTTP errors are logged via the module logger
+  `secure_review.network` with the response body redacted (long lines
+  truncated; no quoted literals over ~240 chars). The URL is stripped
+  of query and fragment before logging.
+- No request body or document content is logged.
 
-## 5. 外部レビューに送らない方がよいケース
+Operators who need an audit trail should capture stdout to a file via
+`systemd-journald` or similar and enforce rotation at that layer.
 
-- 明示的に「社外秘」「Strictly Confidential」などが記載されている
-- 機微な構成図がそのまま残っている
-- 一社固有の運用体制や障害履歴が推測できる
-- 認証情報や秘密情報の文脈が十分に落ちていない
+## 6. Provider choice
 
-## 6. 障害時の切り分け順
+- `mock`: default. Safe to use for UI verification. No network calls.
+- `gemini-free`: Gemini free tier (`gemini-2.0-flash` by default).
+  Requires `GEMINI_API_KEY` or `GOOGLE_API_KEY`. Retries once on
+  transient errors; raises a clearly-labeled `RuntimeError` on
+  quota exhaustion.
+- `gemma` / `gemini-gemma`: same API, Gemma-hosted model. Requires
+  paid tier access in practice.
+- `http`: any OpenAI-compatible endpoint specified by `LLM_API_URL`.
 
-1. `python scripts\local_ollama_precheck.py`
-2. `ollama list`
-3. `.env` の `LOCAL_SANITIZER_*` と `LOCAL_SENSITIVITY_*` を確認
-4. `python scripts\api_smoke_test.py --provider gemma --gemma-model gemma-4-31b-it`
-5. `python server.py`
+Choose the provider per review session. Switching providers does not
+require a restart.
 
-## 7. 初期運用の推奨
+## 7. Upgrade checklist (for subsequent revisions)
 
-- 最初の数回は外部レビュー前に送信対象を目視確認する
-- 実データは小さく始める
-- `mask_and_continue` を軽視しない
-- 漏れパターンが見えたら、正規表現とローカル LLM の両方を調整する
+When changing this tool:
+
+1. Re-run `python -m unittest discover tests`. All 59 tests must pass.
+2. Re-run `python scripts/local_ollama_precheck.py` against the local
+   stack you rely on. It will reject non-loopback endpoints and will
+   report whether the local sanitizer and gate respond to a synthetic
+   request.
+3. Review `docs/security_boundaries.md`. If the change touches any of
+   its named boundaries (R1–R4, archive bomb guard, PDF cap), update
+   that document in the same change.
+4. Review `docs/traceability.md` so the code-to-requirement mapping
+   stays current.

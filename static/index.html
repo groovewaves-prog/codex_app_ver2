@@ -1,96 +1,98 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Secure Network Review</title>
-    <link rel="stylesheet" href="/static/styles.css" />
-  </head>
-  <body>
-    <main class="shell">
-      <section class="hero">
-        <p class="eyebrow">Secure AI Review</p>
-        <h1>Review network designs and configs with local sanitization first</h1>
-        <p class="lead">
-          Files are parsed locally, sensitive values are masked, and only sanitized text is sent to the AI review layer.
-        </p>
-      </section>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Secure Review</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --ink: #1f2a1d;
+      --ink-soft: #4a5549;
+      --accent: #2f6d3a;
+      --rule: #d9d1c0;
+      --card: #ffffff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: Georgia, "Times New Roman", serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--rule);
+      border-left: 4px solid var(--accent);
+      padding: 2.2rem 2.4rem;
+      max-width: 640px;
+      width: 100%;
+    }
+    h1 {
+      margin: 0 0 0.4rem;
+      letter-spacing: -0.01em;
+      font-size: 1.8rem;
+    }
+    p.lead {
+      color: var(--ink-soft);
+      margin: 0 0 1.5rem;
+      line-height: 1.55;
+    }
+    h2 {
+      font-size: 0.78rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+      margin: 1.4rem 0 0.5rem;
+    }
+    pre {
+      background: #fafaf6;
+      border: 1px solid var(--rule);
+      padding: 0.8rem 1rem;
+      font-family: "SF Mono", Consolas, monospace;
+      font-size: 0.85rem;
+      overflow-x: auto;
+      margin: 0.5rem 0;
+    }
+    ul { padding-left: 1.2rem; color: var(--ink-soft); line-height: 1.6; }
+    ul li { margin-bottom: 0.2rem; }
+    code {
+      background: #fafaf6;
+      padding: 0.1rem 0.35rem;
+      border-radius: 2px;
+      font-family: "SF Mono", Consolas, monospace;
+      font-size: 0.85em;
+    }
+    .muted { color: var(--ink-soft); font-size: 0.88rem; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>🛡 Secure Review</h1>
+    <p class="lead">
+      The primary UI is now the Streamlit application. Run it from the
+      repository root:
+    </p>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>Input</h2>
-          <p>Supported: .txt, .md, .py, .ps1, .sh, .bsh, .vba, .bas, .cls, .vbs, .cfg, .conf, .log, .json, .yaml, .yml, .csv, .html, .xml, .docx, .xlsx, .pptx, and common image files</p>
-        </div>
-        <label class="upload">
-          <input id="file-input" type="file" multiple />
-          <span>Select review files</span>
-        </label>
-        <label class="upload">
-          <span>Review profile</span>
-          <select id="document-profile">
-            <option value="">Auto detect</option>
-            <option value="design">Design / document</option>
-            <option value="change_runbook">Change runbook</option>
-            <option value="operations_runbook">Operations runbook</option>
-            <option value="source_code">Source code / script</option>
-          </select>
-        </label>
-        <div id="file-list" class="file-list"></div>
-        <button id="review-button" class="primary">Sanitize and review</button>
-      </section>
+    <h2>Start the UI</h2>
+<pre>pip install -r requirements.txt
+streamlit run streamlit_app.py</pre>
 
-      <section class="grid">
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Security status</h2>
-          </div>
-          <div id="security-card" class="security-card muted">
-            No review has been run yet.
-          </div>
-        </article>
+    <h2>Or call the HTTP API directly</h2>
+    <ul>
+      <li><code>POST /api/preview</code> — extract, sanitize, and run the local sensitivity gate. Returns per-document decisions.</li>
+      <li><code>POST /api/review</code> — run the configured LLM provider. Any document with decision <code>mask_and_continue</code> must be confirmed via <code>confirmMaskAndContinue</code> or <code>documentConfirmations</code> in the request body.</li>
+    </ul>
 
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Review results</h2>
-          </div>
-          <div id="summary" class="summary muted">Waiting for input.</div>
-          <div id="issues" class="issues"></div>
-        </article>
-      </section>
-
-      <section class="grid">
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Sanitization preview</h2>
-          </div>
-          <div id="documents" class="documents muted">
-            Original and sanitized excerpts will appear here after review.
-          </div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <h2>Warnings</h2>
-          </div>
-          <ul id="warnings" class="warnings muted">
-            <li>Not executed yet.</li>
-          </ul>
-        </article>
-      </section>
-    </main>
-
-    <template id="issue-template">
-      <article class="issue">
-        <div class="issue-meta">
-          <span class="badge"></span>
-          <span class="source"></span>
-        </div>
-        <h3></h3>
-        <p class="details"></p>
-        <p class="recommendation"></p>
-      </article>
-    </template>
-
-    <script src="/static/app.js"></script>
-  </body>
+    <p class="muted">
+      Only sanitized text reaches external providers. Original content and
+      replacement maps stay in server memory for the active session only.
+    </p>
+  </div>
+</body>
 </html>

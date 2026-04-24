@@ -90,6 +90,32 @@ COMMON_MANDATORY_CHECKS = (
 )
 
 
+# Optional checks are not required; they are only verified when the artifact
+# claims the element exists. The review must not demand that operators
+# create new WBS / schedule artifacts to pass. This encodes the user
+# policy "WBS があれば確認、なければ強要しない".
+OPTIONAL_CHECKS = (
+    MandatoryCheck(
+        id="wbs_consistency_if_present",
+        name="WBSの整合性（存在する場合のみ）",
+        requirement=(
+            "WBSや作業分解構造が資料内または参照先に存在する場合に限り、"
+            "本文のタイムチャート・責任分担・開始/終了条件と矛盾がないことを確認する。"
+            "WBSが無くても指摘しない。"
+        ),
+        check_points=(
+            "WBSがあればタイムチャートと作業項目粒度が一致する",
+            "WBSがあれば責任分担と本文のオーナーシップ記載が一致する",
+            "WBSが無ければこの項目はスキップする",
+        ),
+        fail_conditions=(
+            "WBSが存在するのに本文と矛盾している",
+        ),
+        applies_to=("change_runbook", "operations_runbook"),
+    ),
+)
+
+
 SOURCE_CODE_EXTENSIONS = {
     ".py",
     ".ps1",
@@ -109,7 +135,7 @@ SOURCE_CODE_EXTENSIONS = {
     ".psql",
 }
 
-DESIGN_EXTENSIONS = {".docx", ".xlsx", ".pptx", ".md", ".txt", ".csv", ".yaml", ".yml", ".json"}
+DESIGN_EXTENSIONS = {".docx", ".xlsx", ".pptx", ".pdf", ".md", ".txt", ".csv", ".yaml", ".yml", ".json"}
 
 
 RUBRICS = {
@@ -190,7 +216,7 @@ RUBRICS = {
         rubric_name="変更・切替手順書レビュー基準",
         document_profile="change_runbook",
         target_documents=("変更手順書", "切替手順書", "構築手順書"),
-        mandatory_checks=COMMON_MANDATORY_CHECKS,
+        mandatory_checks=COMMON_MANDATORY_CHECKS + (OPTIONAL_CHECKS[0],),
         evaluation_axes=(
             EvaluationAxis(
                 id="completeness",
@@ -201,20 +227,31 @@ RUBRICS = {
                     "対象範囲と実施手順が明記されている",
                     "前提条件、開始条件、終了条件がある",
                     "確認手順や証跡取得方針がある",
+                    "作業日時・場所・作業対象が具体的に記載されている",
+                    "作業対象環境（本番・検証・ステージングなど）が区別されている",
                 ),
-                fail_conditions=("作業対象が特定できない", "開始条件が未記載"),
+                fail_conditions=("作業対象が特定できない", "開始条件が未記載", "どの環境への作業か不明"),
             ),
             EvaluationAxis(
                 id="change_risk",
                 name="変更影響・切戻し",
                 weight=30,
-                purpose="改修時の事故を防げるか",
+                purpose="改修時の事故を防げるか（ITIL change enablement / 可逆性分類）",
                 checkpoints=(
                     "影響範囲が明記されている",
                     "切戻し条件と切戻し手順がある",
-                    "作業継続可否の判定ポイントがある",
+                    "作業継続/中止の判定ポイント（go/no-go）がある",
+                    "可逆アクティビティと不可逆アクティビティが区別できる",
+                    "不可逆アクティビティには補償処置または代替手段が記載されている",
+                    "リスクレベル分類と、それに対応する承認レベルが明示されている",
+                    "既知リスクに加えて、予測できない有事への対策方針がある",
                 ),
-                fail_conditions=("切戻し手順がない", "判定ポイントがない"),
+                fail_conditions=(
+                    "切戻し手順がない",
+                    "判定ポイントがない",
+                    "不可逆アクティビティが明示されないまま手順に埋め込まれている",
+                    "承認レベルが不明確",
+                ),
             ),
             EvaluationAxis(
                 id="security",
@@ -236,12 +273,28 @@ RUBRICS = {
                     "連絡体制またはエスカレーションがある",
                     "作業後確認項目が明記されている",
                     "異常時の一次対応方針がある",
+                    "作業後のオーナーシップ（誰が保守するか）が引き継がれる",
+                    "役割分担（作業者・再鑑者・現地統括など）が明確",
+                    "情報共有の経路（エスカレーション／問題発生時展開／通常時共有）が区別されている",
+                ),
+            ),
+            EvaluationAxis(
+                id="post_implementation_review",
+                name="作業後レビュー・報告",
+                weight=10,
+                purpose="作業結果が記録され、後続の改善につなげられるか（ITIL Post-Implementation Review）",
+                checkpoints=(
+                    "作業結果の記録方法または保存先が決まっている",
+                    "SLA/SLO への影響が確認される仕組みがある",
+                    "学びを次回に反映する手段（事後レビュー会など）が想定されている",
+                    "作業後に修正が必要となるドキュメントが事前に一覧化されている",
+                    "変更履歴（版数・変更日・変更内容・変更者）が管理されている",
                 ),
             ),
             EvaluationAxis(
                 id="testability",
                 name="試験妥当性",
-                weight=20,
+                weight=10,
                 purpose="変更結果を確認できるか",
                 checkpoints=(
                     "作業後の確認項目がある",
@@ -254,6 +307,12 @@ RUBRICS = {
             "タイムチャートまたは別紙記載の有無を必ず確認すること。",
             "切戻し条件が無い場合は差戻し相当の重大指摘として扱うこと。",
             "決定的に不足している内容と、もう少し必要な内容を区別して記述すること。",
+            "WBSが本文または別紙に存在する場合のみ整合性を確認すること。無い場合は指摘しない。",
+            "不可逆な作業（DB破壊的変更、データ削除など）は区別されているかを重点的に確認すること。",
+            "リスクレベル分類と対応する承認プロセスが不明確な場合は指摘すること。",
+            "作業対象環境（本番・検証）が区別されていない場合は指摘すること。",
+            "予測できない有事のリスクに対する対策方針があるかを確認すること。",
+            "作業後に修正するドキュメントを事前に一覧化しているかを確認すること。",
         ),
     ),
     "operations_runbook": ReviewRubric(
@@ -261,7 +320,7 @@ RUBRICS = {
         rubric_name="保守・運用手順書レビュー基準",
         document_profile="operations_runbook",
         target_documents=("保守手順書", "運用手順書", "障害対応手順書"),
-        mandatory_checks=COMMON_MANDATORY_CHECKS,
+        mandatory_checks=COMMON_MANDATORY_CHECKS + (OPTIONAL_CHECKS[0],),
         evaluation_axes=(
             EvaluationAxis(
                 id="completeness",
@@ -275,21 +334,41 @@ RUBRICS = {
                 ),
             ),
             EvaluationAxis(
+                id="operational_handover",
+                name="作業後運用ハンドオーバー",
+                weight=20,
+                purpose=(
+                    "作業完了後、運用担当が単独で持続運用できる体制が整っているか "
+                    "（Google SRE PRR / AWS ORR 知見）"
+                ),
+                checkpoints=(
+                    "SLO/SLA またはそれに相当するサービス目標が明記されている",
+                    "監視項目から対応手順（ランブック）へのリンクが示されている",
+                    "オーナーシップ（誰が責任/対応/相談/連絡先か）が明記されている",
+                    "エスカレーション先と発動条件が明記されている",
+                    "ハイパーケア期間や立ち合い期間の扱いがある（必要時）",
+                ),
+                fail_conditions=(
+                    "運用ハンドオーバー後のオーナー不在",
+                    "監視項目だけ列挙され対応手順との対応がない",
+                ),
+            ),
+            EvaluationAxis(
                 id="operability",
                 name="運用保守性",
-                weight=30,
+                weight=20,
                 purpose="保守担当が迷わず対応できるか",
                 checkpoints=(
-                    "監視項目と確認ポイントが定義されている",
+                    "既知の障害モードと対応が文書化されている",
                     "障害時の切り分け手順がある",
-                    "連絡先やエスカレーションがある",
+                    "デバッグに使えるログ/コマンド/ダッシュボードが示されている",
                 ),
                 fail_conditions=("障害時の確認ポイントがない",),
             ),
             EvaluationAxis(
                 id="security",
                 name="セキュリティ",
-                weight=20,
+                weight=15,
                 purpose="保守作業における安全性が担保されているか",
                 checkpoints=(
                     "権限や認証の扱いが明記されている",
@@ -300,7 +379,7 @@ RUBRICS = {
             EvaluationAxis(
                 id="change_risk",
                 name="変更影響・切戻し",
-                weight=15,
+                weight=10,
                 purpose="保守作業時の変更リスクを抑制できるか",
                 checkpoints=(
                     "作業実施条件がある",
@@ -323,6 +402,9 @@ RUBRICS = {
         review_policy=(
             "保守担当が初見で迷わない粒度かを重視すること。",
             "タイムチャートが必要な保守作業では、別紙記載の有無も確認すること。",
+            "作業完了後に運用担当が単独で持続運用できるか、ハンドオーバー要素を必ず確認すること。",
+            "SLO・監視→ランブックのリンク・オーナーシップが示されていなければ重大指摘として扱うこと。",
+            "WBSが存在する場合は整合性を確認すること。無くても指摘しない。",
         ),
     ),
     "source_code": ReviewRubric(

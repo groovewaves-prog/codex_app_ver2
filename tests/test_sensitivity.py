@@ -4,68 +4,136 @@ import unittest
 from unittest.mock import patch
 
 from secure_review.models import SanitizedDocument
+from secure_review.network_guard import LocalUrlError, UpstreamHttpError
 from secure_review.sensitivity import (
     HeuristicSensitivityClassifier,
     choose_sensitivity_classifier,
-    _parse_sensitivity_assessment,
 )
 
 
-class SensitivityTests(unittest.TestCase):
-    def test_heuristic_classifier_blocks_explicit_confidentiality(self) -> None:
+def _document(name: str = "doc.md", text: str = "some content", risk: str = "low") -> SanitizedDocument:
+    return SanitizedDocument(
+        name=name,
+        original_excerpt=text[:200],
+        sanitized_excerpt=text[:200],
+        outbound_text=text,
+        outbound_risk=risk,
+    )
+
+
+class HeuristicSensitivityTests(unittest.TestCase):
+    def test_explicit_markers_block(self) -> None:
         classifier = HeuristicSensitivityClassifier()
         assessment = classifier.assess(
-            "change.md",
-            "社外秘\n顧客名: 株式会社サンプル",
-            SanitizedDocument(
-                name="change.md",
-                original_excerpt="",
-                sanitized_excerpt="[COMPANY_001]",
-                outbound_text="[COMPANY_001]",
-                outbound_risk="medium",
-            ),
+            "doc.md",
+            "社外秘\n顧客との打合せ議事録",
+            _document(),
         )
-
         self.assertEqual(assessment.decision, "block")
-        self.assertTrue(any("confidentiality" in reason.lower() for reason in assessment.reasons))
 
-    def test_heuristic_classifier_requests_more_masking(self) -> None:
+    def test_safe_for_generic_content(self) -> None:
         classifier = HeuristicSensitivityClassifier()
         assessment = classifier.assess(
-            "design.md",
-            "顧客名: Sample Corp\n案件名: migration",
-            SanitizedDocument(
-                name="design.md",
-                original_excerpt="",
-                sanitized_excerpt="[COMPANY_001]\n[PROJECT_001]",
-                outbound_text="[COMPANY_001]\n[PROJECT_001]",
-                outbound_risk="medium",
-            ),
+            "doc.md",
+            "Routing protocols: BGP, OSPF, IS-IS.",
+            _document(),
         )
-
-        self.assertEqual(assessment.decision, "mask_and_continue")
-        self.assertGreaterEqual(len(assessment.recommended_actions), 1)
-
-    def test_parse_invalid_json_falls_back_to_mask_and_continue(self) -> None:
-        assessment = _parse_sensitivity_assessment("not-json", "local-http")
-        self.assertEqual(assessment.decision, "mask_and_continue")
-
-    @patch.dict(os.environ, {"LOCAL_SENSITIVITY_PROVIDER": "heuristic"}, clear=False)
-    def test_choose_sensitivity_classifier_defaults_to_heuristic(self) -> None:
-        classifier = choose_sensitivity_classifier()
-        self.assertEqual(classifier.name, "heuristic")
-
-    def test_parse_valid_json_response(self) -> None:
-        content = json.dumps(
-            {
-                "decision": "safe",
-                "reasons": ["sanitized enough"],
-                "recommended_actions": ["proceed"],
-            }
-        )
-        assessment = _parse_sensitivity_assessment(content, "local-http")
         self.assertEqual(assessment.decision, "safe")
-        self.assertEqual(assessment.provider, "local-http")
+
+    def test_mask_and_continue_for_partial_hits(self) -> None:
+        classifier = HeuristicSensitivityClassifier()
+        assessment = classifier.assess(
+            "doc.md",
+            "担当者: Someone\nプロジェクト名: X",
+            _document(),
+        )
+        self.assertEqual(assessment.decision, "mask_and_continue")
+
+
+class SensitivityClassifierChoiceTests(unittest.TestCase):
+    def test_default_is_heuristic(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            classifier = choose_sensitivity_classifier()
+        self.assertIsInstance(classifier, HeuristicSensitivityClassifier)
+
+    def test_local_http_rejects_non_loopback_url(self) -> None:
+        """R1 on sensitivity side too."""
+        with patch.dict(
+            os.environ,
+            {
+                "LOCAL_SENSITIVITY_PROVIDER": "http",
+                "LOCAL_SENSITIVITY_API_URL": "http://evil.example.com/v1",
+                "LOCAL_SENSITIVITY_MODEL": "gemma3:12b",
+            },
+            clear=True,
+        ):
+            with self.assertRaises(LocalUrlError):
+                choose_sensitivity_classifier()
+
+    def test_local_http_accepts_loopback_url(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "LOCAL_SENSITIVITY_PROVIDER": "http",
+                "LOCAL_SENSITIVITY_API_URL": "http://127.0.0.1:11434/v1/responses",
+                "LOCAL_SENSITIVITY_MODEL": "gemma3:12b",
+            },
+            clear=True,
+        ):
+            classifier = choose_sensitivity_classifier()
+        self.assertEqual(classifier.name, "local-http")
+
+    def test_local_http_fails_safe_to_mask_and_continue(self) -> None:
+        """R3/R4: unreachable gate must escalate to human review, not allow."""
+        with patch.dict(
+            os.environ,
+            {
+                "LOCAL_SENSITIVITY_PROVIDER": "http",
+                "LOCAL_SENSITIVITY_API_URL": "http://127.0.0.1:9999/v1/responses",
+                "LOCAL_SENSITIVITY_MODEL": "gemma3:12b",
+            },
+            clear=True,
+        ):
+            classifier = choose_sensitivity_classifier()
+
+        with patch(
+            "secure_review.sensitivity.post_json_safely",
+            side_effect=UpstreamHttpError("local sensitivity gate could not be reached."),
+        ):
+            assessment = classifier.assess("doc.md", "some text", _document())
+
+        self.assertEqual(assessment.decision, "mask_and_continue")
+        self.assertTrue(any("unavailable" in r.lower() for r in assessment.reasons))
+
+    def test_local_http_truncation_downgrades_safe_to_mask(self) -> None:
+        """M4: if only head was evaluated, 'safe' is not good enough."""
+        with patch.dict(
+            os.environ,
+            {
+                "LOCAL_SENSITIVITY_PROVIDER": "http",
+                "LOCAL_SENSITIVITY_API_URL": "http://127.0.0.1:9999/v1/responses",
+                "LOCAL_SENSITIVITY_MODEL": "gemma3:12b",
+                "LOCAL_SENSITIVITY_INPUT_CHARS": "100",
+            },
+            clear=True,
+        ):
+            classifier = choose_sensitivity_classifier()
+
+        payload = {
+            "output_text": json.dumps(
+                {
+                    "decision": "safe",
+                    "reasons": ["Looks fine"],
+                    "recommended_actions": [],
+                }
+            )
+        }
+        long_text = "x" * 500
+        with patch("secure_review.sensitivity.post_json_safely", return_value=payload):
+            assessment = classifier.assess("doc.md", long_text, _document(text=long_text))
+
+        self.assertEqual(assessment.decision, "mask_and_continue")
+        self.assertTrue(any("budget" in r.lower() for r in assessment.reasons))
 
 
 if __name__ == "__main__":

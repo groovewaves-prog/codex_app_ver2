@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
-import urllib.error
-import urllib.request
 
 from secure_review.models import SanitizedDocument, SensitivityAssessment
+from secure_review.network_guard import (
+    LocalUrlError,
+    UpstreamHttpError,
+    post_json_safely,
+    validate_local_url,
+)
+
+
+LOGGER = logging.getLogger("secure_review.sensitivity")
 
 
 LOCAL_SENSITIVITY_PROMPT = """You are a local confidentiality gate before any external LLM transfer.
@@ -119,10 +127,19 @@ class HeuristicSensitivityClassifier(SensitivityClassifier):
 
 
 class LocalHttpSensitivityClassifier(SensitivityClassifier):
+    """Call a local LLM to decide whether external transfer is allowed.
+
+    SECURITY NOTE: The original, unmasked text is included in the request body
+    (bounded by ``LOCAL_SENSITIVITY_INPUT_CHARS``). The target URL MUST be
+    loopback; this is enforced on construction and re-checked before every
+    request.
+    """
+
     name = "local-http"
 
     def __init__(self) -> None:
-        self.api_url = os.getenv("LOCAL_SENSITIVITY_API_URL", "").strip()
+        raw_url = os.getenv("LOCAL_SENSITIVITY_API_URL", "").strip()
+        self.api_url = validate_local_url(raw_url, label="LOCAL_SENSITIVITY_API_URL") if raw_url else ""
         self.api_key = os.getenv("LOCAL_SENSITIVITY_API_KEY", "").strip()
         self.model = os.getenv("LOCAL_SENSITIVITY_MODEL", "").strip()
         self.max_chars = int(os.getenv("LOCAL_SENSITIVITY_INPUT_CHARS", "8000"))
@@ -130,6 +147,12 @@ class LocalHttpSensitivityClassifier(SensitivityClassifier):
     def assess(self, name: str, original_text: str, sanitized_document: SanitizedDocument) -> SensitivityAssessment:
         if not self.api_url or not self.model:
             raise ValueError("LOCAL_SENSITIVITY_API_URL and LOCAL_SENSITIVITY_MODEL must be configured.")
+
+        validate_local_url(self.api_url, label="LOCAL_SENSITIVITY_API_URL")
+
+        # If the document is longer than what we send, that is itself a
+        # reason to be cautious in the final decision.
+        truncated = len(original_text) > self.max_chars
 
         payload = {
             "model": self.model,
@@ -145,33 +168,81 @@ class LocalHttpSensitivityClassifier(SensitivityClassifier):
                 },
             ],
         }
-        response = _post_json(
-            self.api_url,
-            payload,
-            {
-                "Content-Type": "application/json",
-                **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
-            },
-        )
+
+        try:
+            response = post_json_safely(
+                self.api_url,
+                payload,
+                {
+                    "Content-Type": "application/json",
+                    **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
+                },
+                context_label="local sensitivity gate",
+            )
+        except UpstreamHttpError as exc:
+            # Fail safe: if the gate is unreachable, require human review
+            # rather than silently letting content through.
+            return SensitivityAssessment(
+                decision="mask_and_continue",
+                reasons=[f"Local sensitivity gate was unavailable ({exc}); human review is required."],
+                provider=self.name,
+                recommended_actions=[
+                    "Restart the local sensitivity service and re-run, or review the sanitized text manually before sending."
+                ],
+            )
+
         content = _extract_openai_like_text(response)
-        return _parse_sensitivity_assessment(content, self.name)
+        if not content.strip():
+            return SensitivityAssessment(
+                decision="mask_and_continue",
+                reasons=["Local sensitivity gate returned an empty response; human review is required."],
+                provider=self.name,
+                recommended_actions=["Check the local sensitivity model and re-run."],
+            )
+
+        assessment = _parse_sensitivity_assessment(content, self.name)
+        if truncated and assessment.decision == "safe":
+            # The gate only saw the head of the document; downgrade to
+            # mask_and_continue to force human review.
+            return SensitivityAssessment(
+                decision="mask_and_continue",
+                reasons=[
+                    *assessment.reasons,
+                    (
+                        f"The document exceeded the local sensitivity input budget "
+                        f"({self.max_chars} chars); only the head was evaluated."
+                    ),
+                ],
+                provider=self.name,
+                recommended_actions=[
+                    *assessment.recommended_actions,
+                    "Split the document into smaller sections before external transfer.",
+                ],
+            )
+        return assessment
 
 
 class OllamaSensitivityClassifier(LocalHttpSensitivityClassifier):
     name = "ollama"
 
     def __init__(self) -> None:
+        if not os.getenv("LOCAL_SENSITIVITY_API_URL", "").strip():
+            os.environ["LOCAL_SENSITIVITY_API_URL"] = "http://127.0.0.1:11434/v1/responses"
+        if not os.getenv("LOCAL_SENSITIVITY_MODEL", "").strip():
+            os.environ["LOCAL_SENSITIVITY_MODEL"] = "gemma3:12b"
         super().__init__()
-        self.api_url = self.api_url or "http://127.0.0.1:11434/v1/responses"
-        self.model = self.model or "gemma4:e4b"
 
 
 def choose_sensitivity_classifier() -> SensitivityClassifier:
     mode = os.getenv("LOCAL_SENSITIVITY_PROVIDER", "heuristic").strip().lower()
-    if mode == "ollama":
-        return OllamaSensitivityClassifier()
-    if mode in {"http", "local-http", "openai-compatible"}:
-        return LocalHttpSensitivityClassifier()
+    try:
+        if mode == "ollama":
+            return OllamaSensitivityClassifier()
+        if mode in {"http", "local-http", "openai-compatible"}:
+            return LocalHttpSensitivityClassifier()
+    except LocalUrlError as exc:
+        LOGGER.error("Local sensitivity URL rejected: %s", exc)
+        raise
     return HeuristicSensitivityClassifier()
 
 
@@ -194,22 +265,9 @@ def _build_local_sensitivity_input(
     )
 
 
+# Backwards-compat shim for existing tests/callers.
 def _post_json(url: str, payload: dict, headers: dict[str, str]) -> dict:
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
-    try:
-        with urllib.request.urlopen(request, timeout=60) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Network error: {exc.reason}") from exc
-
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON response: {raw[:400]}") from exc
+    return post_json_safely(url, payload, headers, context_label="local sensitivity gate")
 
 
 def _extract_openai_like_text(payload: dict) -> str:
@@ -223,12 +281,22 @@ def _extract_openai_like_text(payload: dict) -> str:
             text = content.get("text")
             if text:
                 chunks.append(text)
-    return "\n".join(chunks).strip() or json.dumps(payload, ensure_ascii=False)
+
+    for choice in payload.get("choices", []):
+        message = choice.get("message") or {}
+        text = message.get("content")
+        if isinstance(text, str) and text:
+            chunks.append(text)
+
+    # Return empty rather than ``json.dumps(payload)`` so that callers can
+    # treat "no output" as a structured failure.
+    return "\n".join(chunks).strip()
 
 
 def _parse_sensitivity_assessment(content: str, provider: str) -> SensitivityAssessment:
+    stripped = _extract_json_payload(content)
     try:
-        payload = json.loads(content)
+        payload = json.loads(stripped)
     except json.JSONDecodeError:
         return SensitivityAssessment(
             decision="mask_and_continue",
@@ -254,3 +322,17 @@ def _parse_sensitivity_assessment(content: str, provider: str) -> SensitivityAss
         provider=provider,
         recommended_actions=[str(item) for item in actions if str(item).strip()],
     )
+
+
+def _extract_json_payload(content: str) -> str:
+    stripped = str(content or "").strip()
+    if stripped.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", stripped)
+        stripped = re.sub(r"\s*```$", "", stripped)
+        return stripped.strip()
+
+    start = stripped.find("{")
+    end = stripped.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return stripped[start : end + 1]
+    return stripped

@@ -3,205 +3,290 @@ import unittest
 from unittest.mock import patch
 
 from secure_review.models import SanitizedDocument
+from secure_review.network_guard import UpstreamHttpError
 from secure_review.reviewer import (
+    GeminiApiReviewProvider,
     GeminiFreeTierProvider,
-    GeminiHostedGemmaProvider,
     MockReviewProvider,
-    build_prompt,
+    _extract_gemini_text,
+    _extract_openai_like_text,
+    _looks_like_quota,
     choose_provider,
 )
-from secure_review.rubric import choose_rubric, classify_documents
 
 
-class ReviewerTests(unittest.TestCase):
-    def test_mock_reviewer_detects_basic_risks(self) -> None:
+def _doc(name="cfg.txt", text="hostname r1\nip address 10.0.0.1"):
+    return SanitizedDocument(
+        name=name,
+        original_excerpt=text[:200],
+        sanitized_excerpt=text[:200],
+        outbound_text=text,
+    )
+
+
+class MockProviderTests(unittest.TestCase):
+    def test_mock_produces_at_least_one_issue(self) -> None:
         provider = MockReviewProvider()
-        result = provider.review(
-            [
-                SanitizedDocument(
-                    name="sw1.cfg",
-                    original_excerpt="",
-                    sanitized_excerpt="line vty 0 4\n transport input telnet\nsnmp-server community [SECRET_001] RO",
-                    outbound_text="line vty 0 4\n transport input telnet\nsnmp-server community [SECRET_001] RO",
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=32,
-                    outbound_risk="low",
-                )
-            ]
-        )
+        result = provider.review([_doc(text="telnet allowed\ninterface Gi0/1")])
+        self.assertTrue(result.issues)
+        self.assertEqual(result.provider, "mock")
 
-        titles = {issue.title for issue in result.issues}
-        self.assertIn("Telnet usage detected", titles)
-        self.assertIn("SNMP community string usage", titles)
 
-    def test_mock_reviewer_checks_purpose_configuration_and_timechart(self) -> None:
-        provider = MockReviewProvider()
-        result = provider.review(
-            [
-                SanitizedDocument(
-                    name="change_runbook.md",
-                    original_excerpt="",
-                    sanitized_excerpt="change runbook",
-                    outbound_text="change procedure\n1. start work\n2. health check",
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=16,
-                    outbound_risk="low",
-                )
-            ]
-        )
+class ProviderChoiceTests(unittest.TestCase):
+    def test_default_is_mock(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            provider = choose_provider()
+        self.assertIsInstance(provider, MockReviewProvider)
 
-        titles = {issue.title for issue in result.issues}
-        self.assertIn("冒頭の目的記載が不明確", titles)
-        self.assertIn("構成情報の存在が確認できない", titles)
-        self.assertIn("タイムチャートの記載または別紙参照が不足", titles)
-        self.assertEqual(result.document_profile, "change_runbook")
-
-    def test_mock_reviewer_detects_source_code_risks(self) -> None:
-        provider = MockReviewProvider()
-        result = provider.review(
-            [
-                SanitizedDocument(
-                    name="job.py",
-                    original_excerpt="",
-                    sanitized_excerpt="import os",
-                    outbound_text=(
-                        "import os\n"
-                        "password = 'secret123'\n"
-                        "os.system(user_input)\n"
-                        "try:\n"
-                        "    run_job()\n"
-                        "except:\n"
-                        "    pass\n"
-                    ),
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=40,
-                    outbound_risk="low",
-                )
-            ]
-        )
-
-        titles = {issue.title for issue in result.issues}
-        self.assertIn("ハードコードされた認証情報の疑い", titles)
-        self.assertIn("危険なコマンド実行の可能性", titles)
-        self.assertIn("例外処理が広すぎる可能性", titles)
-        self.assertEqual(result.document_profile, "source_code")
-
-    @patch.dict(os.environ, {"REVIEW_PROVIDER": "gemini-free"}, clear=False)
-    def test_choose_provider_returns_gemini_provider(self) -> None:
-        provider = choose_provider()
+    def test_gemini_free_tier_uses_flash_default(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"REVIEW_PROVIDER": "gemini-free", "GEMINI_API_KEY": "dummy"},
+            clear=True,
+        ):
+            provider = choose_provider()
         self.assertIsInstance(provider, GeminiFreeTierProvider)
+        self.assertTrue(provider.model.startswith("gemini-"))
 
-    @patch.dict(os.environ, {"REVIEW_PROVIDER": "gemma4"}, clear=False)
-    def test_choose_provider_returns_gemma_provider(self) -> None:
-        provider = choose_provider()
-        self.assertIsInstance(provider, GeminiHostedGemmaProvider)
 
-    @patch.dict(os.environ, {}, clear=True)
-    def test_gemini_provider_requires_api_key(self) -> None:
-        provider = GeminiHostedGemmaProvider()
-        with self.assertRaises(ValueError):
-            provider.review([])
-
-    @patch.dict(os.environ, {"GEMINI_API_KEY": "dummy"}, clear=True)
-    def test_gemma_provider_defaults_to_gemma_4_model(self) -> None:
-        provider = GeminiHostedGemmaProvider()
-        self.assertEqual(provider.model, "gemma-4-31b-it")
-
-    def test_choose_rubric_detects_design_profile(self) -> None:
-        rubric = choose_rubric(
-            [
-                SanitizedDocument(
-                    name="basic_design.docx",
-                    original_excerpt="",
-                    sanitized_excerpt="purpose\nnetwork diagram",
-                    outbound_text="purpose\nnetwork diagram\ntest items",
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=20,
-                    outbound_risk="low",
-                )
+class GeminiExtractorTests(unittest.TestCase):
+    def test_extract_gemini_text(self) -> None:
+        payload = {
+            "candidates": [
+                {"content": {"parts": [{"text": "SUMMARY: ok"}, {"text": "more"}]}}
             ]
-        )
-        self.assertEqual(rubric.document_profile, "design")
+        }
+        self.assertEqual(_extract_gemini_text(payload), "SUMMARY: ok\nmore")
 
-    def test_choose_rubric_detects_source_code_profile(self) -> None:
-        rubric = choose_rubric(
-            [
-                SanitizedDocument(
-                    name="cleanup.ps1",
-                    original_excerpt="",
-                    sanitized_excerpt="function Invoke-Cleanup {}",
-                    outbound_text="function Invoke-Cleanup { param($Target) Remove-Item $Target -Recurse }",
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=20,
-                    outbound_risk="low",
-                )
-            ]
-        )
-        self.assertEqual(rubric.document_profile, "source_code")
+    def test_extract_openai_returns_empty_on_nothing(self) -> None:
+        """R4: never use json.dumps(payload) as fallback."""
+        self.assertEqual(_extract_openai_like_text({"weird_field": 1}), "")
 
-    def test_unknown_extension_can_be_classified_as_source_code(self) -> None:
-        classification = classify_documents(
-            [
-                SanitizedDocument(
-                    name="deploy.custom",
-                    original_excerpt="",
-                    sanitized_excerpt="function Deploy-App {}",
-                    outbound_text=(
-                        "function Deploy-App {\n"
-                        "  param($Target)\n"
-                        "  Write-Host $Target\n"
-                        "}\n"
-                    ),
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=18,
-                    outbound_risk="low",
-                )
-            ]
-        )
-        self.assertEqual(classification.document_profile, "source_code")
-        self.assertIn(classification.confidence, {"medium", "high"})
+    def test_extract_openai_from_chat_completions(self) -> None:
+        payload = {"choices": [{"message": {"content": "hello"}}]}
+        self.assertEqual(_extract_openai_like_text(payload), "hello")
 
-    def test_provider_can_use_document_profile_override(self) -> None:
+
+class QuotaDetectionTests(unittest.TestCase):
+    def test_quota_markers_are_detected(self) -> None:
+        self.assertTrue(_looks_like_quota("Resource has been exhausted (quota)"))
+        self.assertTrue(_looks_like_quota("RESOURCE_EXHAUSTED"))
+        self.assertTrue(_looks_like_quota("You hit a rate limit, please retry"))
+        self.assertFalse(_looks_like_quota("Connection refused"))
+
+
+class GeminiRetryTests(unittest.TestCase):
+    def test_retry_once_then_raise_on_transport_error(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"GEMINI_API_KEY": "dummy", "GEMINI_MODEL": "gemini-2.0-flash"},
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        call_count = {"n": 0}
+
+        def fake_post(*args, **kwargs):
+            call_count["n"] += 1
+            raise UpstreamHttpError("transport failed.")
+
+        with patch("secure_review.reviewer.post_json_safely", side_effect=fake_post), \
+             patch("secure_review.reviewer.time.sleep"):
+            with self.assertRaises(UpstreamHttpError):
+                provider.review([_doc()])
+
+        # Initial + 1 retry = 2 calls.
+        self.assertEqual(call_count["n"], 2)
+
+    def test_quota_errors_do_not_retry(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"GEMINI_API_KEY": "dummy", "GEMINI_MODEL": "gemini-2.0-flash"},
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        call_count = {"n": 0}
+
+        def fake_post(*args, **kwargs):
+            call_count["n"] += 1
+            raise UpstreamHttpError(
+                "Gemini (gemini-2.0-flash) returned HTTP 429. RESOURCE_EXHAUSTED."
+            )
+
+        with patch("secure_review.reviewer.post_json_safely", side_effect=fake_post), \
+             patch("secure_review.reviewer.time.sleep"):
+            with self.assertRaises(RuntimeError) as ctx:
+                provider.review([_doc()])
+
+        self.assertEqual(call_count["n"], 1)
+        self.assertIn("quota", str(ctx.exception).lower())
+
+
+    def test_operations_rubric_has_handover_axis(self) -> None:
+        """研究知見反映: operations_runbook は運用ハンドオーバー軸を持つ。"""
+        from secure_review.rubric import RUBRICS
+
+        rubric = RUBRICS["operations_runbook"]
+        axis_ids = {axis.id for axis in rubric.evaluation_axes}
+        self.assertIn("operational_handover", axis_ids)
+
+    def test_change_rubric_has_pir_axis(self) -> None:
+        """研究知見反映: change_runbook は Post-Implementation Review 軸を持つ。"""
+        from secure_review.rubric import RUBRICS
+
+        rubric = RUBRICS["change_runbook"]
+        axis_ids = {axis.id for axis in rubric.evaluation_axes}
+        self.assertIn("post_implementation_review", axis_ids)
+
+    def test_wbs_check_is_optional_and_applies_to_runbooks(self) -> None:
+        """ユーザー指示: WBSは存在すれば確認、無くても指摘しない。"""
+        from secure_review.rubric import OPTIONAL_CHECKS, RUBRICS
+
+        wbs_check = OPTIONAL_CHECKS[0]
+        self.assertEqual(wbs_check.id, "wbs_consistency_if_present")
+
+        change_check_ids = {check.id for check in RUBRICS["change_runbook"].mandatory_checks}
+        ops_check_ids = {check.id for check in RUBRICS["operations_runbook"].mandatory_checks}
+        self.assertIn("wbs_consistency_if_present", change_check_ids)
+        self.assertIn("wbs_consistency_if_present", ops_check_ids)
+
+        # Design profile does not have WBS check (too early for WBS).
+        design_check_ids = {check.id for check in RUBRICS["design"].mandatory_checks}
+        self.assertNotIn("wbs_consistency_if_present", design_check_ids)
+
+    def test_mock_detects_missing_operational_handover(self) -> None:
         provider = MockReviewProvider()
         result = provider.review(
-            [
-                SanitizedDocument(
-                    name="notes.txt",
-                    original_excerpt="",
-                    sanitized_excerpt="generic text",
-                    outbound_text="generic text without strong markers",
-                    replacements=[],
-                    findings=[],
-                    estimated_input_tokens=8,
-                    outbound_risk="low",
-                )
-            ],
-            document_profile_override="source_code",
+            [_doc(
+                name="operations.md",
+                text="監視手順\n1. 確認\n2. 別紙スケジュールに従い対応\n目的: 定常運用",
+            )],
+            document_profile_override="operations_runbook",
         )
-        self.assertEqual(result.document_profile, "source_code")
-        self.assertEqual(result.classification_confidence, "forced")
+        titles = {issue.title for issue in result.issues}
+        self.assertIn("運用ハンドオーバー要素の記載が不足", titles)
 
-    def test_build_prompt_includes_rubric_requirements(self) -> None:
-        document = SanitizedDocument(
-            name="operations.md",
-            original_excerpt="",
-            sanitized_excerpt="operations runbook",
-            outbound_text="operations runbook\nmonitoring items\nescalation",
-            replacements=[],
-            findings=[],
-            estimated_input_tokens=12,
-            outbound_risk="low",
+    def test_mock_detects_irreversible_without_rollback(self) -> None:
+        provider = MockReviewProvider()
+        result = provider.review(
+            [_doc(
+                name="migration.md",
+                text=(
+                    "目的: DB移行\n"
+                    "ネットワーク構成: 別紙\n"
+                    "タイムチャート: 別紙\n"
+                    "1. DROP TABLE old_table\n"
+                    "2. 新テーブル作成"
+                ),
+            )],
+            document_profile_override="change_runbook",
         )
-        prompt = build_prompt([document])
-        self.assertIn("Mandatory checks:", prompt)
-        self.assertIn("Evaluation axes:", prompt)
-        self.assertIn("Document Profile:", prompt)
+        titles = {issue.title for issue in result.issues}
+        self.assertIn("不可逆な作業が含まれる可能性があり、補償処置が不明", titles)
+
+    def test_mock_does_not_warn_when_rollback_present(self) -> None:
+        provider = MockReviewProvider()
+        result = provider.review(
+            [_doc(
+                name="migration.md",
+                text=(
+                    "目的: DB移行\n"
+                    "ネットワーク構成: 別紙\n"
+                    "タイムチャート: 別紙\n"
+                    "1. DROP TABLE old_table\n"
+                    "2. エラー時は切戻し: バックアップから復元"
+                ),
+            )],
+            document_profile_override="change_runbook",
+        )
+        titles = {issue.title for issue in result.issues}
+        self.assertNotIn("不可逆な作業が含まれる可能性があり、補償処置が不明", titles)
+
+    def test_mock_detects_missing_environment_distinction(self) -> None:
+        """テンプレート整合: 作業対象環境（本番/検証）の区別が必要。"""
+        provider = MockReviewProvider()
+        result = provider.review(
+            [_doc(
+                name="change.md",
+                text=(
+                    "目的: 設定変更\n"
+                    "ネットワーク構成: 別紙\n"
+                    "タイムチャート: 別紙\n"
+                    "リスクレベル: 低、承認: GL\n"
+                    "変更対象ドキュメント: 設計書v1.2"
+                ),
+            )],
+            document_profile_override="change_runbook",
+        )
+        titles = {issue.title for issue in result.issues}
+        self.assertIn("作業対象環境の区別が不明確", titles)
+
+    def test_mock_detects_missing_risk_level_and_approval(self) -> None:
+        """テンプレート整合: リスクレベル + 承認の組が必要。"""
+        provider = MockReviewProvider()
+        result = provider.review(
+            [_doc(
+                name="change.md",
+                text=(
+                    "目的: 本番設定変更\n"
+                    "ネットワーク構成: 別紙\n"
+                    "タイムチャート: 別紙\n"
+                    "変更対象ドキュメント: 設計書v1.2"
+                ),
+            )],
+            document_profile_override="change_runbook",
+        )
+        titles = {issue.title for issue in result.issues}
+        self.assertIn("リスクレベルと承認プロセスの記載が不足", titles)
+
+    def test_mock_detects_missing_document_update_list(self) -> None:
+        """テンプレート整合: 作業後に修正するドキュメント一覧が必要。"""
+        provider = MockReviewProvider()
+        result = provider.review(
+            [_doc(
+                name="change.md",
+                text=(
+                    "目的: 本番設定変更\n"
+                    "ネットワーク構成: 別紙\n"
+                    "タイムチャート: 別紙\n"
+                    "リスクレベル: 低、承認: GL"
+                ),
+            )],
+            document_profile_override="change_runbook",
+        )
+        titles = {issue.title for issue in result.issues}
+        self.assertIn("作業後に修正対象となるドキュメントの事前一覧が無い", titles)
+
+    def test_mock_passes_fully_compliant_template(self) -> None:
+        """テンプレート整合: 作業計画書テンプレートに完全準拠したコンテンツは、
+        テンプレート起源の指摘 (環境/リスクレベル/ドキュメント一覧) を受けない。"""
+        provider = MockReviewProvider()
+        result = provider.review(
+            [_doc(
+                name="change_plan.md",
+                text=(
+                    "作業目的: 本番環境への設定反映\n"
+                    "全体概要図: 別紙\n"
+                    "日時・場所: 2026/05/01 22:00 東京DC\n"
+                    "作業対象環境: 本番\n"
+                    "作業影響範囲: サービス影響なし\n"
+                    "リスクレベル: 中、承認: 部長\n"
+                    "作業完了後の正常性確認項目: ping疎通\n"
+                    "バックアウト判断基準: エラー継続時は切戻し\n"
+                    "タイムチャート: 別紙\n"
+                    "リスクと対策: 予測できない有事の対策あり\n"
+                    "体制図: 作業者・再鑑者・現地統括、エスカレーション経路\n"
+                    "変更対象ドキュメント: 設計書v1.2、運用手順書"
+                ),
+            )],
+            document_profile_override="change_runbook",
+        )
+        titles = {issue.title for issue in result.issues}
+        # Template-originated checks should all pass
+        self.assertNotIn("作業対象環境の区別が不明確", titles)
+        self.assertNotIn("リスクレベルと承認プロセスの記載が不足", titles)
+        self.assertNotIn("作業後に修正対象となるドキュメントの事前一覧が無い", titles)
 
 
 if __name__ == "__main__":

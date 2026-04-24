@@ -5,6 +5,7 @@ import csv
 import html
 import io
 import json
+import logging
 import os
 import re
 import shutil
@@ -13,6 +14,9 @@ import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
+
+
+LOGGER = logging.getLogger("secure_review.extractor")
 
 
 SUPPORTED_EXTENSIONS = {
@@ -47,6 +51,7 @@ SUPPORTED_EXTENSIONS = {
     ".docx",
     ".xlsx",
     ".pptx",
+    ".pdf",
     ".png",
     ".jpg",
     ".jpeg",
@@ -84,6 +89,13 @@ PRESENTATION_NAMESPACES = {
 }
 
 
+# Defense against zip bombs: no single Office file we care about should
+# expand past this uncompressed size.
+MAX_UNCOMPRESSED_ARCHIVE_BYTES = int(os.getenv("MAX_UNCOMPRESSED_ARCHIVE_BYTES", str(200 * 1024 * 1024)))
+# Upper bound on PDF pages we extract to avoid pathological inputs.
+MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "300"))
+
+
 def extract_text(
     name: str,
     raw_content: str,
@@ -118,6 +130,8 @@ def extract_text(
         return _extract_xlsx(binary, name, warnings), warnings
     if extension == ".pptx":
         return _extract_pptx(binary, name, warnings), warnings
+    if extension == ".pdf":
+        return _extract_pdf(binary, name, warnings), warnings
     if extension in IMAGE_EXTENSIONS or content_type.startswith("image/"):
         return _extract_image(binary, name, warnings), warnings
 
@@ -161,9 +175,41 @@ def _strip_markup(raw_text: str) -> str:
     return text.strip()
 
 
+def _open_archive_safely(binary: bytes, name: str) -> zipfile.ZipFile | None:
+    """Open a zip archive but refuse ones that look like zip bombs."""
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(binary))
+    except zipfile.BadZipFile:
+        return None
+
+    total_uncompressed = sum(info.file_size for info in archive.infolist())
+    if total_uncompressed > MAX_UNCOMPRESSED_ARCHIVE_BYTES:
+        LOGGER.warning(
+            "Refused to extract %s: uncompressed size %s exceeds cap %s",
+            name,
+            total_uncompressed,
+            MAX_UNCOMPRESSED_ARCHIVE_BYTES,
+        )
+        archive.close()
+        raise ValueError(
+            f"{name}: archive uncompressed size exceeds the safety limit "
+            f"({MAX_UNCOMPRESSED_ARCHIVE_BYTES // (1024 * 1024)} MiB)."
+        )
+    return archive
+
+
 def _extract_docx(binary: bytes, name: str, warnings: list[str]) -> str:
     try:
-        with zipfile.ZipFile(io.BytesIO(binary)) as archive:
+        archive = _open_archive_safely(binary, name)
+    except ValueError as exc:
+        warnings.append(str(exc))
+        return ""
+    if archive is None:
+        warnings.append(f"{name}: DOCX archive is not a valid zip file.")
+        return _decode_text(binary)
+
+    try:
+        with archive:
             xml_paths = [
                 path
                 for path in archive.namelist()
@@ -188,7 +234,16 @@ def _extract_docx(binary: bytes, name: str, warnings: list[str]) -> str:
 
 def _extract_xlsx(binary: bytes, name: str, warnings: list[str]) -> str:
     try:
-        with zipfile.ZipFile(io.BytesIO(binary)) as archive:
+        archive = _open_archive_safely(binary, name)
+    except ValueError as exc:
+        warnings.append(str(exc))
+        return ""
+    if archive is None:
+        warnings.append(f"{name}: XLSX archive is not a valid zip file.")
+        return _decode_text(binary)
+
+    try:
+        with archive:
             shared_strings = _read_shared_strings(archive)
             sheet_names = _read_workbook_sheet_names(archive)
             sections: list[str] = []
@@ -217,7 +272,16 @@ def _extract_xlsx(binary: bytes, name: str, warnings: list[str]) -> str:
 
 def _extract_pptx(binary: bytes, name: str, warnings: list[str]) -> str:
     try:
-        with zipfile.ZipFile(io.BytesIO(binary)) as archive:
+        archive = _open_archive_safely(binary, name)
+    except ValueError as exc:
+        warnings.append(str(exc))
+        return ""
+    if archive is None:
+        warnings.append(f"{name}: PPTX archive is not a valid zip file.")
+        return _decode_text(binary)
+
+    try:
+        with archive:
             slides = [
                 path
                 for path in archive.namelist()
@@ -251,6 +315,101 @@ def _extract_pptx(binary: bytes, name: str, warnings: list[str]) -> str:
     except Exception:
         warnings.append(f"{name}: PPTX extraction failed, so the raw content was used.")
         return _decode_text(binary)
+
+
+def _extract_pdf(binary: bytes, name: str, warnings: list[str]) -> str:
+    """Extract text from a PDF.
+
+    Prefers ``pypdf`` (pure Python, pip-installable). If ``pypdf`` is not
+    installed and ``pdftotext`` is available on PATH, falls back to it.
+    Otherwise, records a clear warning and returns a placeholder so the
+    downstream sanitizer still produces a document record.
+    """
+    try:
+        import pypdf  # type: ignore
+    except ImportError:
+        return _extract_pdf_via_binary(binary, name, warnings)
+
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(binary))
+    except Exception as exc:
+        warnings.append(f"{name}: PDF could not be opened ({exc}). The raw bytes were skipped.")
+        return f"# PDF: {name}\nPDF could not be parsed."
+
+    if getattr(reader, "is_encrypted", False):
+        try:
+            # pypdf attempts an empty-password decrypt on some files.
+            reader.decrypt("")
+        except Exception:
+            warnings.append(f"{name}: PDF is encrypted and cannot be read without a password.")
+            return f"# PDF: {name}\nPDF is encrypted and cannot be read."
+
+    sections: list[str] = []
+    pages = reader.pages
+    page_count = len(pages)
+    limit = min(page_count, MAX_PDF_PAGES)
+
+    for index in range(limit):
+        try:
+            text = pages[index].extract_text() or ""
+        except Exception as exc:
+            warnings.append(f"{name}: page {index + 1} text extraction failed ({exc}).")
+            continue
+        text = text.strip()
+        if text:
+            sections.append(f"# Page {index + 1}\n{text}")
+
+    if page_count > MAX_PDF_PAGES:
+        warnings.append(
+            f"{name}: PDF has {page_count} pages; only the first {MAX_PDF_PAGES} were extracted. "
+            "Split the file if the tail contains content that needs review."
+        )
+
+    if not sections:
+        warnings.append(
+            f"{name}: No text extracted from PDF. It may be a scanned image; consider OCR before review."
+        )
+        return f"# PDF: {name}\nNo text content extracted. The file may be a scanned image."
+
+    return "\n\n".join(sections)
+
+
+def _extract_pdf_via_binary(binary: bytes, name: str, warnings: list[str]) -> str:
+    """Fall back to the ``pdftotext`` CLI if pypdf is unavailable."""
+    pdftotext = shutil.which("pdftotext")
+    if not pdftotext:
+        warnings.append(
+            f"{name}: PDF extraction is unavailable (install `pypdf` with `pip install pypdf`). "
+            "The file was recorded but not read."
+        )
+        return f"# PDF: {name}\nPDF detected. Install pypdf to enable text extraction."
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as input_file:
+        input_file.write(binary)
+        input_path = input_file.name
+
+    try:
+        result = subprocess.run(
+            [pdftotext, "-layout", "-enc", "UTF-8", input_path, "-"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        output = (result.stdout or "").strip()
+        if result.returncode != 0 or not output:
+            stderr = (result.stderr or "").strip()
+            warnings.append(f"{name}: pdftotext failed: {stderr[:200]}")
+            return f"# PDF: {name}\nPDF could not be parsed by pdftotext."
+        return f"# PDF: {name}\n{output}"
+    except subprocess.TimeoutExpired:
+        warnings.append(f"{name}: pdftotext timed out.")
+        return f"# PDF: {name}\nPDF extraction timed out."
+    finally:
+        try:
+            os.remove(input_path)
+        except OSError:
+            pass
 
 
 def _extract_image(binary: bytes, name: str, warnings: list[str]) -> str:
@@ -382,6 +541,10 @@ def _run_local_ocr(binary: bytes, name: str, warnings: list[str]) -> str:
         return ""
 
     suffix = Path(name).suffix or ".png"
+    # Guard against odd extensions leaking into subprocess metadata.
+    if not re.fullmatch(r"\.[A-Za-z0-9]{1,8}", suffix):
+        suffix = ".png"
+
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as input_file:
         input_file.write(binary)
         input_path = input_file.name

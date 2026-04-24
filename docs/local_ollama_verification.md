@@ -1,4 +1,6 @@
-# Local Ollama Verification
+# Local Ollama verification
+
+Last updated: 2026-04-23
 
 ローカル `Ollama / gemma3:12b` を使って、前処理が正しく動くかを確認するための手順です。
 
@@ -20,99 +22,108 @@ ollama list
 ollama pull gemma3:12b
 ```
 
-## 2. サンプルデータで前処理確認
+## 2. エンドポイントの疎通確認
 
-まずは組み込みサンプルで、追加クレンジングと社外送信可否判定が動くかを見ます。
+合成リクエストでローカル sanitizer と sensitivity gate の疎通を確認します:
 
 ```powershell
 python scripts\local_ollama_precheck.py
 ```
 
-期待すること:
+このコマンドは:
 
-- `Available models:` に `gemma3:12b` が表示される
-- `PASS` が出る
-- `Sanitized preview` にプレースホルダ化されたテキストが表示される
-- `RESULT:` が出る
+1. `LOCAL_SANITIZER_API_URL` と `LOCAL_SENSITIVITY_API_URL` が**ループバックアドレス**
+   (`127.0.0.1`, `::1`, `localhost`) を指しているかを検証する
+2. 小さな合成文書で POST が通ることを確認する
 
-結果の見方:
+期待される出力:
 
-- `RESULT: Local pre-check passed.`
-  - ローカル前処理としては通過
-- `RESULT: Additional review recommended before external transfer.`
-  - 外部送信前に秘匿化結果を人手で確認した方がよい
-- `RESULT: BLOCKED for external transfer.`
-  - 明示的な社外秘や識別可能情報が強く残っている
+- `OK: http://127.0.0.1:11434/...` が sanitizer と sensitivity gate の両方に表示される
+- 最終行に `All configured checks passed.` が出る
 
-## 3. 実データで前処理確認
+非ループバック URL が設定されていた場合は `FAIL` で停止します。これは意図した
+挙動で、外部ホストに原文が送られることを防ぎます。
 
-テキスト系や Office 系の実ファイルを 1 つ指定して確認します。
+## 3. 実ファイルでのパイプライン確認
+
+実ファイルを 1 つ指定して、抽出 → 匿名化 → 社外送信可否判定までを確認します:
 
 ```powershell
 python scripts\local_ollama_precheck.py --input-file C:\path\to\your-document.docx
 ```
 
-PowerPoint や Excel も同様です。
+PowerPoint や Excel、PDF も同様に指定できます:
 
 ```powershell
 python scripts\local_ollama_precheck.py --input-file C:\path\to\change-runbook.xlsx
 python scripts\local_ollama_precheck.py --input-file C:\path\to\review-target.pptx
+python scripts\local_ollama_precheck.py --input-file C:\path\to\design.pdf
 ```
 
 確認ポイント:
 
-- `Initial replacement count` より `Enhanced replacement count` が増えることがある
-  - ローカル LLM が追加で秘匿化した可能性
-- `Outbound risk` が `high` の場合
-  - 外部送信前により強い一般化が必要
-- `Local sensitivity decision` が `block`
-  - 外部レビューへ進めない
+- `extracted chars` が 0 でない (抽出が成功している)
+- `replacements` が 0 より大きい (匿名化が効いている)
+- `outbound risk` が `low` または `medium`
+- `gate decision` が `safe` または `mask_and_continue`
+- `gate decision` が `block` になる場合は、明示的な社外秘表記や識別可能情報が
+  強く残っていると判定されている
 
-## 4. アプリ全体で確認
+結果の見方:
 
-外部 Gemma 4 側も含めて流れを確認する場合:
+- `RESULT: safe (sanitized text only).`
+  - ローカル前処理として通過
+- `RESULT: needs explicit confirmation in the UI.`
+  - Streamlit UI で各文書のチェックボックスを確認してから送信
+- `RESULT: BLOCKED. Do not transfer externally.`
+  - 外部レビューへ進めない。より強く匿名化した版を別途作成すること
 
-```powershell
-python server.py
-```
+## 4. 初回確認に向くデータ
 
-ブラウザで `http://127.0.0.1:8000` を開き、実データを投入します。
-
-見るべき点:
-
-- `Sanitized excerpt` に顧客名や拠点名などが残っていないか
-- `Local sensitivity decision` が `safe` か `mask_and_continue` か
-- `Review processing failed` が出ないか
-
-## 5. 初回確認に向くデータ
-
-最初は次の順で試すのが安全です。
+最初は次の順で試すのが安全です:
 
 1. ダミー文書
 2. 既に匿名化済みの文書
 3. 実データの一部抜粋
 4. 実データ全体
 
+## 5. Streamlit UI 側での最終確認
+
+precheck が通ったら Streamlit に切り替えます:
+
+```powershell
+streamlit run streamlit_app.py
+```
+
+ブラウザで表示された URL を開いて、precheck で OK を確認したファイルを投入します。
+
+見るべき点:
+
+- Step 2 の `Sanitized excerpt` に顧客名や拠点名などが残っていないか
+- 各文書の判定バッジ (`SAFE` / `NEEDS CONFIRM` / `BLOCKED`)
+- `mask_and_continue` 判定のチェックボックスは自分で確認してからオン
+- `BLOCKED` が 1 つでもある場合、Send ボタンは無効化される
+
 ## 6. 典型的な詰まりどころ
 
-### `Could not connect to local Ollama`
+### `endpoint URL host '...' is not a loopback literal`
+
+- ループバック以外の URL が `.env` に書かれている
+- 対応: `127.0.0.1`, `::1`, `localhost` に書き換える
+- これは R1 の境界が機能している証拠
+
+### `local sanitizer could not be reached`
 
 - Ollama が起動していない
-- 別環境の `localhost` を見ている
-- `.env` の `LOCAL_SANITIZER_API_URL` / `LOCAL_SENSITIVITY_API_URL` が違う
+- ポート番号が違う
+- 対応: `ollama list` を別シェルで実行して確認
 
 ### `Model 'gemma3:12b' was not found`
 
 - モデル未取得
-- タグ名が想定と異なる
+- 対応: `ollama pull gemma3:12b`
 
-確認:
-
-```powershell
-ollama list
-```
-
-### `RESULT: BLOCKED for external transfer.`
+### `RESULT: BLOCKED.`
 
 - 明示的な社外秘表記
 - 顧客識別につながる文脈
@@ -122,3 +133,5 @@ ollama list
 
 - 文書を章単位に分割する
 - 会社名、拠点名、案件名、担当者名、系統名の文脈をさらに一般化する
+- `.env` に `LOCAL_SANITIZER_PROVIDER=ollama` を設定してローカル LLM による
+  追加匿名化を有効化する

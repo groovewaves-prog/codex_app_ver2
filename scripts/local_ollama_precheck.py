@@ -1,3 +1,27 @@
+#!/usr/bin/env python3
+"""Local Ollama pre-check.
+
+Verifies that the locally configured sanitizer/sensitivity endpoints:
+
+1. Point to a loopback address (refuses otherwise; required by R1).
+2. Respond to a small synthetic sanitization request.
+3. Optionally runs the full pipeline on a user-supplied file so operators
+   can validate a real document before the Streamlit workflow.
+
+Usage::
+
+    python scripts/local_ollama_precheck.py
+    python scripts/local_ollama_precheck.py --input-file path/to/doc.docx
+
+Environment variables consumed:
+    LOCAL_SANITIZER_API_URL
+    LOCAL_SANITIZER_MODEL
+    LOCAL_SANITIZER_API_KEY (optional)
+    LOCAL_SENSITIVITY_API_URL
+    LOCAL_SENSITIVITY_MODEL
+    LOCAL_SENSITIVITY_API_KEY (optional)
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -6,188 +30,192 @@ import json
 import mimetypes
 import os
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
+# Allow running from the repository root without installation.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from secure_review.env_loader import load_dotenv
 from secure_review.extractor import extract_text
+from secure_review.network_guard import (
+    LocalUrlError,
+    UpstreamHttpError,
+    post_json_safely,
+    validate_local_url,
+)
 from secure_review.sanitizer import SensitiveDataSanitizer, choose_local_sanitization_enhancer
 from secure_review.sensitivity import choose_sensitivity_classifier
 
 
-DEFAULT_SAMPLE_TEXT = """customer-name Acme Corp
-site-name Tokyo-DC-01
-contact Sato
-project Backbone renewal
-hostname tokyo-rtr-01
-password superSecret!
-purpose network migration
-"""
+SAMPLE_TEXT = (
+    "customer-name Acme Corp\n"
+    "site-name Tokyo-DC-01\n"
+    "password superSecret!\n"
+    "ip address 10.1.2.3 255.255.255.0"
+)
+
+
+def _check_endpoint(url_env: str, model_env: str, key_env: str, label: str) -> bool:
+    url = os.getenv(url_env, "").strip()
+    model = os.getenv(model_env, "").strip()
+    key = os.getenv(key_env, "").strip()
+
+    print(f"=== {label} ===")
+    if not url or not model:
+        print(f"  skipped: {url_env} or {model_env} not set.")
+        return True  # not configured = not failed
+
+    try:
+        validate_local_url(url, label=url_env)
+    except LocalUrlError as exc:
+        print(f"  FAIL: {exc}")
+        return False
+
+    payload = {
+        "model": model,
+        "input": [
+            {"role": "system", "content": "Return a JSON object with a 'sanitized_text' field."},
+            {"role": "user", "content": SAMPLE_TEXT},
+        ],
+    }
+    headers = {"Content-Type": "application/json"}
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
+    try:
+        response = post_json_safely(url, payload, headers, context_label=label)
+    except UpstreamHttpError as exc:
+        print(f"  FAIL: {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001
+        print(f"  FAIL: unexpected error: {exc}")
+        return False
+
+    # Minimal shape check — we do not trust the content.
+    if isinstance(response, dict) and (
+        "output_text" in response or "output" in response or "choices" in response
+    ):
+        print(f"  OK: {url} (model={model})")
+        return True
+
+    print("  WARN: response did not match any known OpenAI-compatible shape.")
+    print(f"  First 200 chars: {json.dumps(response, ensure_ascii=False)[:200]}")
+    return True
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify local Ollama / Gemma3-12b sanitization and sensitivity checks.",
+        description="Pre-flight check for the local sanitizer and sensitivity gate."
     )
     parser.add_argument(
         "--input-file",
-        help="Optional file to run through local extraction, sanitization, and sensitivity checks.",
+        help=(
+            "Optional path to a real document. If supplied, the full "
+            "extract -> sanitize -> sensitivity pipeline is run on the file "
+            "and the per-document result is printed."
+        ),
     )
     parser.add_argument(
         "--document-name",
-        help="Optional display name when using --input-file.",
+        help="Display name for the input file (defaults to the basename).",
     )
     parser.add_argument(
         "--print-preview-chars",
         type=int,
         default=500,
-        help="Preview length to print in the console.",
+        help="How many characters of the sanitized preview to print.",
     )
     args = parser.parse_args()
 
     load_dotenv()
 
-    sanitizer = SensitiveDataSanitizer()
-    local_sanitizer = choose_local_sanitization_enhancer()
-    sensitivity_classifier = choose_sensitivity_classifier()
-
-    print("== Environment summary ==")
-    print(f"LOCAL_SANITIZER_PROVIDER={os.getenv('LOCAL_SANITIZER_PROVIDER', '') or '-'}")
-    print(f"LOCAL_SANITIZER_MODEL={os.getenv('LOCAL_SANITIZER_MODEL', '') or '-'}")
-    print(f"LOCAL_SENSITIVITY_PROVIDER={os.getenv('LOCAL_SENSITIVITY_PROVIDER', '') or '-'}")
-    print(f"LOCAL_SENSITIVITY_MODEL={os.getenv('LOCAL_SENSITIVITY_MODEL', '') or '-'}")
-    print()
-
-    if local_sanitizer.name in {"ollama", "local-http"}:
-        verify_local_model(
-            os.getenv("LOCAL_SANITIZER_API_URL", "").strip() or "http://127.0.0.1:11434/v1/responses",
-            os.getenv("LOCAL_SANITIZER_MODEL", "").strip() or "gemma3:12b",
+    # 1. endpoint checks always run
+    endpoint_results = [
+        _check_endpoint(
+            "LOCAL_SANITIZER_API_URL",
+            "LOCAL_SANITIZER_MODEL",
+            "LOCAL_SANITIZER_API_KEY",
             "local sanitizer",
-        )
-    if sensitivity_classifier.name in {"ollama", "local-http"}:
-        verify_local_model(
-            os.getenv("LOCAL_SENSITIVITY_API_URL", "").strip() or "http://127.0.0.1:11434/v1/responses",
-            os.getenv("LOCAL_SENSITIVITY_MODEL", "").strip() or "gemma3:12b",
+        ),
+        _check_endpoint(
+            "LOCAL_SENSITIVITY_API_URL",
+            "LOCAL_SENSITIVITY_MODEL",
+            "LOCAL_SENSITIVITY_API_KEY",
             "local sensitivity gate",
+        ),
+    ]
+
+    # 2. optional full-pipeline check on a user-supplied file
+    pipeline_result = True
+    if args.input_file:
+        pipeline_result = _run_pipeline_on_file(
+            Path(args.input_file),
+            args.document_name,
+            args.print_preview_chars,
         )
 
-    document_name, extracted_text, extraction_warnings = load_input(args.input_file, args.document_name)
-    if extraction_warnings:
-        print("== Extraction warnings ==")
-        for warning in extraction_warnings:
-            print(f"- {warning}")
-        print()
-
-    initial = sanitizer.sanitize(document_name, extracted_text)
-    enhanced = local_sanitizer.enhance(document_name, extracted_text, initial, sanitizer)
-    assessment = sensitivity_classifier.assess(document_name, extracted_text, enhanced)
-
-    print(f"== Document: {document_name} ==")
-    print(f"Original chars: {len(extracted_text)}")
-    print(f"Initial replacement count: {len(initial.replacements)}")
-    print(f"Enhanced replacement count: {len(enhanced.replacements)}")
-    print(f"Outbound risk: {enhanced.outbound_risk}")
-    print(f"Local sensitivity decision: {assessment.decision}")
-    print(f"Local sanitizer provider: {enhanced.local_sanitizer_provider or local_sanitizer.name}")
-    print(f"Local sensitivity provider: {assessment.provider}")
-    print()
-
-    print("== Findings ==")
-    for item in enhanced.findings or ["-"]:
-        print(f"- {item}")
-    if assessment.reasons:
-        print("== Sensitivity reasons ==")
-        for reason in assessment.reasons:
-            print(f"- {reason}")
-    print()
-
-    preview_chars = max(80, args.print_preview_chars)
-    print("== Sanitized preview ==")
-    print(enhanced.outbound_text[:preview_chars])
-    print()
-
-    if assessment.decision == "block":
-        print("RESULT: BLOCKED for external transfer. Prepare a more strongly sanitized copy first.")
-        return 2
-
-    if assessment.decision == "mask_and_continue":
-        print("RESULT: Additional review recommended before external transfer.")
+    if all(endpoint_results) and pipeline_result:
+        print("\nAll configured checks passed.")
         return 0
+    print("\nOne or more checks failed. Review the messages above.")
+    return 1
 
-    print("RESULT: Local pre-check passed.")
-    return 0
 
-
-def load_input(input_file: str | None, document_name: str | None) -> tuple[str, str, list[str]]:
-    if not input_file:
-        return "sample.txt", DEFAULT_SAMPLE_TEXT, []
-
-    path = Path(input_file)
+def _run_pipeline_on_file(
+    path: Path,
+    display_name: str | None,
+    preview_chars: int,
+) -> bool:
+    print(f"\n=== pipeline check on {path} ===")
     if not path.is_file():
-        raise FileNotFoundError(f"Input file was not found: {path}")
-
-    raw = path.read_bytes()
-    content = base64.b64encode(raw).decode("ascii")
-    content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    extracted_text, warnings = extract_text(
-        document_name or path.name,
-        content,
-        content_type,
-        "base64",
-    )
-    return document_name or path.name, extracted_text, warnings
-
-
-def verify_local_model(api_url: str, expected_model: str, label: str) -> None:
-    tags_url = derive_tags_url(api_url)
-    print(f"== Checking {label} ==")
-    print(f"API: {api_url}")
-    print(f"Expected model: {expected_model}")
+        print(f"  FAIL: input file not found: {path}")
+        return False
 
     try:
-        payload = get_json(tags_url)
-    except RuntimeError as exc:
-        raise RuntimeError(f"Could not connect to local Ollama at {tags_url}: {exc}") from exc
+        raw = path.read_bytes()
+        content = base64.b64encode(raw).decode("ascii")
+        content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
 
-    models = [item.get("name", "") for item in payload.get("models", [])]
-    print(f"Available models: {', '.join(models) if models else '(none)'}")
+        name = display_name or path.name
+        extracted_text, warnings = extract_text(name, content, content_type, "base64")
+        for warning in warnings:
+            print(f"  extractor warning: {warning}")
 
-    if expected_model not in models:
-        raise RuntimeError(
-            f"Model {expected_model!r} was not found in Ollama. Run `ollama pull {expected_model}` first."
-        )
-    print("PASS")
-    print()
+        sanitizer = SensitiveDataSanitizer()
+        local_sanitizer = choose_local_sanitization_enhancer()
+        gate = choose_sensitivity_classifier()
 
+        sanitized = sanitizer.sanitize(name, extracted_text)
+        sanitized = local_sanitizer.enhance(name, extracted_text, sanitized, sanitizer)
+        assessment = gate.assess(name, extracted_text, sanitized)
 
-def derive_tags_url(api_url: str) -> str:
-    parsed = urllib.parse.urlparse(api_url)
-    if not parsed.scheme or not parsed.netloc:
-        raise RuntimeError(f"Invalid API URL: {api_url}")
-    return urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "/api/tags", "", "", ""))
+        print(f"  extracted chars : {len(extracted_text)}")
+        print(f"  replacements    : {len(sanitized.replacements)}")
+        print(f"  outbound risk   : {sanitized.outbound_risk}")
+        print(f"  gate decision   : {assessment.decision}")
+        print(f"  gate provider   : {assessment.provider}")
+        if assessment.reasons:
+            print("  gate reasons    :")
+            for reason in assessment.reasons:
+                print(f"    - {reason}")
+        preview = (sanitized.sanitized_excerpt or "")[: max(preview_chars, 0)]
+        if preview:
+            print(f"  sanitized preview (first {len(preview)} chars):")
+            print("    " + preview.replace("\n", "\n    "))
 
-
-def get_json(url: str) -> dict:
-    request = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Network error: {exc.reason}") from exc
-
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Invalid JSON response: {raw[:200]}") from exc
+        if assessment.decision == "block":
+            print("  RESULT: BLOCKED. Do not transfer externally.")
+        elif assessment.decision == "mask_and_continue":
+            print("  RESULT: needs explicit confirmation in the UI.")
+        else:
+            print("  RESULT: safe (sanitized text only).")
+        return True
+    except LocalUrlError as exc:
+        print(f"  FAIL: {exc}")
+        return False
+    except Exception as exc:  # noqa: BLE001
+        print(f"  FAIL: pipeline error: {exc}")
+        return False
 
 
 if __name__ == "__main__":

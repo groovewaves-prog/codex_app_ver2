@@ -531,3 +531,19 @@ if review is not None:
 
     with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
         st.code(review.prompt_preview or "(空)", language="text")
+
+    with st.expander("LLM の生レスポンス (デバッグ用)"):
+        raw = getattr(review, "raw_response", "") or ""
+        if raw.strip():
+            st.caption(
+                "LLM プロバイダから返ってきた未加工のレスポンスです。"
+                "指摘表示が空の場合や形式が崩れている場合の原因調査に使用します。"
+            )
+            st.code(raw[:8000], language="json")
+            if len(raw) > 8000:
+                st.caption(f"全 {len(raw)} 文字中、先頭 8000 文字のみ表示しています。")
+        else:
+            st.caption(
+                "生レスポンスは記録されていません (mock プロバイダ使用時、または "
+                "プロバイダ実装が raw_response を保持していない場合)。"
+            )

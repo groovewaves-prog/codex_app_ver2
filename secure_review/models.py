@@ -95,6 +95,7 @@ class ReviewResult:
     document_profile: str = ""
     classification_confidence: str = ""
     classification_reason: str = ""
+    raw_response: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,4 +108,5 @@ class ReviewResult:
             "document_profile": self.document_profile,
             "classification_confidence": self.classification_confidence,
             "classification_reason": self.classification_reason,
+            "raw_response": self.raw_response,
         }

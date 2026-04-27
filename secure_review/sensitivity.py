@@ -75,8 +75,8 @@ class HeuristicSensitivityClassifier(SensitivityClassifier):
         lowered = original_text.lower()
 
         if self._explicit_confidentiality.search(original_text):
-            reasons.append("Explicit confidentiality markers were found in the local source text.")
-            actions.append("Remove or generalize the confidentiality-labelled sections before external transfer.")
+            reasons.append("ローカル原文中に明示的な機密性マーカー (社外秘・confidential 等) が検出されました。")
+            actions.append("外部送信前に、機密性ラベルが付与された箇所を削除または一般化してください。")
             return SensitivityAssessment(
                 decision="block",
                 reasons=reasons,
@@ -85,27 +85,27 @@ class HeuristicSensitivityClassifier(SensitivityClassifier):
             )
 
         if any(record.category in {"company", "project", "ticket", "person"} for record in sanitized_document.replacements):
-            reasons.append("Customer, project, ticket, or contact identifiers were detected locally.")
-            actions.append("Confirm that masking removed all remaining context around customer and project identifiers.")
+            reasons.append("顧客・案件・チケット・担当者の識別子がローカルで検出されました。")
+            actions.append("顧客名・案件名等の識別子周辺の文脈が、マスク処理で完全に除去されているか確認してください。")
 
         if self._customer_context.search(original_text):
-            reasons.append("Business identifiers or ownership labels were found in the local source text.")
-            actions.append("Mask labels and nearby context that could still identify the organization or case.")
+            reasons.append("業務識別子または所有者ラベル (顧客名・案件名・担当者など) がローカル原文中に検出されました。")
+            actions.append("組織や案件を特定し得るラベルおよびその周辺文脈をマスク処理してください。")
 
         if self._topology_context.search(original_text) and sanitized_document.outbound_risk != "low":
-            reasons.append("Topology or environment-specific context appears to remain after sanitization.")
-            actions.append("Generalize site names, topology details, and environment-specific wording.")
+            reasons.append("匿名化後もトポロジ・環境固有の文脈が残存している可能性があります。")
+            actions.append("拠点名・トポロジ詳細・環境固有の表現を一般化してください。")
 
         if "password" in lowered or "token" in lowered or "secret" in lowered:
-            reasons.append("Credential-like wording was found in the local source text.")
-            actions.append("Confirm that all credentials and secrets are masked.")
+            reasons.append("認証情報を示唆する語 (password, token, secret 等) がローカル原文中に検出されました。")
+            actions.append("認証情報や秘密情報がすべてマスクされているか確認してください。")
 
         if sanitized_document.outbound_risk == "high":
-            reasons.append("The sanitizer already marked this document as high outbound risk.")
-            actions.append("Prepare a more strongly sanitized copy before external transfer.")
+            reasons.append("匿名化処理が、本文書を高い外部送信リスクと判定しています。")
+            actions.append("外部送信前に、より厳密に匿名化したコピーを準備してください。")
             return SensitivityAssessment(
                 decision="block",
-                reasons=reasons or ["The document is too sensitive for external transfer."],
+                reasons=reasons or ["本文書は外部送信に適さないと判定されました。"],
                 provider=self.name,
                 recommended_actions=actions,
             )
@@ -115,14 +115,14 @@ class HeuristicSensitivityClassifier(SensitivityClassifier):
                 decision="mask_and_continue",
                 reasons=reasons,
                 provider=self.name,
-                recommended_actions=actions or ["Apply additional masking and review the output locally."],
+                recommended_actions=actions or ["追加のマスク処理を行い、ローカルで結果を確認してください。"],
             )
 
         return SensitivityAssessment(
             decision="safe",
-            reasons=["No strong confidentiality blockers were detected by the local heuristic gate."],
+            reasons=["ローカル機密度判定で、強い機密性ブロッカーは検出されませんでした。"],
             provider=self.name,
-            recommended_actions=["Proceed with the sanitized text only."],
+            recommended_actions=["匿名化済みテキストのみで処理を続行してください。"],
         )
 
 

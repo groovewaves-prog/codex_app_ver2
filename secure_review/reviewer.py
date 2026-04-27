@@ -17,16 +17,123 @@ from secure_review.rubric import ReviewRubric, classify_documents, choose_rubric
 LOGGER = logging.getLogger("secure_review.reviewer")
 
 
-SYSTEM_PROMPT = """You are a senior network, infrastructure, and code review agent.
-Review the sanitized artifacts.
-Do not ask for original secrets or identities.
-Focus on risks, inconsistencies, hardening gaps, operational concerns, and decisive missing content.
-Return concise Japanese feedback.
+SYSTEM_PROMPT = """あなたはネットワーク、インフラ、コードのシニアレビュー担当者です。
+匿名化済みの成果物をレビューしてください。原文の秘密情報や本人特定情報を求めないでください。
+リスク、矛盾、強化漏れ、運用上の懸念、決定的な不足内容に焦点を当て、必ず日本語で簡潔にフィードバックしてください。
 
-Output format:
-SUMMARY: overall summary
-ISSUE|severity|title|details|recommendation|source_document
+# 出力形式 (JSON 必須)
+
+必ず以下の構造の JSON オブジェクトのみを返してください。説明文や markdown のコードブロック (```) を付けないでください。
+
+{
+  "summary": "全体サマリの文章 (日本語)",
+  "issues": [
+    {
+      "severity": "high",
+      "title": "指摘のタイトル (日本語、簡潔に)",
+      "details": "詳細説明 (日本語)",
+      "recommendation": "推奨対応 (日本語)",
+      "source_document": "対象文書のファイル名"
+    }
+  ]
+}
+
+# 重要な指示
+
+- severity は必ず "high" / "medium" / "low" / "info" のいずれかの文字列値を使うこと。
+- "title", "details", "recommendation", "source_document" には、上記の構造例の文字列ではなく、実際のレビュー内容を入れること。
+- "severity" や "title" などのフィールド名そのものを値として返さないこと。
+- 重大度の判定基準:
+  - high: ブロッキング相当 (送信前に修正必須、安全性・整合性に重大な穴)
+  - medium: 必須に近い改善
+  - low: 改善推奨
+  - info: 補足情報
+- issues 配列が空でもよい。その場合は summary に「重大な指摘なし」等を明記する。
+
+# 出力の具体例 (この具体例の値は例示用。実際のレビュー対象に合わせて中身を必ず置き換えること)
+
+{
+  "summary": "提示された変更手順書には目的と切戻し条件の記載があるが、構成情報の参照先と go/no-go 判定基準が不明確である。",
+  "issues": [
+    {
+      "severity": "high",
+      "title": "構成情報の参照先が不明",
+      "details": "本書には「構成図: 別紙参照」との記載があるが、別紙の正式名称や格納先が示されていないため、作業前確認に支障が出る可能性がある。",
+      "recommendation": "構成図の正式名称・格納先パス・版数を本文に明記すること。",
+      "source_document": "example.txt"
+    },
+    {
+      "severity": "medium",
+      "title": "go/no-go 判定基準が未定義",
+      "details": "切戻し条件は記載されているが、各作業段階での作業継続/中止 (go/no-go) の判定基準が示されていない。",
+      "recommendation": "各作業段階に go/no-go チェックポイントと具体的な判定基準を追記すること。",
+      "source_document": "example.txt"
+    }
+  ]
+}
 """
+
+
+# JSON Schema for Gemini API structured output. The schema is enforced
+# server-side when the model supports responseSchema. For models that ignore
+# it (or for non-Gemini providers), the prompt above still describes the same
+# structure, and the parser handles graceful fallback.
+REVIEW_RESPONSE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "issues": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "severity": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low", "info"],
+                    },
+                    "title": {"type": "string"},
+                    "details": {"type": "string"},
+                    "recommendation": {"type": "string"},
+                    "source_document": {"type": "string"},
+                },
+                "required": [
+                    "severity",
+                    "title",
+                    "details",
+                    "recommendation",
+                    "source_document",
+                ],
+            },
+        },
+    },
+    "required": ["summary", "issues"],
+}
+
+
+# Set of strings that, if returned by the model as field values, indicate
+# the model copied the schema/example placeholders verbatim instead of
+# producing real review content. We treat such issues as malformed and drop
+# them rather than displaying garbage to the user.
+_PLACEHOLDER_TOKENS = {
+    "severity",
+    "title",
+    "details",
+    "recommendation",
+    "source_document",
+    "<severity>",
+    "<title>",
+    "<details>",
+    "<recommendation>",
+    "<source_document>",
+    "<重大度>",
+    "<タイトル>",
+    "<詳細>",
+    "<推奨対応>",
+    "<出典文書名>",
+}
+
+
+_VALID_SEVERITIES = {"high", "medium", "low", "info"}
 
 
 # Gemini free-tier quota messages we want to surface nicely to the user.
@@ -317,7 +424,7 @@ class HttpLlmReviewProvider(ReviewProvider):
             context_label="HTTP LLM provider",
         )
         content = _extract_openai_like_text(response)
-        issues = _parse_issue_blocks(content, documents)
+        issues = _parse_review_response(content, documents)
         return _build_review_result(
             summary="Received review result from the configured HTTP LLM provider.",
             issues=issues,
@@ -327,6 +434,7 @@ class HttpLlmReviewProvider(ReviewProvider):
             classification_confidence=classification.confidence,
             classification_reason=classification.reason,
             prompt=prompt,
+            raw_response=content,
         )
 
 
@@ -373,12 +481,19 @@ class GeminiApiReviewProvider(ReviewProvider):
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
         prompt = build_prompt(documents, rubric)
+        # Force JSON output so the model cannot return literal placeholder
+        # strings ("severity", "title", ...) the way it did with the older
+        # pipe-delimited template. The schema is enforced on the server side
+        # for models that support it; for models that do not, the prompt
+        # alone still describes the same JSON shape.
         payload = {
             "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
             "generationConfig": {
                 "temperature": self.temperature,
                 "maxOutputTokens": self.max_output_tokens,
+                "responseMimeType": "application/json",
+                "responseSchema": REVIEW_RESPONSE_SCHEMA,
             },
         }
 
@@ -390,7 +505,7 @@ class GeminiApiReviewProvider(ReviewProvider):
                 f"Gemini returned no text (finish_reason={finish_reason or 'unknown'}). "
                 "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
             )
-        issues = _parse_issue_blocks(content, documents)
+        issues = _parse_review_response(content, documents)
         return _build_review_result(
             summary=f"Received review result from Gemini API model {self.model}.",
             issues=issues,
@@ -400,6 +515,7 @@ class GeminiApiReviewProvider(ReviewProvider):
             classification_confidence=classification.confidence,
             classification_reason=classification.reason,
             prompt=prompt,
+            raw_response=content,
         )
 
     def _post_with_retry(self, payload: dict) -> dict:
@@ -454,17 +570,17 @@ def build_prompt(documents: list[SanitizedDocument], rubric: ReviewRubric | None
         rubric = choose_rubric(documents)
 
     sections = [
-        "The following artifacts have been sanitized.",
-        "Review them in Japanese for security, consistency, operations, documentation gaps, decisive missing content, and review blocking issues.",
-        "Use the following rubric and clearly distinguish blocking gaps from items that need a little more detail.",
+        "以下の成果物は匿名化済みです。",
+        "セキュリティ、整合性、運用、文書化の不足、決定的な不足、レビューブロッキング事項の観点から、日本語でレビューしてください。",
+        "次のルーブリックを使用し、ブロッキング相当の不足と、もう少し詳細が必要な事項を明確に区別してください。",
         render_rubric_for_prompt(rubric),
-        "Return the result using the required format.",
-        "SUMMARY: overall summary",
-        "ISSUE|severity|title|details|recommendation|source_document",
+        "",
+        "出力は必ず JSON オブジェクトのみで返してください。markdown のコードブロックや前置きを付けないこと。",
+        "JSON の構造はシステムプロンプトで指定した形式に従ってください。",
     ]
 
     for document in documents:
-        sections.append(f"--- document: {document.name} ---")
+        sections.append(f"--- 文書: {document.name} ---")
         sections.append(document.outbound_text)
 
     return "\n".join(sections)
@@ -490,6 +606,7 @@ def _build_review_result(
     classification_confidence: str,
     classification_reason: str,
     prompt: str | None = None,
+    raw_response: str = "",
 ) -> ReviewResult:
     prompt_text = prompt or build_prompt(documents, rubric)
     return ReviewResult(
@@ -502,6 +619,7 @@ def _build_review_result(
         document_profile=rubric.document_profile,
         classification_confidence=classification_confidence,
         classification_reason=classification_reason,
+        raw_response=raw_response,
     )
 
 
@@ -564,6 +682,91 @@ def _looks_like_quota(message: str) -> bool:
     return any(marker.lower() in lower for marker in _GEMINI_QUOTA_MARKERS)
 
 
+def _parse_review_response(content: str, documents: list[SanitizedDocument]) -> list[ReviewIssue]:
+    """Parse a review response, preferring JSON output.
+
+    The Gemini API now returns structured JSON when the schema is enforced.
+    For HTTP LLM providers that follow the prompt without server-side schema
+    enforcement, JSON is still expected. We fall back to the legacy
+    pipe-delimited parser only for backwards compatibility.
+    """
+    json_issues = _parse_json_issues(content, documents)
+    if json_issues is not None:
+        return json_issues
+    return _parse_issue_blocks(content, documents)
+
+
+def _parse_json_issues(
+    content: str, documents: list[SanitizedDocument]
+) -> list[ReviewIssue] | None:
+    """Try to parse the model output as a JSON object with summary/issues.
+
+    Returns None if the content is clearly not JSON, so the caller can fall
+    back to the legacy pipe parser. Returns an empty list (or filtered list)
+    if JSON was parsed but contained no usable issues.
+    """
+    text = content.strip()
+    if not text:
+        return None
+
+    # Strip optional markdown fences the model may have added despite the
+    # explicit instruction to return JSON only.
+    if text.startswith("```"):
+        # Drop the opening fence (with optional language tag) and trailing fence.
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+
+    # If the content does not look like a JSON object at all, give up.
+    if not (text.startswith("{") and text.rstrip().endswith("}")):
+        return None
+
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    raw_issues = payload.get("issues", [])
+    if not isinstance(raw_issues, list):
+        return []
+
+    default_source = documents[0].name if documents else "-"
+    parsed: list[ReviewIssue] = []
+    for raw in raw_issues:
+        if not isinstance(raw, dict):
+            continue
+        severity = str(raw.get("severity", "")).strip().lower()
+        if severity not in _VALID_SEVERITIES:
+            # Drop issues whose severity is malformed (often a side-effect of
+            # the model echoing the schema field name).
+            continue
+        title = str(raw.get("title", "")).strip()
+        details = str(raw.get("details", "")).strip()
+        recommendation = str(raw.get("recommendation", "")).strip()
+        source = str(raw.get("source_document", "")).strip() or default_source
+
+        # Filter out issues whose values are clearly schema placeholders.
+        candidate_values = [title.lower(), details.lower(), recommendation.lower()]
+        if any(value in _PLACEHOLDER_TOKENS for value in candidate_values):
+            continue
+        if not title and not details:
+            # Empty issue is no use to the reviewer.
+            continue
+
+        parsed.append(
+            ReviewIssue(
+                severity=severity,
+                title=title or "(無題の指摘)",
+                details=details or "(詳細なし)",
+                recommendation=recommendation or "(推奨対応の記載なし)",
+                source_document=source,
+            )
+        )
+
+    return parsed
+
+
 def _parse_issue_blocks(content: str, documents: list[SanitizedDocument]) -> list[ReviewIssue]:
     issues: list[ReviewIssue] = []
     default_source = documents[0].name if documents else "-"
@@ -575,9 +778,20 @@ def _parse_issue_blocks(content: str, documents: list[SanitizedDocument]) -> lis
         if len(parts) != 6:
             continue
         _, severity, title, details, recommendation, source_document = parts
+
+        severity_normalized = severity.lower()
+        # Reject placeholder-echo lines (e.g. "ISSUE|severity|title|...").
+        if severity_normalized not in _VALID_SEVERITIES:
+            continue
+        if any(
+            value.lower() in _PLACEHOLDER_TOKENS
+            for value in (title, details, recommendation)
+        ):
+            continue
+
         issues.append(
             ReviewIssue(
-                severity=severity or "medium",
+                severity=severity_normalized,
                 title=title or "Review issue",
                 details=details or content[:200],
                 recommendation=recommendation or "Please confirm the intended configuration.",

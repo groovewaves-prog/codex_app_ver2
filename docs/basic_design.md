@@ -276,7 +276,7 @@ gate 不通時も同様に `mask_and_continue` にフォールバック。
 
 - MVP 安定化、Streamlit UI、Gemini free tier provider
 - PDF 抽出、XLSX/PPTX 抽出、画像 OCR フック
-- R1-R4 セキュリティ境界対応、49 → 59 件のテスト整備
+- R1-R4 セキュリティ境界対応、49 → 63 件のテスト整備
 - 研究知見 (Fagan inspection / PBR / ITIL / Google SRE PRR / AWS ORR) を rubric に反映
 
 ### 12.2 Phase 2

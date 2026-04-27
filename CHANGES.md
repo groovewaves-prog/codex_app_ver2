@@ -301,7 +301,7 @@ working repository. The baseline layout was:
 After unpacking:
 
 1. `pip install -r requirements.txt`
-2. `python -m unittest discover tests` — expect 59 passing.
+2. `python -m unittest discover tests` — expect 63 passing.
 3. `python scripts/local_ollama_precheck.py` — should pass if your
    local Ollama is running, or clearly refuse a misconfigured non-
    loopback URL without crashing. Add `--input-file <path>` to

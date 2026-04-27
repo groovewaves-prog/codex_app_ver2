@@ -1,105 +1,162 @@
 # Handoff
 
-Last updated: 2026-04-24 (V3 verification materials + GitHub push prep)
+Last updated: 2026-04-27 (Streamlit Cloud デプロイ完了 + Gemini JSON モード対応 + UI 完全日本語化)
 
 ## 0. 次のチャットを開く方へ（最重要）
 
 このファイルは、**次のチャット開始時に Claude にこれ 1 本渡せば現状復元できる**
-ことを目的に書かれています。まずは次の節（0.1–0.3）を読んでください。
+ことを目的に書かれています。まずは次の節（0.1–0.4）を読んでください。
 
-### 0.1 次のチャットで実施する作業
+### 0.1 現在の到達点（2026-04-27 現在）
 
-GitHub に push して PR を作成する作業です。具体的には:
+**ツールは Streamlit Community Cloud 上で稼働中です**。
 
-1. GitHub MCP コネクタ接続済みの状態で開始（contents write 権限あり）
-2. `secure_review_hardening.zip` を展開し、ユーザーのローカル repo と `git diff` で差分確認
-3. ブランチ作成（例: `hardening/r1-r4-and-streamlit-and-template-alignment`）
-4. コミット（論理単位で分ける / 1 コミットにまとめるかはユーザー確認）
-5. push して PR 作成（PR 本文は `CHANGES.md` をベースに）
+- URL: `https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app`
+- リポジトリ: `https://github.com/groovewaves-prog/codex_app`
+- 最新マージコミット: `Switch Gemini review provider to JSON output mode` (PR #4) 後の main HEAD
+- UI: 完全日本語化済み（タイトル「セキュアレビュー」、すべての画面要素が日本語）
+- 動作確認済み: `test1.txt`（テスト用手順書）で Gemma 4 が 7 件の高品質な日本語指摘を返すことを確認 (2026-04-27)
 
-### 0.2 次のチャットの開始プロンプト（コピペ用）
+**現在の構成**:
+
+| 段階 | 実装 |
+|---|---|
+| 文書抽出 | `secure_review/extractor.py`（pypdf, docx, xlsx, pptx 対応） |
+| 一次マスキング | regex ベース（`SensitiveDataSanitizer`） |
+| ローカル LLM 二次マスキング | **使用しない**（`LOCAL_SANITIZER_PROVIDER=none`） |
+| 機密度判定 | regex + heuristic ベース（`HeuristicSensitivityClassifier`、`LOCAL_SENSITIVITY_PROVIDER=heuristic`） |
+| 確認ゲート | UI のチェックボックス（`MASK_AND_CONTINUE_REQUIRE_CONFIRM=true`） |
+| 外部レビュー LLM | Gemini API 経由の Gemma 4 31B（`gemma-4-31b-it`、JSON モード強制）|
+
+### 0.2 次のチャットで予想される作業
+
+優先度順:
+
+1. **実データでの段階的テスト**: ダミー → 匿名化済み資料 → 実データ抜粋 → 実データ全体
+2. **小規模な UI 文言改善**: 残った英語混在箇所（後述）の日本語化
+3. **handoff.md / docs のテスト件数更新**: `59 件` → `63 件` に修正
+4. **`docs/operations_policy.md` の更新**: 現在の regex+heuristic+Gemma 4 構成での運用ルール反映
+5. **不要な Ollama 系コードの整理（オプション）**: 凍結方針なので、関連コード・テストを残すか削除するか判断
+6. **長文・大量ファイルでの動作確認**: トークン上限近辺での挙動
+
+### 0.3 次のチャットの開始プロンプト（コピペ用）
 
 ```
-GitHub MCP コネクタが接続済みの新チャットです。
-前回の Claude と次の作業を実施しました（詳細は添付の handoff.md と CHANGES.md）:
+前回の続きの新チャットです。secure_review ツールは既に Streamlit Cloud で稼働しており、
+今回は運用フェーズの作業を行います。
 
-- secure_review ツールの R1-R4 セキュリティ境界対応
-- Streamlit UI 新設
-- Gemini free tier 安定化
-- PDF 抽出対応
-- レビュー rubric の研究知見反映 (Fagan / PBR / ITIL / SRE PRR / AWS ORR)
-- 作業計画書テンプレート整合
-- テスト 59 件全通過
+リポジトリ: https://github.com/groovewaves-prog/codex_app
+URL: https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
 
-成果物は `secure_review_hardening.zip` にまとめてあります。
-baseline commit は `eaf605a` です。
+handoff.md を読んで現状を把握してください。
+特にセクション 0.1（現在の到達点）と 0.2（次の作業候補）を確認した上で、
+本日の作業観点を 1-2 行で合意してから進めてください。
 
-今回のチャットでは以下を実施します:
-1. zip を展開して git diff で baseline との差分を確認
-2. ブランチを作成してコミット
-3. GitHub に push して PR 作成
+私の作業 PC は KDDI 業務 PC、リポジトリは
+C:\Users\S023649\OneDrive - KDDI株式会社\SecurePC\Documents\codex
+にあります。OneDrive 配下なので git ロック警告が出ることがありますが、n でスキップで実害ありません。
 
-まず私のリポジトリ <org>/<repo> にアクセスできるか確認してから、
-現在の main ブランチと baseline commit の関係を教えてください。
+API キーは Claude には開示しないでください。Streamlit Cloud Secrets と私の手元 .env でのみ管理しています。
 ```
 
-ユーザーは zip の中身と `docs/handoff.md`・`CHANGES.md` を添付して新チャットを
-開きます。
+ユーザーは `docs/handoff.md` を添付して新チャットを開きます。
 
-### 0.3 合意済みレビュー観点（review-scoping skill）
+### 0.4 合意済みレビュー観点（review-scoping skill v3）
 
-次チャットでも最初の作業前に 1–2 行で観点合意してから進めてください。
-今回は GitHub 操作なので、恐らく:
+作業前に 1-2 行で観点合意してから進めてください。
+作業内容によって典型的な観点は異なります:
 
-- **整合性レビュー**: 成果物の内容がユーザーの repo と衝突しないか
-- **ユーザー指示反映レビュー**: PR ブランチ命名・コミット粒度など、ユーザーの好みを確認
+- **実データテスト** → 「整合性レビュー」「ユーザー指示反映レビュー」
+- **コード変更** → 「整合性レビュー」「論理レビュー」
+- **docs 改訂** → 「目次突合法」「整合性レビュー」
 
 ---
 
 ## 1. 現状サマリ
 
-### 1.1 バンドル
+### 1.1 リポジトリ最新状態 (2026-04-27 時点)
 
-- `secure_review_hardening.zip` (88 KB 前後、34 ファイル)
-- baseline commit: `eaf605a`
-- 配置先（ユーザー環境）: `C:\Users\S023649\OneDrive - KDDI株式会社\SecurePC\Documents\codex\`
+```
+9f2be91 Merge pull request #3 (Localize Streamlit UI to Japanese)
+       + その後 PR #4 (Switch Gemini review provider to JSON output mode) マージ済み
+```
+
+直近のマージコミット (PR #4) を取得するには:
+
+```powershell
+git pull origin main
+git log --oneline -5
+```
 
 ### 1.2 テスト
 
-59 件全通過:
+36 件全通過（`tests/test_reviewer.py` `test_sensitivity.py` `test_sanitizer.py` 等）。
+※ 過去の handoff.md には「59 件」「63 件」と記載があったが、現在の `python -m unittest tests.test_reviewer tests.test_sensitivity tests.test_sanitizer` 実行時点で 36 件。`tests/` ディレクトリ全体で実行すれば追加テストが含まれる。
 
-```
+```powershell
 python -m unittest discover tests
 ```
 
-### 1.3 主要成果物
+### 1.3 デプロイ環境
 
-- `secure_review/network_guard.py` 新規（R1/R3 の核）
-- `secure_review/sanitizer.py`, `sensitivity.py`, `reviewer.py`, `app.py` 更新（R1-R4）
-- `secure_review/extractor.py` 更新（PDF + zip bomb 対策）
-- `secure_review/rubric.py` 大幅強化（研究知見 + 作業計画書テンプレート反映）
-- `streamlit_app.py` 新規
-- `docs/security_boundaries.md` 新規
-- `docs/basic_design.md`, `handoff.md`, `traceability.md`, `operations_policy.md` 更新
-- `docs/v3_streamlit_verification.md` 新規（実データ検証手順）
-- `docs/local_ollama_verification.md` 新 precheck CLI に合わせて全面改訂
-- `README.md`, `.env.example` 更新
-- `tests/test_network_guard.py`, `tests/test_app.py` 新規
-- `scripts/local_ollama_precheck.py` リライト（`--input-file` 復元済み）
+- **Streamlit Community Cloud**: 自動再デプロイ（main ブランチ更新を検知）
+- **手元 PC での動作確認は不要**: Streamlit Cloud で直接ブラシュアップする方針
+
+### 1.4 主要成果物
+
+- `streamlit_app.py` — 主 UI（完全日本語化、`st.secrets` ブリッジ実装、生レスポンス表示エクスパンダ）
+- `secure_review/network_guard.py` — R1/R3 の核
+- `secure_review/sanitizer.py`, `sensitivity.py`, `reviewer.py`, `app.py` — R1-R4 + JSON モード対応
+- `secure_review/extractor.py` — PDF + zip bomb 対策
+- `secure_review/rubric.py` — 研究知見 + 作業計画書テンプレート反映
+- `docs/security_boundaries.md` — R1-R4 境界仕様
+- `docs/v3_streamlit_verification.md` — 実データ検証手順
+- `tests/test_network_guard.py`, `tests/test_app.py`
 
 ---
 
 ## 2. 実施した作業の経緯（時系列）
 
+### 2.1 旧フェーズ（〜2026-04-24）
+
 1. 同僚からのレビュー依頼書を受けてコードレビューを実施、重大 4 件 (R1-R4) + 中/低 指摘を検出
 2. ユーザー判断で「R1-R4 全対応後に機能追加」「UI は Streamlit に移行」「Gemini free tier 安定化」「PDF 抽出」「docs 整合」を優先
-3. `network_guard.py` 中心に R1-R4 対応、55 テスト全通過確認
-4. 文書レビュー研究の調査を実施（Fagan 1976, Basili PBR 1996, Brykczynski 1999 checklist survey, Machado 2008 rollback, ITIL 4, Google SRE PRR, AWS ORR）
-5. ユーザー要望「作業後運用内容、タイムチャート、WBS（強要しない）」を rubric に反映
-6. セルフレビューで整合性問題 5 件、ユーザー指示反映問題 3 件を検出、全て修正
-7. review-scoping skill を導入し、以降は作業前に観点合意する運用
-8. 作業計画書テンプレート (.pptx) を受領、rubric に整合化 + 既存バグ 2 件同時修正
-9. V3 実データ検証の手順書作成、README/.env.example 整備
+3. R1-R4 対応、文書レビュー研究調査（Fagan, PBR, ITIL, SRE PRR, AWS ORR）に基づく rubric 強化
+4. 作業計画書テンプレート (.pptx) との整合化
+5. PR #1 で R1-R4 + 機能追加をマージ (`502ad81`)
+
+### 2.2 新フェーズ（2026-04-25〜2026-04-27）
+
+6. **Lightning AI Studio 試行と却下**:
+   - ローカル Ollama (`gemma3:12b`) を Lightning Studio 上で動かす実験を実施
+   - SSH (port 22) は KDDI モバイル網 / 社内 LAN ともにブロックされアクセス不可
+   - cloudflared HTTPS トンネルは Zscaler で `Black_Low-Risk_List` 判定、ブロック
+   - Lightning Web Preview は CORS エラー / 真っ黒画面で UI アクセス不可
+   - CLI 経由でツール本体の動作は確認（regex 匿名化と R4 フェイルセーフが正常動作）
+   - 一方、CPU での `gemma3:12b` 推論は 60 秒タイムアウト超で実用不可
+   - GPU は Free クレジット不足（課金対象になる）のため使用不可
+   - **最終判断**: Lightning Studio を削除（アカウントは残存）、ローカル LLM 構想を凍結
+
+7. **方針転換 → Streamlit Cloud + 外部 Gemma 4 構成に確定**:
+   - 「Streamlit Cloud は信頼境界の内側」と扱う方針に変更
+   - 原文は Streamlit Cloud 環境内に留め、外部送信は匿名化済みのみ
+   - PR #2 で `streamlit_app.py` に `st.secrets` → `os.environ` ブリッジを追加してデプロイ可能に
+   - Streamlit Cloud に正常デプロイ完了
+
+8. **UI 完全日本語化** (PR #3):
+   - すべての画面要素（A: ラベル/ボタン/見出し、B: severity ラベル、C: プロファイル名、D: 判定ステータス、E: 説明文/エラー文）を日本語化
+   - 内部値（`safe`, `design`, `high` 等の文字列）は英語のまま維持し、コア互換性を保持
+   - タイトルは「Secure Review」→「セキュアレビュー」
+
+9. **Gemini JSON モード対応** (PR #4):
+   - 問題発生: Gemma 4 が SYSTEM_PROMPT のスキーマ例 `ISSUE|severity|title|...` を**プレースホルダではなくリテラルとしてコピーして返す**失敗パターン
+   - 表示が `[severity] title 推奨対応: recommendation` のようになり、実用不可
+   - 対処: SYSTEM_PROMPT を JSON 形式の Few-shot 例付き日本語プロンプトに刷新
+   - Gemini API の `generationConfig.responseMimeType="application/json"` + `responseSchema` で構造化出力を強制
+   - 新パーサー `_parse_review_response()` で JSON 優先 + パイプ形式フォールバック、プレースホルダ echo を弾く堅牢化
+   - `ReviewResult.raw_response` フィールド追加 → ステップ 4 末尾に「LLM の生レスポンス」エクスパンダ
+   - `HeuristicSensitivityClassifier` の英語 reasons/actions を全て日本語化
+   - 動作確認: `test1.txt` で 7 件の高品質な日本語指摘（高 4/中 2/低 1）が表示されることを確認
 
 ---
 
@@ -109,10 +166,10 @@ python -m unittest discover tests
 
 Streamlit (`streamlit_app.py`)。4 ステップ強制:
 
-1. Upload: 複数ファイル受付（base64 で送信）
-2. Sanitize & preview: ローカル処理のみ、外部呼び出しなし
-3. Confirm: `mask_and_continue` 文書をチェックで確認
-4. Send for review: 外部 LLM に送信
+1. **ステップ 1 — 文書アップロード**: 複数ファイル受付（base64 で送信）
+2. **ステップ 2 — 匿名化結果プレビュー**: ローカル処理のみ、外部呼び出しなし
+3. **ステップ 3 — 確認 & 送信**: `mask_and_continue` 文書をチェックで確認
+4. **ステップ 4 — レビュー結果**: 外部 LLM に送信、結果表示、生レスポンス表示エクスパンダ
 
 補助 UI として `server.py` 経由の HTTP API (`/api/preview`, `/api/review`) も維持。
 
@@ -124,6 +181,8 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 - 拒否: 他のホスト名（DNS が loopback に向いていても）、RFC1918 私設 IP、非 http(s) スキーム
 
 `LOCAL_SANITIZER_API_URL` と `LOCAL_SENSITIVITY_API_URL` について、起動時とリクエスト毎に検証。
+
+**※ 現在の構成では LOCAL_SANITIZER_PROVIDER=none / LOCAL_SENSITIVITY_PROVIDER=heuristic のため、R1 検証は実質的に発動しない**
 
 ### 3.3 R2: 確認ゲート
 
@@ -146,13 +205,17 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 `_extract_openai_like_text` と `_extract_gemini_text` は失敗時に**空文字を返す**。
 呼び出し元は空文字を明示的な失敗と扱い、regex-only sanitize を維持するなどで安全側に。
 
-### 3.6 Gemini free tier
+### 3.6 Gemini Provider（JSON モード対応版、PR #4 後）
 
-`GeminiFreeTierProvider` (`gemini-2.0-flash` 既定):
+`GeminiApiReviewProvider` (`gemma-4-31b-it` 既定):
 
+- `generationConfig.responseMimeType="application/json"` で JSON 出力強制
+- `responseSchema` で structure を server-side 強制（severity は enum 制約）
 - 429 / 5xx は `time.sleep(2.0)` で 1 回リトライ
 - `RESOURCE_EXHAUSTED` / "rate limit" 等のキーワードはクォータ判定、リトライせず人間向けメッセージ化
 - 空応答時は `finishReason` を表示して原因開示
+- `_parse_review_response()` で JSON 優先 + プレースホルダ echo 弾き
+- `ReviewResult.raw_response` で生レスポンスを UI で確認可能
 
 ### 3.7 rubric 強化（研究 + テンプレート反映）
 
@@ -164,11 +227,6 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 | `operations_runbook.operational_handover` (新設) | Google SRE PRR, AWS ORR |
 | `OPTIONAL_CHECKS.wbs_consistency_if_present` | ユーザー指示「あれば確認、なければ強要しない」 |
 | `completeness` に環境区別（本番/検証） | 社内テンプレート |
-
-MockReviewProvider にも対応ヒューリスティック:
-`_has_environment_distinction`, `_has_risk_level_with_approval`,
-`_has_document_update_list`, `_has_irreversible_operation_signals`,
-`_has_rollback_signals`, `_has_operational_handover_signals`.
 
 ### 3.8 PDF 抽出
 
@@ -187,9 +245,20 @@ MockReviewProvider にも対応ヒューリスティック:
 
 ---
 
-## 4. 環境変数一覧
+## 4. 環境変数一覧（現在の Streamlit Cloud Secrets 設定）
 
-### 4.1 Provider
+### 4.1 Streamlit Cloud で実際に設定中の値
+
+```toml
+REVIEW_PROVIDER = "gemma"
+GEMMA_MODEL = "gemma-4-31b-it"
+GEMINI_API_KEY = "***"  # ユーザー管理、Claude には非開示
+LOCAL_SANITIZER_PROVIDER = "none"
+LOCAL_SENSITIVITY_PROVIDER = "heuristic"
+MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
+```
+
+### 4.2 Provider 全リスト
 
 | 変数 | 既定 | 備考 |
 |---|---|---|
@@ -200,7 +269,7 @@ MockReviewProvider にも対応ヒューリスティック:
 | `GEMINI_TEMPERATURE` | `0.2` | |
 | `LLM_API_URL` / `LLM_API_KEY` / `LLM_MODEL` | — | `REVIEW_PROVIDER=http` 用 |
 
-### 4.2 ローカル sanitizer（ループバック限定）
+### 4.3 ローカル sanitizer（凍結中だが設定値は維持）
 
 | 変数 | 既定 |
 |---|---|
@@ -210,7 +279,7 @@ MockReviewProvider にも対応ヒューリスティック:
 | `LOCAL_SANITIZER_API_KEY` | — |
 | `LOCAL_SANITIZER_INPUT_CHARS` | `12000` |
 
-### 4.3 ローカル sensitivity gate（ループバック限定）
+### 4.4 ローカル sensitivity gate（heuristic で稼働中）
 
 | 変数 | 既定 |
 |---|---|
@@ -220,7 +289,7 @@ MockReviewProvider にも対応ヒューリスティック:
 | `LOCAL_SENSITIVITY_API_KEY` | — |
 | `LOCAL_SENSITIVITY_INPUT_CHARS` | `8000` |
 
-### 4.4 安全
+### 4.5 安全
 
 | 変数 | 既定 | 備考 |
 |---|---|---|
@@ -235,47 +304,66 @@ MockReviewProvider にも対応ヒューリスティック:
 
 ## 5. ユーザー合意済み方針（忘れない）
 
-1. **WBS は強要しない** — あれば本文との整合を確認、無ければ指摘しない。`rubric.OPTIONAL_CHECKS` に反映済み
-2. **PoC は無償構成** — Gemini free tier、Gemma 4 自己配備は将来フェーズ
-3. **外部送信は匿名化済みテキストのみ** — R1-R4 境界で強制
-4. **ローカル sanitizer / sensitivity は loopback 必須** — 非 loopback は起動時拒否
-5. **作業計画書テンプレート** — KDDI 当部門のテンプレ。rubric が整合
-6. **review-scoping skill** — 作業前に 1-2 行で観点合意する運用。**2026-04-24 に skill v3 へ更新済み**。主な更新内容:
-   - (v2 追加) 整合性レビュー時に単一ファイル完結に陥らず、固有名詞/識別子/テスト件数などをプロジェクト横断で `grep` 確認することが必須化
-   - (v3 追加) **目次突合法 (TOC Cross-check Method)** — 既存ドキュメント改訂時は、冒頭から主観的に読み直すのではなく、旧版/新版の目次を機械的に全列挙して突合表で確認する 4 ステップ手順が必須化
+### 5.1 不変方針（旧フェーズから継続）
 
-   **次チャットで GitHub push する際の必須手順**:
-   - `git diff eaf605a -- docs/basic_design.md` などで、改訂した docs 6 本（basic_design.md / handoff.md / traceability.md / operations_policy.md / local_ollama_verification.md / README.md）について、旧版から新版への節の保持状況を目次突合する
-   - 特に `docs/basic_design.md` について、本チャットで未検証の項目:
-     - 旧 5.2「暫定配備構成」の内容が新版のどこに移動したか
-     - 旧 10.2「PoC 暫定」の内容が新版のどこに移動したか
-   - 欠落が見つかれば、情報を復元するか「意図的な分割」として改訂ポイントに明記する
+1. **WBS は強要しない** — あれば本文との整合を確認、無ければ指摘しない。`rubric.OPTIONAL_CHECKS` に反映済み
+2. **PoC は無償構成** — 課金が発生する選択肢は採用しない（Lightning AI Studio GPU を断念した経緯あり）
+3. **外部送信は匿名化済みテキストのみ** — R1-R4 境界で強制
+4. **ローカル sanitizer / sensitivity は loopback 必須** — 非 loopback は起動時拒否（実装は維持、機能は凍結）
+5. **作業計画書テンプレート** — KDDI 当部門のテンプレ。rubric が整合
+6. **review-scoping skill v3** — 作業前に 1-2 行で観点合意する運用。目次突合法を含む
+
+### 5.2 新方針（2026-04-27 確定）
+
+7. **Streamlit Community Cloud は信頼境界の内側として扱う** — 原文を環境内に保持してよい
+8. **ローカル LLM (Ollama) 機能は凍結** — Free 環境で実用速度に達しない、課金は方針 (2) に反する
+9. **手元 PC での動作確認は不要** — Streamlit Cloud で直接ブラシュアップする
+10. **API キーを Claude に開示しない** — Streamlit Cloud Secrets と手元 `.env` のみで管理
+
+### 5.3 補足: review-scoping skill v3 のポイント
+
+- (v2 追加) 整合性レビュー時に単一ファイル完結に陥らず、固有名詞/識別子/テスト件数などをプロジェクト横断で `grep` 確認することが必須化
+- (v3 追加) **目次突合法 (TOC Cross-check Method)** — 既存ドキュメント改訂時は、冒頭から主観的に読み直すのではなく、旧版/新版の目次を機械的に全列挙して突合表で確認する 4 ステップ手順が必須化
 
 ---
 
 ## 6. 残課題
 
-### 6.1 初回レビューで挙げた未対応（M/L 級）
+### 6.1 即着手候補（次チャットで実施しやすい）
 
 | # | 内容 | 優先 |
 |---|---|---|
-| M1 | 裸ホスト名（`tokyo-rtr-01` 等）の検出強化 | 中 |
-| L1 | findings / reasons の重複ノイズ整理 | 低 |
-| L2 | provider 名の表記ゆれ統一 (`gemma4` / `gemma-4-gemini-api`) | 低 |
-| L5 | `env_loader._strip_quotes` のエスケープシーケンス対応 | 低 |
-| L6 | `_has_unprotected_command_execution` の `exec(` が SQL `EXEC` に過剰マッチ | 低 |
-| L7 | `HeuristicSensitivityClassifier` が sanitizer findings を再評価している冗長性 | 低 |
+| **R-A** | `app.py` の findings 接頭辞 `Local sensitivity gate: safe.` を日本語化（例: `ローカル機密度ゲート: 安全.`） | 低 |
+| **R-B** | `reviewer.py` のサマリ `Received review result from Gemini API model gemma-4-31b-it.` を日本語化 | 低 |
+| **R-C** | Gemma 4 の応答 summary を実際にレビュー結果のサマリに反映表示（現状は固定文言） | 中 |
+| **R-D** | `docs/operations_policy.md` 更新 — regex+heuristic+Gemma 4 構成での運用ルール反映 | 中 |
+| **R-E** | テスト件数の handoff.md / docs 表記揺れ修正（59 / 63 / 36 が混在） | 低 |
+| **R-F** | OneDrive 配下リポジトリの git ロック問題を handoff.md に明記（再発を防ぐ運用 Tips として） | 低 |
+| **R-G** | Streamlit Cloud デプロイ手順を `docs/streamlit_cloud_deployment.md` として正式 docs 化 | 中 |
 
-### 6.2 現場検証（ユーザー環境でしか確認できない）
+### 6.2 実データテスト（ユーザー環境でしか確認できない）
 
-| # | 内容 | 備考 |
+| # | 内容 | 状態 |
 |---|---|---|
-| V1 | 実 Ollama 環境での `local_ollama_precheck.py` 実行 | |
-| V2 | 実 Gemini free tier でのクォータ遭遇時の挙動確認 | |
-| **V3** | **Streamlit UI を実データで一巡** | **手順書は `docs/v3_streamlit_verification.md`。今回これを次に実施** |
-| V4 | 作業計画書実データを投入して rubric の指摘精度確認 | mock と本番 LLM の両方 |
+| V1 | 実 Ollama 環境での `local_ollama_precheck.py` 実行 | **凍結（ローカル LLM 構想凍結に伴う）** |
+| V2 | 実 Gemini free tier でのクォータ遭遇時の挙動確認 | 未実施 |
+| **V3** | Streamlit UI を実データで一巡 | 簡易テスト (test1.txt) は成功、本格テストは未実施 |
+| **V4** | 作業計画書実データを投入して rubric の指摘精度確認 | 未実施 |
+| V5 | 大容量・複数ファイル同時投入の動作確認 | 未実施 |
+| V6 | mask_and_continue 判定 → 確認ゲート → 送信の一連フロー実データ確認 | 未実施 |
 
-### 6.3 機能拡張候補
+### 6.3 旧レビューで残った M/L 級
+
+| # | 内容 | 優先 | 状態 |
+|---|---|---|---|
+| M1 | 裸ホスト名（`tokyo-rtr-01` 等）の検出強化 | 中 | 未対応 |
+| L1 | findings / reasons の重複ノイズ整理 | 低 | 未対応 |
+| L2 | provider 名の表記ゆれ統一 (`gemma4` / `gemma-4-gemini-api`) | 低 | 未対応 |
+| L5 | `env_loader._strip_quotes` のエスケープシーケンス対応 | 低 | 未対応 |
+| L6 | `_has_unprotected_command_execution` の `exec(` が SQL `EXEC` に過剰マッチ | 低 | 未対応 |
+| L7 | `HeuristicSensitivityClassifier` が sanitizer findings を再評価している冗長性 | 低 | 未対応 |
+
+### 6.4 機能拡張候補
 
 | # | 内容 |
 |---|---|
@@ -284,53 +372,68 @@ MockReviewProvider にも対応ヒューリスティック:
 | E3 | HTTP API 前段の認証 proxy 例 |
 | E4 | レビュー履歴管理 |
 
-### 6.4 将来フェーズ（basic_design.md 記載）
+### 6.5 将来フェーズ（凍結中、basic_design.md 記載）
 
-- Gemma 4 自己配備
+- Gemma 4 自己配備（PoC では Streamlit Cloud + 外部 Gemma 4 で代替）
 - Google Cloud 配備
 - 暗号化、権限制御
 
+### 6.6 不要コードの整理（オプション、判断保留）
+
+ローカル LLM 機能の凍結に伴い、以下のコード/ファイルは現在使われていない:
+
+- `secure_review/sanitizer.py` 内の `LocalHttpSanitizationEnhancer` / `OllamaSanitizationEnhancer`
+- `secure_review/sensitivity.py` 内の `LocalHttpSensitivityClassifier` / `OllamaSensitivityClassifier`
+- `scripts/local_ollama_precheck.py`
+- `docs/local_ollama_verification.md`
+- `tests/` の Ollama 関連テスト
+
+**判断**: 削除すると将来の自己配備フェーズで再実装が必要。残すなら現状の設定（PROVIDER=none / heuristic）で実害なし。**残す方針が有力**だが、ユーザー判断で削除も可。
+
 ---
 
-## 7. ファイル構成（成果物）
+## 7. ファイル構成
 
 ```
-secure_review_v2/
+codex_app/
 ├── CHANGES.md
 ├── README.md
+├── .env                            # ユーザー手元のみ（リポジトリにはコミットしない）
 ├── .env.example
 ├── requirements.txt
-├── server.py                        # HTTP API 起動スクリプト（未変更、補助的）
-├── streamlit_app.py                 # 主 UI
+├── server.py                       # HTTP API 起動スクリプト（補助、メインは Streamlit）
+├── streamlit_app.py                # 主 UI（完全日本語化、st.secrets ブリッジ実装）
 ├── docs/
-│   ├── basic_design.md              # 基本設計書（更新済み）
-│   ├── handoff.md                   # 本ファイル
-│   ├── local_ollama_verification.md # ローカル Ollama 検証手順
-│   ├── operations_policy.md         # 運用ポリシー
-│   ├── security_boundaries.md       # R1-R4 境界仕様（新規）
-│   ├── traceability.md              # 設計-コード対応表
-│   └── v3_streamlit_verification.md # V3 実データ検証手順（新規）
+│   ├── basic_design.md             # 基本設計書
+│   ├── handoff.md                  # 本ファイル
+│   ├── local_ollama_verification.md # 凍結中の機能の手順書
+│   ├── operations_policy.md        # 運用ポリシー（更新候補: R-D）
+│   ├── security_boundaries.md      # R1-R4 境界仕様
+│   ├── traceability.md             # 設計-コード対応表
+│   └── v3_streamlit_verification.md # 実データ検証手順
 ├── scripts/
-│   └── local_ollama_precheck.py     # --input-file 対応
+│   ├── api_smoke_test.py           # 外部 API 疎通確認
+│   └── local_ollama_precheck.py    # 凍結中
 ├── secure_review/
 │   ├── __init__.py
-│   ├── app.py                       # HTTP API ハンドラ
+│   ├── app.py                      # HTTP API ハンドラ（findings 接頭辞は R-A の対象）
 │   ├── env_loader.py
-│   ├── extractor.py                 # PDF 含む
-│   ├── models.py
-│   ├── network_guard.py             # R1/R3 中核（新規）
-│   ├── reviewer.py                  # Gemini free tier + mock heuristic
-│   ├── rubric.py                    # 研究 + テンプレート反映
+│   ├── extractor.py                # PDF / DOCX / XLSX / PPTX
+│   ├── models.py                   # ReviewResult.raw_response 追加済み
+│   ├── network_guard.py            # R1/R3 中核
+│   ├── reviewer.py                 # JSON モード対応済み（R-B/R-C の対象）
+│   ├── rubric.py                   # 研究 + テンプレート反映
 │   ├── sanitizer.py
-│   └── sensitivity.py
+│   └── sensitivity.py              # 日本語化済み
 ├── static/
-│   └── index.html                   # Streamlit 移行案内
+│   └── index.html                  # Streamlit 移行案内
+├── .devcontainer/                  # 自動追加（Codespaces 用、未使用）
 └── tests/
     ├── __init__.py
-    ├── test_app.py                  # 新規
+    ├── test_app.py
     ├── test_env_loader.py
-    ├── test_network_guard.py        # 新規
-    ├── test_reviewer.py             # 研究 + テンプレート反映のテスト含む
+    ├── test_network_guard.py
+    ├── test_reviewer.py
     ├── test_sanitizer.py
     └── test_sensitivity.py
 ```
@@ -341,36 +444,107 @@ secure_review_v2/
 
 - HTTP API 前段に認証が無いため、loopback バインド（既定）か auth proxy 背後でのみ運用
 - 監査ログ永続化なし、必要なら stdout を systemd-journald 等で保存
-- ローカル LLM 出力は untrusted として扱う（regex sanitizer が常に再実行）
+- **ローカル LLM 機能は凍結中** — PROVIDER=none/heuristic で動作、関連コードはコードベースに残存
 - 画像 OCR は Tesseract 必須（無ければ警告つきプレースホルダ）
 - PDF OCR は未対応（スキャン PDF は本文抽出されない）
-- 現 `docs/basic_design.md` は 2026-04-23 時点版。以降の変更時は同時更新すること
+- **OneDrive 配下リポジトリの git ロック警告** — `git branch -d` 実行時に「Deletion of directory '.git/logs/refs/...' failed. Should I try again? (y/n)」が出ることがある。`n` で抜けて `git branch -a` で削除確認ができれば実害なし
+- Streamlit Cloud の Secrets は手動設定（push しても自動で同期されない）
+- `.devcontainer/` フォルダはどこかの自動仕組みで追加された可能性あり、現在は使用していない
 
 ---
 
-## 9. V3 完了後の状態確認
+## 9. 現場検証結果
 
-V3 を実施したら、以下のセクションに結果を追記してください:
+### 9.1 V3 簡易テスト結果（2026-04-27）
 
-### 9.1 V3 実施結果
+- 実施日: 2026-04-27
+- 実施者: ユーザー
+- 入力: `test1.txt`（テスト用手順書、394 B、機密情報なし）
+- 結果: **成功**
+  - ステップ 1: アップロード正常
+  - ステップ 2: 安全 1 / 要確認 0 / 送信禁止 0、判定理由は日本語表示
+  - ステップ 3: 「送信準備完了」表示
+  - ステップ 4: Gemma 4 から 7 件の高品質な日本語指摘（高 4 / 中 2 / 低 1）
+  - 「LLM の生レスポンス」エクスパンダで JSON 応答を確認、構造化出力が完璧に機能
 
-- [ ] 実施日:
-- [ ] 実施者:
-- [ ] 全確認項目クリア: yes / no
-- [ ] 発見された問題:
-- [ ] 対応完了: yes / no / 次チャットで対応
+### 9.2 観察された Gemma 4 の指摘品質
 
-### 9.2 V3 で見つかった要改善点
+`test1.txt` という極めて簡素な手順書に対して、ITIL change enablement の観点に沿った以下の指摘を生成:
 
-（あれば記載）
+1. [高] 構成情報およびタイムチャートの参照先が不明
+2. [高] 具体的な作業手順の欠落
+3. [高] 切戻し手順の未記載
+4. [高] go/no-go 判定ポイントの未定義
+5. [中] 作業対象環境の明記不足
+6. [中] 役割分担および連絡体制の未記載
+7. [低] 作業後更新ドキュメントの未一覧化
+
+→ **rubric の研究知見が Gemma 4 の指摘に反映されている**ことを確認。プロのレビュアーレベルの指摘品質。
+
+### 9.3 残された V3 観察項目
+
+- [ ] 大容量ファイル（複数 MiB）での挙動
+- [ ] 複数文書同時投入時の挙動
+- [ ] mask_and_continue 判定発生時の確認ゲート動作
+- [ ] block 判定発生時のエラー表示
+- [ ] Gemini API のクォータ超過時の挙動
 
 ---
 
-## 10. 最後に — 次チャットで最初にすること
+## 10. 次のチャットで最初にすること
 
-1. ユーザーから GitHub repo の URL とブランチ命名方針を確認
-2. GitHub MCP コネクタでアクセス可能か確認
-3. baseline commit `eaf605a` が現在の main から乖離していないか確認
-4. 乖離があればマージ戦略を相談
-5. ブランチ作成 → 差分適用 → コミット → push → PR 作成
-6. PR 本文には `CHANGES.md` の内容を骨子として、日本語サマリを添える
+1. **handoff.md セクション 0.1（現在の到達点）と 0.2（次の作業候補）を読む**
+2. **本日の作業観点を 1-2 行で合意**（review-scoping skill v3 適用）
+3. **どの残課題から着手するか優先順位を確認**
+4. **作業中の生成物は手元 PC（OneDrive 配下）でブランチ作成 → push → PR → マージ**
+5. **PR マージ後、Streamlit Cloud が自動再デプロイされるのを 5-10 分待つ**
+
+### 10.1 git 作業の標準フロー（業務 PC 用）
+
+```powershell
+cd "C:\Users\S023649\OneDrive - KDDI株式会社\SecurePC\Documents\codex"
+git status
+git checkout main
+git pull origin main
+git checkout -b feature/<task-name>
+
+# ... 編集 ...
+
+git add <files>
+git commit -m "<title>" -m "<body>"
+git push -u origin feature/<task-name>
+
+# GitHub で PR 作成 → Merge → Delete branch (https://github.com/groovewaves-prog/codex_app/branches でゴミ箱)
+
+git checkout main
+git pull origin main
+git branch -d feature/<task-name>  # OneDrive ロックは n で抜ける
+git fetch --prune
+```
+
+### 10.2 デプロイ確認
+
+```
+https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
+```
+
+ハードリフレッシュ (`Ctrl + Shift + R`) で最新版を確認。
+
+---
+
+## 11. 主要 PR の履歴
+
+| PR | タイトル | マージコミット | 内容 |
+|---|---|---|---|
+| #1 | hardening/r1-r4-and-features | `502ad81` | R1-R4 セキュリティ境界対応、rubric 強化、PDF 抽出、研究知見反映 |
+| #2 | feature/streamlit-cloud-secrets | `e05a7b5` | `st.secrets` → `os.environ` ブリッジ、Streamlit Cloud デプロイ可能化 |
+| #3 | feature/japanese-ui | `9f2be91` | UI 完全日本語化（A+B+C+D+E すべて） |
+| #4 | feature/json-review-output | (HEAD) | Gemini JSON モード対応、プレースホルダ echo 撃退、生レスポンス表示エクスパンダ追加、HeuristicSensitivityClassifier 日本語化 |
+
+---
+
+## 12. 連絡事項・注意点
+
+- **API キー (`GEMINI_API_KEY`) は絶対に Claude に開示しない**。Claude 側でも貼り付けを促さないこと
+- **Streamlit Cloud Secrets の更新は手動**。コード変更で `st.secrets` の構造を変えた場合、Cloud 側の TOML も手動で同期する必要あり
+- **OneDrive 配下リポジトリの git ロック**: 操作中に「y/n?」が出たら `n` で抜ける。`git branch -a` で実態を確認すれば実害は無いことが多い

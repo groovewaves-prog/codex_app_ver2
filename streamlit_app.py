@@ -31,8 +31,21 @@ from secure_review.reviewer import choose_provider
 
 
 # Load .env once per session so settings survive reruns.
+# On Streamlit Community Cloud, values live in st.secrets instead of a .env
+# file; we bridge them to os.environ so that the rest of the codebase
+# (which reads via os.getenv) works unchanged in both environments.
 if "env_loaded" not in st.session_state:
     load_dotenv()
+    try:
+        for key, value in st.secrets.items():
+            if isinstance(value, str) and key not in os.environ:
+                os.environ[key] = value
+    except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
+        # No secrets.toml present (typical for local dev). Not an error.
+        pass
+    except Exception:
+        # Any other access issue should not block local use.
+        pass
     st.session_state.env_loaded = True
 
 

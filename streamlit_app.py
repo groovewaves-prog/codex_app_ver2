@@ -1,4 +1,4 @@
-"""Streamlit UI for secure_review.
+"""Streamlit UI for secure_review (Japanese localization).
 
 Design intent:
 - This is a forensic tool. Clarity of decision state beats decoration.
@@ -50,7 +50,7 @@ if "env_loaded" not in st.session_state:
 
 
 st.set_page_config(
-    page_title="Secure Review",
+    page_title="セキュアレビュー",
     page_icon="🛡",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -82,7 +82,7 @@ STYLE = """
 
 .block-container { padding-top: 2rem; max-width: 1200px; }
 
-h1, h2, h3 { font-family: 'Georgia', 'Times New Roman', serif; color: var(--ink); letter-spacing: -0.01em; }
+h1, h2, h3 { font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', 'Times New Roman', serif; color: var(--ink); letter-spacing: -0.01em; }
 
 .decision-badge {
     display: inline-block;
@@ -91,8 +91,7 @@ h1, h2, h3 { font-family: 'Georgia', 'Times New Roman', serif; color: var(--ink)
     font-size: 0.78rem;
     font-weight: 600;
     letter-spacing: 0.05em;
-    text-transform: uppercase;
-    font-family: 'SF Mono', 'Consolas', monospace;
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', sans-serif;
 }
 .decision-safe   { background: var(--accent-soft); color: var(--accent); border-left: 3px solid var(--accent); }
 .decision-mask   { background: var(--warn-soft);   color: var(--warn);   border-left: 3px solid var(--warn); }
@@ -111,15 +110,14 @@ h1, h2, h3 { font-family: 'Georgia', 'Times New Roman', serif; color: var(--ink)
 .doc-meta {
     color: var(--ink-soft);
     font-size: 0.82rem;
-    font-family: 'SF Mono', 'Consolas', monospace;
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
 }
 
 .step-header {
-    font-family: 'Georgia', serif;
+    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
     color: var(--ink-soft);
-    font-size: 0.8rem;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
+    font-size: 0.82rem;
+    letter-spacing: 0.12em;
     margin-top: 1.5rem;
     margin-bottom: 0.3rem;
 }
@@ -149,7 +147,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .issue-row.info   { border-left-color: var(--ink-soft); }
 
 .provider-line {
-    font-family: 'SF Mono', 'Consolas', monospace;
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
     font-size: 0.78rem;
     color: var(--ink-soft);
 }
@@ -168,16 +166,30 @@ DECISION_CLASSES = {
 }
 
 DECISION_LABELS = {
-    "safe": "SAFE",
-    "mask_and_continue": "NEEDS CONFIRM",
-    "block": "BLOCKED",
-    "unknown": "UNKNOWN",
+    "safe": "安全",
+    "mask_and_continue": "要確認",
+    "block": "送信禁止",
+    "unknown": "不明",
+}
+
+SEVERITY_LABELS = {
+    "high": "高",
+    "medium": "中",
+    "low": "低",
+    "info": "情報",
+}
+
+PROFILE_LABELS = {
+    "design": "設計書",
+    "change_runbook": "変更・切替手順書",
+    "operations_runbook": "保守・運用手順書",
+    "source_code": "ソースコード",
 }
 
 
 def _decision_badge(decision: str) -> str:
     css = DECISION_CLASSES.get(decision, "decision-mask")
-    label = DECISION_LABELS.get(decision, decision.upper())
+    label = DECISION_LABELS.get(decision, decision)
     return f'<span class="decision-badge {css}">{label}</span>'
 
 
@@ -187,6 +199,12 @@ def _doc_card_class(decision: str) -> str:
     if decision == "mask_and_continue":
         return "doc-card mask"
     return "doc-card"
+
+
+def _profile_label(value: str | None) -> str:
+    if value is None:
+        return "-"
+    return PROFILE_LABELS.get(value, value)
 
 
 def _reset_state() -> None:
@@ -212,33 +230,33 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
 # ------------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.markdown("### 🛡 Secure Review")
-    st.caption("Local-first sanitization before any external LLM transfer.")
+    st.markdown("### 🛡 セキュアレビュー")
+    st.caption("外部 LLM へ送信する前に、ローカル環境で匿名化を実施します。")
     st.markdown("---")
 
     provider = os.getenv("REVIEW_PROVIDER", "mock")
     local_san = os.getenv("LOCAL_SANITIZER_PROVIDER", "none")
     local_sens = os.getenv("LOCAL_SENSITIVITY_PROVIDER", "heuristic")
 
-    st.markdown("##### Environment")
+    st.markdown("##### 動作環境")
     st.markdown(
-        f'<div class="provider-line">review  → <b>{provider}</b><br/>'
-        f"sanitizer → <b>{local_san}</b><br/>"
-        f'sensitivity → <b>{local_sens}</b></div>',
+        f'<div class="provider-line">レビュー LLM   → <b>{provider}</b><br/>'
+        f"匿名化         → <b>{local_san}</b><br/>"
+        f'機密度判定     → <b>{local_sens}</b></div>',
         unsafe_allow_html=True,
     )
 
     st.markdown("---")
-    st.markdown("##### Review profile")
+    st.markdown("##### レビュー対象プロファイル")
     profile_options = [
-        ("(auto-detect)", None),
-        ("design", "design"),
-        ("change_runbook", "change_runbook"),
-        ("operations_runbook", "operations_runbook"),
-        ("source_code", "source_code"),
+        ("(自動判定)", None),
+        ("設計書", "design"),
+        ("変更・切替手順書", "change_runbook"),
+        ("保守・運用手順書", "operations_runbook"),
+        ("ソースコード", "source_code"),
     ]
     profile_label = st.selectbox(
-        "Force profile",
+        "プロファイル指定",
         [label for label, _ in profile_options],
         index=0,
         label_visibility="collapsed",
@@ -246,46 +264,46 @@ with st.sidebar:
     document_profile_override = dict(profile_options)[profile_label]
 
     st.markdown("---")
-    if st.button("Reset session", use_container_width=True):
+    if st.button("セッションをリセット", use_container_width=True):
         _reset_state()
         st.session_state.pop("uploads", None)
         st.rerun()
 
     st.caption(
-        "No document content is persisted. All state lives in server memory "
-        "for this session only."
+        "アップロードされた文書はサーバ上に保存されません。"
+        "本セッション中のメモリ上のみで処理されます。"
     )
 
 
 # --------------------------------------------------------------------- main
 
-st.markdown("## Secure Review")
+st.markdown("## セキュアレビュー")
 st.markdown(
-    '<p class="muted">Review artifacts through a local sanitizer and sensitivity gate '
-    "before any content leaves the machine.</p>",
+    '<p class="muted">外部に文書が送信される前に、ローカル匿名化と機密度判定で'
+    'レビュー対象を確認します。</p>',
     unsafe_allow_html=True,
 )
 
 
 # -- Step 1: Upload --------------------------------------------------------
 
-st.markdown('<div class="step-header">Step 1 — Upload</div>', unsafe_allow_html=True)
+st.markdown('<div class="step-header">ステップ 1 — 文書アップロード</div>', unsafe_allow_html=True)
 
 st.file_uploader(
-    "Select files",
+    "ファイルを選択",
     accept_multiple_files=True,
     key="uploads",
     label_visibility="collapsed",
     help=(
-        "Supported: txt, md, docx, xlsx, pptx, pdf, csv, json, yaml/yml, xml, "
-        "html, scripts (py, ps1, sh, vbs, sql...), images."
+        "対応形式: txt, md, docx, xlsx, pptx, pdf, csv, json, yaml/yml, xml, "
+        "html, スクリプト (py, ps1, sh, vbs, sql など), 画像。"
     ),
 )
 
 col1, col2 = st.columns([1, 5])
 with col1:
     preview_clicked = st.button(
-        "Sanitize & preview",
+        "匿名化してプレビュー",
         type="primary",
         disabled=not st.session_state.get("uploads"),
         use_container_width=True,
@@ -293,25 +311,25 @@ with col1:
 with col2:
     if st.session_state.get("uploads"):
         names = ", ".join(u.name for u in st.session_state.uploads)
-        st.markdown(f'<div class="muted">Queued: {names}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="muted">処理待ち: {names}</div>', unsafe_allow_html=True)
 
 
 if preview_clicked:
     documents = _uploaded_to_documents()
     try:
-        with st.spinner("Sanitizing locally..."):
+        with st.spinner("ローカルで匿名化中..."):
             sanitized, warnings = _run_sanitization_pipeline(documents)
         st.session_state.preview_docs = sanitized
         st.session_state.preview_warnings = warnings
         st.session_state.pop("review_result", None)
     except LocalUrlError as exc:
         st.error(
-            "A local-only endpoint is misconfigured: "
-            f"{exc}. Check LOCAL_SANITIZER_API_URL and LOCAL_SENSITIVITY_API_URL."
+            "ローカル限定エンドポイントの設定に問題があります: "
+            f"{exc}。LOCAL_SANITIZER_API_URL と LOCAL_SENSITIVITY_API_URL を確認してください。"
         )
     except Exception as exc:  # noqa: BLE001
-        st.error(f"Sanitization failed: {exc}")
-        with st.expander("Trace"):
+        st.error(f"匿名化処理に失敗しました: {exc}")
+        with st.expander("詳細トレース"):
             st.code(traceback.format_exc())
 
 
@@ -319,21 +337,21 @@ if preview_clicked:
 
 preview_docs = st.session_state.get("preview_docs")
 if preview_docs:
-    st.markdown('<div class="step-header">Step 2 — Sanitization preview</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
 
     counts = {"safe": 0, "mask_and_continue": 0, "block": 0, "unknown": 0}
     for doc in preview_docs:
         counts[doc.local_sensitivity_decision] = counts.get(doc.local_sensitivity_decision, 0) + 1
 
     summary_cols = st.columns(4)
-    summary_cols[0].metric("Documents", len(preview_docs))
-    summary_cols[1].metric("Safe", counts.get("safe", 0))
-    summary_cols[2].metric("Needs confirm", counts.get("mask_and_continue", 0))
-    summary_cols[3].metric("Blocked", counts.get("block", 0))
+    summary_cols[0].metric("文書数", len(preview_docs))
+    summary_cols[1].metric("安全", counts.get("safe", 0))
+    summary_cols[2].metric("要確認", counts.get("mask_and_continue", 0))
+    summary_cols[3].metric("送信禁止", counts.get("block", 0))
 
     warnings = st.session_state.get("preview_warnings", [])
     if warnings:
-        with st.expander(f"Extraction & pipeline warnings ({len(warnings)})"):
+        with st.expander(f"抽出・パイプライン警告 ({len(warnings)} 件)"):
             for warning in warnings:
                 st.markdown(f"- {warning}")
 
@@ -343,8 +361,8 @@ if preview_docs:
 
         header_left = (
             f"<b>{doc.name}</b> "
-            f'<span class="doc-meta"> · {doc.estimated_input_tokens} tokens '
-            f"· outbound risk: {doc.outbound_risk}</span>"
+            f'<span class="doc-meta"> · {doc.estimated_input_tokens} トークン '
+            f"· 外部送信リスク: {doc.outbound_risk}</span>"
         )
         st.markdown(
             f'<div style="display:flex;justify-content:space-between;align-items:center;">'
@@ -355,32 +373,32 @@ if preview_docs:
         )
 
         if doc.local_sensitivity_reasons:
-            st.markdown("**Gate reasoning**")
+            st.markdown("**判定理由**")
             for reason in doc.local_sensitivity_reasons:
                 st.markdown(f"- {reason}")
 
         if doc.findings:
-            with st.expander(f"Sanitizer findings ({len(doc.findings)})"):
+            with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
                 for finding in doc.findings:
                     st.markdown(f"- {finding}")
 
-        tabs = st.tabs(["Sanitized excerpt", "Replacements"])
+        tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
         with tabs[0]:
             st.markdown(
-                f"<pre class='sanitized'>{doc.sanitized_excerpt or '(empty)'}</pre>",
+                f"<pre class='sanitized'>{doc.sanitized_excerpt or '(空)'}</pre>",
                 unsafe_allow_html=True,
             )
         with tabs[1]:
             if doc.replacements:
                 rows = [
-                    {"placeholder": r.placeholder, "category": r.category, "original": r.original}
+                    {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
                     for r in doc.replacements[:50]
                 ]
                 st.dataframe(rows, use_container_width=True, hide_index=True)
                 if len(doc.replacements) > 50:
-                    st.caption(f"Showing 50 of {len(doc.replacements)} replacements.")
+                    st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
             else:
-                st.caption("No replacements recorded.")
+                st.caption("置換は記録されませんでした。")
 
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -393,25 +411,24 @@ if preview_docs:
         if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
     ]
 
-    st.markdown('<div class="step-header">Step 3 — Confirm & send</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">ステップ 3 — 確認 & 送信</div>', unsafe_allow_html=True)
 
     if blocked_docs:
         st.error(
-            "The following file(s) are blocked from external review: "
+            "次のファイルは外部レビューへの送信が禁止されています: "
             + ", ".join(doc.name for doc in blocked_docs)
-            + ". Prepare a more strongly sanitized copy before retrying."
+            + "。より厳密に匿名化したコピーを準備してから再試行してください。"
         )
 
     confirmations: dict[str, bool] = {}
     if mask_docs and not blocked_docs:
         st.warning(
-            f"{len(mask_docs)} document(s) need explicit confirmation before "
-            "external transfer. Review the sanitized excerpt above and confirm each one."
+            f"{len(mask_docs)} 件の文書は外部送信前に明示的な確認が必要です。"
+            "上記の匿名化後の抜粋を確認し、各文書について承認してください。"
         )
         for doc in mask_docs:
             confirmations[doc.name] = st.checkbox(
-                f"I have reviewed the sanitized excerpt of **{doc.name}** and "
-                "accept that it is safe to send for external review.",
+                f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。",
                 key=f"confirm_{doc.name}",
             )
 
@@ -421,7 +438,7 @@ if preview_docs:
     send_col, status_col = st.columns([1, 5])
     with send_col:
         send_clicked = st.button(
-            "Send for review",
+            "レビューに送信",
             type="primary",
             disabled=not can_send,
             use_container_width=True,
@@ -429,18 +446,18 @@ if preview_docs:
     with status_col:
         if blocked_docs:
             st.markdown(
-                '<div class="muted">Cannot send while documents are blocked.</div>',
+                '<div class="muted">送信禁止の文書があるため、送信できません。</div>',
                 unsafe_allow_html=True,
             )
         elif mask_docs and not all_confirmed:
             st.markdown(
-                '<div class="muted">Confirm each document above to enable the send button.</div>',
+                '<div class="muted">送信ボタンを有効にするには、上記の各文書を確認・承認してください。</div>',
                 unsafe_allow_html=True,
             )
         else:
             st.markdown(
-                '<div class="muted">Ready. The configured LLM provider will receive '
-                "only the sanitized text.</div>",
+                '<div class="muted">送信準備完了。設定された LLM プロバイダには'
+                '匿名化済みのテキストのみが送信されます。</div>',
                 unsafe_allow_html=True,
             )
 
@@ -448,11 +465,11 @@ if preview_docs:
         try:
             provider_impl = choose_provider()
             _enforce_outbound_guard(provider_impl.name, preview_docs)
-            with st.spinner(f"Running review with {provider_impl.name}..."):
+            with st.spinner(f"{provider_impl.name} でレビュー実行中..."):
                 review = provider_impl.review(preview_docs, document_profile_override)
             st.session_state.review_result = review
         except LocalUrlError as exc:
-            st.error(f"Local endpoint misconfigured: {exc}")
+            st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
         except ValueError as exc:
             st.error(str(exc))
         except RuntimeError as exc:
@@ -460,8 +477,8 @@ if preview_docs:
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             request_id = uuid.uuid4().hex[:8]
-            st.error(f"Review failed ({request_id}). See server logs for details.")
-            with st.expander("Trace"):
+            st.error(f"レビューに失敗しました ({request_id})。詳細はサーバログを確認してください。")
+            with st.expander("詳細トレース"):
                 st.code(traceback.format_exc())
 
 
@@ -469,15 +486,15 @@ if preview_docs:
 
 review = st.session_state.get("review_result")
 if review is not None:
-    st.markdown('<div class="step-header">Step 4 — Review result</div>', unsafe_allow_html=True)
+    st.markdown('<div class="step-header">ステップ 4 — レビュー結果</div>', unsafe_allow_html=True)
 
     left, right = st.columns([4, 2])
     with left:
-        st.markdown(f"**Summary** — {review.summary}")
+        st.markdown(f"**サマリ** — {review.summary}")
         st.markdown(
-            f'<div class="provider-line">provider: {review.provider} · '
-            f"rubric: {review.rubric_name or review.rubric_id or '-'} · "
-            f'profile: {review.document_profile or "-"} '
+            f'<div class="provider-line">プロバイダ: {review.provider} · '
+            f"ルーブリック: {review.rubric_name or review.rubric_id or '-'} · "
+            f'プロファイル: {_profile_label(review.document_profile)} '
             f"({review.classification_confidence or '-'})</div>",
             unsafe_allow_html=True,
         )
@@ -487,9 +504,9 @@ if review is not None:
             severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
         st.markdown(
             f"<div style='text-align:right;'>"
-            f"<span class='decision-badge decision-block'>HIGH {severity_counts.get('high', 0)}</span> "
-            f"<span class='decision-badge decision-mask'>MED {severity_counts.get('medium', 0)}</span> "
-            f"<span class='decision-badge decision-safe'>LOW {severity_counts.get('low', 0)}</span>"
+            f"<span class='decision-badge decision-block'>高 {severity_counts.get('high', 0)}</span> "
+            f"<span class='decision-badge decision-mask'>中 {severity_counts.get('medium', 0)}</span> "
+            f"<span class='decision-badge decision-safe'>低 {severity_counts.get('low', 0)}</span>"
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -500,16 +517,17 @@ if review is not None:
     sorted_issues = sorted(review.issues, key=lambda i: severity_order.get(i.severity, 4))
 
     for issue in sorted_issues:
+        severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
         st.markdown(
             f"<div class='issue-row {issue.severity}'>"
-            f"<b>[{issue.severity.upper()}]</b> {issue.title} "
-            f'<span class="doc-meta"> · source: {issue.source_document}</span><br/>'
+            f"<b>[{severity_jp}]</b> {issue.title} "
+            f'<span class="doc-meta"> · 出典: {issue.source_document}</span><br/>'
             f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
             f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
-            f"<b>Recommendation:</b> {issue.recommendation}</div>"
+            f"<b>推奨対応:</b> {issue.recommendation}</div>"
             f"</div>",
             unsafe_allow_html=True,
         )
 
-    with st.expander("Prompt preview (first 2000 chars)"):
-        st.code(review.prompt_preview or "(empty)", language="text")
+    with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
+        st.code(review.prompt_preview or "(空)", language="text")

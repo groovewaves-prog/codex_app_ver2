@@ -289,5 +289,143 @@ class GeminiRetryTests(unittest.TestCase):
         self.assertNotIn("作業後に修正対象となるドキュメントの事前一覧が無い", titles)
 
 
+# ----------------------------------------------------------------------
+# R-B + R-C: model summary surfacing and the explicit-Japanese fallback
+# when the model returned no summary (choice γ).
+# ----------------------------------------------------------------------
+
+
+class ReviewPayloadParsingTests(unittest.TestCase):
+    """R-C: ``_parse_review_payload`` must extract both summary and issues."""
+
+    def test_payload_returns_summary_and_issues_from_json(self) -> None:
+        from secure_review.reviewer import _parse_review_payload
+
+        content = (
+            '{"summary": "提示された手順書は目的の記載があるが構成図が無い。", '
+            '"issues": [{"severity": "high", "title": "構成図の欠落", '
+            '"details": "詳細", "recommendation": "追加すること", '
+            '"source_document": "doc.md"}]}'
+        )
+        summary, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        self.assertEqual(summary, "提示された手順書は目的の記載があるが構成図が無い。")
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].severity, "high")
+
+    def test_payload_returns_empty_summary_when_field_missing(self) -> None:
+        """JSON without a summary field: summary is empty, issues still parsed.
+        Caller is responsible for filling in a fallback."""
+        from secure_review.reviewer import _parse_review_payload
+
+        content = (
+            '{"issues": [{"severity": "low", "title": "minor", '
+            '"details": "x", "recommendation": "y", "source_document": "doc.md"}]}'
+        )
+        summary, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        self.assertEqual(summary, "")
+        self.assertEqual(len(issues), 1)
+
+    def test_payload_handles_legacy_pipe_format_with_empty_summary(self) -> None:
+        """Legacy ``ISSUE|...`` format: summary is empty (no JSON to parse),
+        issues are parsed by the legacy block parser."""
+        from secure_review.reviewer import _parse_review_payload
+
+        content = "ISSUE|high|legacy title|legacy details|legacy reco|doc.md"
+        summary, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        self.assertEqual(summary, "")
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].title, "legacy title")
+
+
+class GeminiSummarySurfacingTests(unittest.TestCase):
+    """R-B + R-C: the Gemini provider must surface the model's own summary
+    in ``ReviewResult.summary`` (not a fixed English boilerplate), and fall
+    back to an explicit Japanese notice when the model did not provide one."""
+
+    def _build_response(self, summary_text: str) -> dict:
+        """Build a minimal Gemini API response containing the given summary."""
+        import json as _json
+        body = _json.dumps(
+            {
+                "summary": summary_text,
+                "issues": [
+                    {
+                        "severity": "high",
+                        "title": "テスト指摘",
+                        "details": "詳細",
+                        "recommendation": "推奨対応",
+                        "source_document": "doc.md",
+                    }
+                ],
+            }
+        )
+        return {
+            "candidates": [
+                {
+                    "content": {"parts": [{"text": body}]},
+                    "finishReason": "STOP",
+                }
+            ]
+        }
+
+    def test_summary_uses_model_text_when_provided(self) -> None:
+        """When the model returns a summary, ReviewResult.summary should be
+        that exact text — not an English boilerplate."""
+        provider = GeminiApiReviewProvider.__new__(GeminiApiReviewProvider)
+        provider.name = "gemma-4-gemini-api"
+        provider.model = "gemma-4-31b-it"
+        provider.api_key = "test-key"
+        provider.temperature = 0.1
+        provider.max_output_tokens = 8000
+        provider.max_retries = 1
+
+        expected_summary = "提示された手順書は構成情報が欠落している。"
+        response = self._build_response(expected_summary)
+
+        with patch.object(provider, "_post_with_retry", return_value=response):
+            result = provider.review([_doc(name="doc.md", text="some text")])
+
+        self.assertEqual(result.summary, expected_summary)
+        self.assertNotIn("Received review result from", result.summary)
+
+    def test_summary_falls_back_to_japanese_notice_when_empty(self) -> None:
+        """When the model returns no summary (empty string), the result
+        should contain the explicit Japanese fallback message (choice γ)."""
+        provider = GeminiApiReviewProvider.__new__(GeminiApiReviewProvider)
+        provider.name = "gemma-4-gemini-api"
+        provider.model = "gemma-4-31b-it"
+        provider.api_key = "test-key"
+        provider.temperature = 0.1
+        provider.max_output_tokens = 8000
+        provider.max_retries = 1
+
+        response = self._build_response("")  # explicit empty summary
+
+        with patch.object(provider, "_post_with_retry", return_value=response):
+            result = provider.review([_doc(name="doc.md", text="some text")])
+
+        self.assertIn("LLM がレビューサマリを返しませんでした", result.summary)
+
+    def test_review_result_carries_model_identifier(self) -> None:
+        """R-B + R-C (ε): the concrete model identifier must travel with
+        the ReviewResult so the UI can display it explicitly."""
+        provider = GeminiApiReviewProvider.__new__(GeminiApiReviewProvider)
+        provider.name = "gemma-4-gemini-api"
+        provider.model = "gemma-4-31b-it"
+        provider.api_key = "test-key"
+        provider.temperature = 0.1
+        provider.max_output_tokens = 8000
+        provider.max_retries = 1
+
+        response = self._build_response("test summary")
+
+        with patch.object(provider, "_post_with_retry", return_value=response):
+            result = provider.review([_doc(name="doc.md", text="some text")])
+
+        self.assertEqual(result.model, "gemma-4-31b-it")
+        # The internal provider slug stays separate.
+        self.assertEqual(result.provider, "gemma-4-gemini-api")
+
+
 if __name__ == "__main__":
     unittest.main()

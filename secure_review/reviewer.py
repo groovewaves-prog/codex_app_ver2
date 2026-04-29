@@ -424,9 +424,12 @@ class HttpLlmReviewProvider(ReviewProvider):
             context_label="HTTP LLM provider",
         )
         content = _extract_openai_like_text(response)
-        issues = _parse_review_response(content, documents)
+        # R-B + R-C: same pattern as the Gemma provider — prefer the model's
+        # own summary; fall back to an explicit Japanese notice when absent.
+        model_summary, issues = _parse_review_payload(content, documents)
+        summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
         return _build_review_result(
-            summary="Received review result from the configured HTTP LLM provider.",
+            summary=summary,
             issues=issues,
             provider=self.name,
             documents=documents,
@@ -435,6 +438,7 @@ class HttpLlmReviewProvider(ReviewProvider):
             classification_reason=classification.reason,
             prompt=prompt,
             raw_response=content,
+            model=self.model,
         )
 
 
@@ -505,9 +509,15 @@ class GeminiApiReviewProvider(ReviewProvider):
                 f"Gemini returned no text (finish_reason={finish_reason or 'unknown'}). "
                 "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
             )
-        issues = _parse_review_response(content, documents)
+        # R-B + R-C: surface the model's own summary in the UI. Fall back to
+        # an explicit Japanese notice when the model returned no summary, so
+        # operators can spot misbehaving responses (choice γ from the design
+        # discussion). The English boilerplate previously shown unconditionally
+        # is removed.
+        model_summary, issues = _parse_review_payload(content, documents)
+        summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
         return _build_review_result(
-            summary=f"Received review result from Gemini API model {self.model}.",
+            summary=summary,
             issues=issues,
             provider=self.name,
             documents=documents,
@@ -516,6 +526,7 @@ class GeminiApiReviewProvider(ReviewProvider):
             classification_reason=classification.reason,
             prompt=prompt,
             raw_response=content,
+            model=self.model,
         )
 
     def _post_with_retry(self, payload: dict) -> dict:
@@ -607,6 +618,7 @@ def _build_review_result(
     classification_reason: str,
     prompt: str | None = None,
     raw_response: str = "",
+    model: str = "",
 ) -> ReviewResult:
     prompt_text = prompt or build_prompt(documents, rubric)
     return ReviewResult(
@@ -620,6 +632,7 @@ def _build_review_result(
         classification_confidence=classification_confidence,
         classification_reason=classification_reason,
         raw_response=raw_response,
+        model=model,
     )
 
 
@@ -689,47 +702,69 @@ def _parse_review_response(content: str, documents: list[SanitizedDocument]) -> 
     For HTTP LLM providers that follow the prompt without server-side schema
     enforcement, JSON is still expected. We fall back to the legacy
     pipe-delimited parser only for backwards compatibility.
+
+    Backwards-compat shim: returns issues only. Callers that also need the
+    LLM-supplied summary should use ``_parse_review_payload`` instead.
     """
-    json_issues = _parse_json_issues(content, documents)
-    if json_issues is not None:
-        return json_issues
-    return _parse_issue_blocks(content, documents)
+    _, issues = _parse_review_payload(content, documents)
+    return issues
 
 
-def _parse_json_issues(
+def _parse_review_payload(
     content: str, documents: list[SanitizedDocument]
-) -> list[ReviewIssue] | None:
-    """Try to parse the model output as a JSON object with summary/issues.
+) -> tuple[str, list[ReviewIssue]]:
+    """Parse a review response and return ``(summary, issues)``.
 
-    Returns None if the content is clearly not JSON, so the caller can fall
-    back to the legacy pipe parser. Returns an empty list (or filtered list)
-    if JSON was parsed but contained no usable issues.
+    R-C: extracts both the LLM-supplied ``summary`` field and the ``issues``
+    list from the JSON response, so the UI can show the model's actual
+    summary text rather than a fixed boilerplate string.
+
+    The summary is empty if the JSON did not include one, the response was
+    not valid JSON (legacy pipe format), or the value was not a string.
+    Callers are expected to fall back to a human-readable default when
+    the returned summary is empty (R-B / R-C choice γ).
+    """
+    summary, json_issues = _parse_json_payload(content, documents)
+    if json_issues is not None:
+        return summary, json_issues
+    return "", _parse_issue_blocks(content, documents)
+
+
+def _parse_json_payload(
+    content: str, documents: list[SanitizedDocument]
+) -> tuple[str, list[ReviewIssue] | None]:
+    """Internal: try to parse JSON and return ``(summary, issues_or_None)``.
+
+    Returns ``("", None)`` if the content is not JSON; the caller falls back
+    to the legacy parser. Returns ``(summary, issues)`` (issues possibly
+    empty) when JSON parses successfully.
     """
     text = content.strip()
     if not text:
-        return None
+        return "", None
 
     # Strip optional markdown fences the model may have added despite the
     # explicit instruction to return JSON only.
     if text.startswith("```"):
-        # Drop the opening fence (with optional language tag) and trailing fence.
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
 
-    # If the content does not look like a JSON object at all, give up.
     if not (text.startswith("{") and text.rstrip().endswith("}")):
-        return None
+        return "", None
 
     try:
         payload = json.loads(text)
     except (json.JSONDecodeError, ValueError):
-        return None
+        return "", None
     if not isinstance(payload, dict):
-        return None
+        return "", None
+
+    summary_raw = payload.get("summary", "")
+    summary = str(summary_raw).strip() if isinstance(summary_raw, str) else ""
 
     raw_issues = payload.get("issues", [])
     if not isinstance(raw_issues, list):
-        return []
+        return summary, []
 
     default_source = documents[0].name if documents else "-"
     parsed: list[ReviewIssue] = []
@@ -738,20 +773,16 @@ def _parse_json_issues(
             continue
         severity = str(raw.get("severity", "")).strip().lower()
         if severity not in _VALID_SEVERITIES:
-            # Drop issues whose severity is malformed (often a side-effect of
-            # the model echoing the schema field name).
             continue
         title = str(raw.get("title", "")).strip()
         details = str(raw.get("details", "")).strip()
         recommendation = str(raw.get("recommendation", "")).strip()
         source = str(raw.get("source_document", "")).strip() or default_source
 
-        # Filter out issues whose values are clearly schema placeholders.
         candidate_values = [title.lower(), details.lower(), recommendation.lower()]
         if any(value in _PLACEHOLDER_TOKENS for value in candidate_values):
             continue
         if not title and not details:
-            # Empty issue is no use to the reviewer.
             continue
 
         parsed.append(
@@ -764,7 +795,15 @@ def _parse_json_issues(
             )
         )
 
-    return parsed
+    return summary, parsed
+
+
+def _parse_json_issues(
+    content: str, documents: list[SanitizedDocument]
+) -> list[ReviewIssue] | None:
+    """Backwards-compat shim. Prefer ``_parse_json_payload``."""
+    _, issues = _parse_json_payload(content, documents)
+    return issues
 
 
 def _parse_issue_blocks(content: str, documents: list[SanitizedDocument]) -> list[ReviewIssue]:

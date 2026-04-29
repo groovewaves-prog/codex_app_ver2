@@ -506,6 +506,15 @@ if review is not None:
             f'<div class="provider-line">{" · ".join(meta_parts)}</div>',
             unsafe_allow_html=True,
         )
+        # R-K: surface profile-detection conflicts so operators can decide
+        # whether to override via the sidebar selector.
+        if review.classification_confidence == "conflict":
+            st.warning(
+                f"⚠️ プロファイル自動判定で **競合** が検出されました。"
+                f"暫定的に「{_profile_label(review.document_profile)}」を選択していますが、"
+                f"サイドバーから手動で別のプロファイルを選ぶこともできます。\n\n"
+                f"**判定根拠**: {review.classification_reason}"
+            )
     with right:
         severity_counts = {"high": 0, "medium": 0, "low": 0, "info": 0}
         for issue in review.issues:

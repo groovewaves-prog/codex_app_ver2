@@ -1,32 +1,37 @@
 # Handoff
 
-Last updated: 2026-04-27 (Streamlit Cloud デプロイ完了 + Gemini JSON モード対応 + UI 完全日本語化)
+Last updated: 2026-04-29 (R-H 命名規則 regex / R-B/R-C モデル由来サマリ表示化 / R-J ラベルパターンによるプレースホルダ再マスク防止 すべて main へマージ済み)
 
 ## 0. 次のチャットを開く方へ（最重要）
 
 このファイルは、**次のチャット開始時に Claude にこれ 1 本渡せば現状復元できる**
 ことを目的に書かれています。まずは次の節（0.1–0.4）を読んでください。
 
-### 0.1 現在の到達点（2026-04-27 現在）
+### 0.1 現在の到達点（2026-04-29 現在）
 
 **ツールは Streamlit Community Cloud 上で稼働中です**。
 
 - URL: `https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app`
 - リポジトリ: `https://github.com/groovewaves-prog/codex_app`
-- 最新マージコミット: `Switch Gemini review provider to JSON output mode` (PR #4) 後の main HEAD
+- 最新マージコミット: `9b7ee32` (PR #8 = R-B/R-C/R-J マージ済み、PR #7 = R-H もその前にマージ済み)
 - UI: 完全日本語化済み（タイトル「セキュアレビュー」、すべての画面要素が日本語）
 - 動作確認済み: `test1.txt`（テスト用手順書）で Gemma 4 が 7 件の高品質な日本語指摘を返すことを確認 (2026-04-27)
+- **2026-04-29 追加分** (PR #7 / #8 でマージ済み):
+  - **R-H** (`sanitizer.py`, PR #7): 社内命名規則 regex `_build_internal_hostname_pattern` を追加。機器種別語彙ベースで裸ホスト名（`tokyo-rtr-01` 等）を検出しつつ過検出を抑制。テスト 4 件追加。
+  - **R-B / R-C** (`reviewer.py`, `models.py`, `streamlit_app.py`, PR #8): レビュー結果のサマリをモデルの応答 JSON から取得して UI に表示。空レスポンス時は固定の日本語フォールバック文を表示。`ReviewResult.model` フィールドを追加してモデル識別子（例: `gemma-4-31b-it`）を provider slug と分離して UI に表示。
+  - **R-J** (`sanitizer.py`, PR #8): ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題を修正。`_PLACEHOLDER_REUSE_PATTERN` を導入し `_replace_pattern` で早期 return。
+  - テスト件数: 67 → **76 件**（reviewer に R-B/R-C で 6 件、sanitizer に R-J で 3 件追加）。`python -m unittest discover tests` で全件通過確認済み。
 
 **現在の構成**:
 
 | 段階 | 実装 |
 |---|---|
 | 文書抽出 | `secure_review/extractor.py`（pypdf, docx, xlsx, pptx 対応） |
-| 一次マスキング | regex ベース（`SensitiveDataSanitizer`） |
+| 一次マスキング | regex ベース（`SensitiveDataSanitizer`、R-H 命名規則 regex / R-J 再マスク防止 反映済み） |
 | ローカル LLM 二次マスキング | **使用しない**（`LOCAL_SANITIZER_PROVIDER=none`） |
 | 機密度判定 | regex + heuristic ベース（`HeuristicSensitivityClassifier`、`LOCAL_SENSITIVITY_PROVIDER=heuristic`） |
 | 確認ゲート | UI のチェックボックス（`MASK_AND_CONTINUE_REQUIRE_CONFIRM=true`） |
-| 外部レビュー LLM | Gemini API 経由の Gemma 4 31B（`gemma-4-31b-it`、JSON モード強制）|
+| 外部レビュー LLM | Gemini API 経由の Gemma 4 31B（`gemma-4-31b-it`、JSON モード強制、モデル由来サマリ表示）|
 
 ### 0.2 次のチャットで予想される作業
 
@@ -72,14 +77,17 @@ API キーは Claude には開示しないでください。Streamlit Cloud Secr
 
 ## 1. 現状サマリ
 
-### 1.1 リポジトリ最新状態 (2026-04-27 時点)
+### 1.1 リポジトリ最新状態 (2026-04-29 時点)
 
 ```
-9f2be91 Merge pull request #3 (Localize Streamlit UI to Japanese)
-       + その後 PR #4 (Switch Gemini review provider to JSON output mode) マージ済み
+9b7ee32 Merge pull request #8 from groovewaves-prog/feature/r-b-c-j-summary-and-placeholder-reuse
+99de7fb feat(reviewer): surface model summary in UI; fix placeholder re-masking (R-B / R-C / R-J)
+31ae41a Merge pull request #7 from groovewaves-prog/feature/r-h-internal-hostname-regex
+0bb25ff feat(sanitizer): add internal naming-convention regex for bare hostnames (R-H / M1)
+71e8e98 Merge pull request #6 (docs cleanup 2026-04-27)
 ```
 
-直近のマージコミット (PR #4) を取得するには:
+直近のマージコミットを取得するには:
 
 ```powershell
 git pull origin main
@@ -103,9 +111,13 @@ python -m unittest discover tests
 
 ### 1.4 主要成果物
 
-- `streamlit_app.py` — 主 UI（完全日本語化、`st.secrets` ブリッジ実装、生レスポンス表示エクスパンダ）
+- `streamlit_app.py` — 主 UI（完全日本語化、`st.secrets` ブリッジ実装、生レスポンス表示エクスパンダ、モデル識別子表示）
 - `secure_review/network_guard.py` — R1/R3 の核
-- `secure_review/sanitizer.py`, `sensitivity.py`, `reviewer.py`, `app.py` — R1-R4 + JSON モード対応
+- `secure_review/sanitizer.py` — R1-R4 + R-H 命名規則 regex + R-J 再マスク防止
+- `secure_review/sensitivity.py` — 日本語化済み
+- `secure_review/reviewer.py` — JSON モード対応 + R-B/R-C モデル由来サマリ表示
+- `secure_review/models.py` — `ReviewResult.raw_response`, `model` フィールド
+- `secure_review/app.py` — R1-R4 + JSON モード対応
 - `secure_review/extractor.py` — PDF + zip bomb 対策
 - `secure_review/rubric.py` — 研究知見 + 作業計画書テンプレート反映
 - `docs/security_boundaries.md` — R1-R4 境界仕様
@@ -157,6 +169,20 @@ python -m unittest discover tests
    - `HeuristicSensitivityClassifier` の英語 reasons/actions を全て日本語化
    - 動作確認: `test1.txt` で 7 件の高品質な日本語指摘（高 4/中 2/低 1）が表示されることを確認
 
+### 2.3 仕上げフェーズ（2026-04-28〜2026-04-29）
+
+10. **R-H 社内命名規則 regex** (PR #7, `31ae41a`):
+    - 中優先 M1（裸ホスト名 `tokyo-rtr-01` 等の検出強化）に対応
+    - `_build_internal_hostname_pattern` を `sanitizer.py` に追加
+    - 機器種別語彙（`rtr` / `sw` / `srv` 等）ベースで構築、地理的トークン（`tokyo` / `osaka` 等）と組み合わせ
+    - 一般的な英単語と区別するため過検出を抑制
+    - テスト 4 件追加で全件通過
+
+11. **R-B/R-C モデル由来サマリ表示 + R-J プレースホルダ再マスク防止** (PR #8, `9b7ee32`):
+    - **R-B/R-C**: レビュー結果のサマリをモデル応答の `summary` フィールドから取得し UI に表示。モデルが summary を返さなかった場合は固定の日本語フォールバック文に。`ReviewResult.model` フィールドを追加してモデル識別子（例: `gemma-4-31b-it`）を provider slug と分離して UI に表示
+    - **R-J**: 中優先 L8 に対応。ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題を `_PLACEHOLDER_REUSE_PATTERN` 導入と `_replace_pattern` の早期 return で修正
+    - テスト 9 件追加（reviewer 6 / sanitizer 3）で 67 → 76 件全通過
+
 ---
 
 ## 3. 主要機能の説明
@@ -168,7 +194,7 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 1. **ステップ 1 — 文書アップロード**: 複数ファイル受付（base64 で送信）
 2. **ステップ 2 — 匿名化結果プレビュー**: ローカル処理のみ、外部呼び出しなし
 3. **ステップ 3 — 確認 & 送信**: `mask_and_continue` 文書をチェックで確認
-4. **ステップ 4 — レビュー結果**: 外部 LLM に送信、結果表示、生レスポンス表示エクスパンダ
+4. **ステップ 4 — レビュー結果**: 外部 LLM に送信、結果表示、モデル識別子表示、生レスポンス表示エクスパンダ
 
 補助 UI として `server.py` 経由の HTTP API (`/api/preview`, `/api/review`) も維持。
 
@@ -204,7 +230,7 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 `_extract_openai_like_text` と `_extract_gemini_text` は失敗時に**空文字を返す**。
 呼び出し元は空文字を明示的な失敗と扱い、regex-only sanitize を維持するなどで安全側に。
 
-### 3.6 Gemini Provider（JSON モード対応版、PR #4 後）
+### 3.6 Gemini Provider（JSON モード対応版、PR #4 / PR #8 後）
 
 `GeminiApiReviewProvider` (`gemma-4-31b-it` 既定):
 
@@ -213,10 +239,21 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 - 429 / 5xx は `time.sleep(2.0)` で 1 回リトライ
 - `RESOURCE_EXHAUSTED` / "rate limit" 等のキーワードはクォータ判定、リトライせず人間向けメッセージ化
 - 空応答時は `finishReason` を表示して原因開示
-- `_parse_review_response()` で JSON 優先 + プレースホルダ echo 弾き
+- `_parse_review_payload()` で JSON 優先 + プレースホルダ echo 弾き
+- **R-B/R-C 反映済み**: モデル応答の `summary` フィールドを UI のサマリに優先表示。空時は日本語フォールバック文（"レビュー結果を取得しました。" 等）を表示
+- **R-B 反映済み**: `ReviewResult.model` でモデル識別子（例: `gemma-4-31b-it`）を provider slug と分離して UI 表示
 - `ReviewResult.raw_response` で生レスポンスを UI で確認可能
 
-### 3.7 rubric 強化（研究 + テンプレート反映）
+### 3.7 sanitizer（R-H / R-J 反映済み）
+
+`secure_review/sanitizer.py` `SensitiveDataSanitizer`:
+
+- 各種 regex パターンで一次マスキング（メール、電話、IP、社内ホスト名 等）
+- **R-H 反映済み**: `_build_internal_hostname_pattern` で社内命名規則（`tokyo-rtr-01` 等）を語彙ベースで検出。一般英単語との混同を抑制
+- **R-J 反映済み**: `_PLACEHOLDER_REUSE_PATTERN = re.compile(r"\[[A-Z][A-Z0-9_]*_\d+\]")` を導入。`_replace_pattern` 内でラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）に当たった場合は再マスクをスキップ
+- 結果は `SanitizationRecord` に finding として記録
+
+### 3.8 rubric 強化（研究 + テンプレート反映）
 
 | 軸 / チェック | 根拠 |
 |---|---|
@@ -227,7 +264,7 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 | `OPTIONAL_CHECKS.wbs_consistency_if_present` | ユーザー指示「あれば確認、なければ強要しない」 |
 | `completeness` に環境区別（本番/検証） | 社内テンプレート |
 
-### 3.8 PDF 抽出
+### 3.9 PDF 抽出
 
 `secure_review/extractor._extract_pdf`:
 - `pypdf` 優先（`pip install pypdf` で有効化、requirements.txt に含む）
@@ -236,7 +273,7 @@ Streamlit (`streamlit_app.py`)。4 ステップ強制:
 - `MAX_PDF_PAGES` (既定 300) で上限
 - 暗号化 PDF は警告つきでスキップ
 
-### 3.9 zip bomb / 上限防御
+### 3.10 zip bomb / 上限防御
 
 `_open_archive_safely` で DOCX/XLSX/PPTX の展開前に圧縮率を検証、
 `MAX_UNCOMPRESSED_ARCHIVE_BYTES` (既定 200 MiB) 超過時は `ValueError` で拒否。
@@ -357,7 +394,7 @@ MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
 | L5 | `env_loader._strip_quotes` のエスケープシーケンス対応 | 低 | 未対応 |
 | L6 | `_has_unprotected_command_execution` の `exec(` が SQL `EXEC` に過剰マッチ | 低 | 未対応 |
 | L7 | `HeuristicSensitivityClassifier` が sanitizer findings を再評価している冗長性 | 低 | 未対応 |
-| L8 | ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題 | 中 | **対応済み**（`_replace_pattern` で値が `_PLACEHOLDER_REUSE_PATTERN` にマッチする場合は再マスクをスキップ。R-J としてテスト 3 件追加で合計 76 件通過） |
+| L8 | ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題 | 中 | **対応済み**（`_replace_pattern` で値が `_PLACEHOLDER_REUSE_PATTERN` にマッチする場合は再マスクをスキップ。R-J として PR #8 マージ済み、テスト 3 件追加で合計 76 件通過） |
 
 ### 6.4 機能拡張候補
 
@@ -399,7 +436,7 @@ codex_app/
 ├── .env.example
 ├── requirements.txt
 ├── server.py                       # HTTP API 起動スクリプト（補助、メインは Streamlit）
-├── streamlit_app.py                # 主 UI（完全日本語化、st.secrets ブリッジ実装）
+├── streamlit_app.py                # 主 UI（完全日本語化、st.secrets ブリッジ実装、R-B モデル識別子表示）
 ├── docs/
 │   ├── basic_design.md             # 基本設計書
 │   ├── handoff.md                  # 本ファイル
@@ -417,11 +454,11 @@ codex_app/
 │   ├── app.py                      # HTTP API ハンドラ（findings 接頭辞は R-A の対象）
 │   ├── env_loader.py
 │   ├── extractor.py                # PDF / DOCX / XLSX / PPTX
-│   ├── models.py                   # ReviewResult.raw_response 追加済み
+│   ├── models.py                   # ReviewResult.raw_response, model フィールド追加済み (R-B/R-C)
 │   ├── network_guard.py            # R1/R3 中核
-│   ├── reviewer.py                 # JSON モード対応済み（R-B/R-C の対象）
+│   ├── reviewer.py                 # JSON モード対応済み、R-B/R-C 対応済み (model 由来 summary 優先表示 + フォールバック)
 │   ├── rubric.py                   # 研究 + テンプレート反映
-│   ├── sanitizer.py
+│   ├── sanitizer.py                # R-H/R-J 対応済み (内部命名規則 regex / プレースホルダ再マスク防止)
 │   └── sensitivity.py              # 日本語化済み
 ├── static/
 │   └── index.html                  # Streamlit 移行案内
@@ -431,8 +468,8 @@ codex_app/
     ├── test_app.py
     ├── test_env_loader.py
     ├── test_network_guard.py
-    ├── test_reviewer.py
-    ├── test_sanitizer.py
+    ├── test_reviewer.py            # R-B/R-C で 6 件追加（合計 25 件）
+    ├── test_sanitizer.py           # R-H で 4 件 + R-J で 3 件追加（合計 16 件）
     └── test_sensitivity.py
 ```
 
@@ -486,6 +523,8 @@ codex_app/
 - [ ] mask_and_continue 判定発生時の確認ゲート動作
 - [ ] block 判定発生時のエラー表示
 - [ ] Gemini API のクォータ超過時の挙動
+- [ ] R-B/R-C モデル由来サマリ表示の実機確認（ステップ 4 にモデル識別子と要約が表示されること）
+- [ ] R-J プレースホルダ再マスク防止の実機確認（メールアドレスを含む文書を投入して二重置換が起きないこと）
 
 ---
 
@@ -537,8 +576,12 @@ https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
 | #1 | hardening/r1-r4-and-features | `502ad81` | R1-R4 セキュリティ境界対応、rubric 強化、PDF 抽出、研究知見反映 |
 | #2 | feature/streamlit-cloud-secrets | `e05a7b5` | `st.secrets` → `os.environ` ブリッジ、Streamlit Cloud デプロイ可能化 |
 | #3 | feature/japanese-ui | `9f2be91` | UI 完全日本語化（A+B+C+D+E すべて） |
-| #4 | feature/json-review-output | (HEAD) | Gemini JSON モード対応、プレースホルダ echo 撃退、生レスポンス表示エクスパンダ追加、HeuristicSensitivityClassifier 日本語化 |
+| #4 | feature/json-review-output | (post-#3) | Gemini JSON モード対応、プレースホルダ echo 撃退、生レスポンス表示エクスパンダ追加、HeuristicSensitivityClassifier 日本語化 |
+| #6 | feature/docs-cleanup-2026-04-27 | `71e8e98` | docs cleanup（2026-04-27） |
+| #7 | feature/r-h-internal-hostname-regex | `31ae41a` | R-H / M1: 社内命名規則 regex `_build_internal_hostname_pattern` を `sanitizer.py` に追加。機器種別語彙ベースで過検出を抑制。テスト 4 件追加。 |
 | #8 | feature/r-b-c-j-summary-and-placeholder-reuse | `9b7ee32` | R-B/R-C: モデル由来サマリの UI 表示化と `ReviewResult.model` フィールド追加。R-J: ラベル系パターンが既存プレースホルダを再マスクする問題を修正。テスト 9 件追加で合計 76 件通過。 |
+
+※ PR #5 はインフラ・微修正系で本記録には含めていない。詳細は GitHub Pull requests 一覧を参照のこと。
 
 ---
 

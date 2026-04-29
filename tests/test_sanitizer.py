@@ -254,6 +254,55 @@ class SanitizerTests(unittest.TestCase):
         self.assertNotIn("[HOSTNAME_002]", document.sanitized_excerpt)
         self.assertNotIn("tokyo-rtr-01", document.sanitized_excerpt)
 
+    # ------------------------------------------------------------------
+    # R-J: pattern priority — label-based patterns must not re-mask values
+    # that an earlier, more-specific pattern already placeholder-ised.
+    # ------------------------------------------------------------------
+
+    def test_label_pattern_does_not_remask_email_placeholder(self) -> None:
+        """``連絡先: yamada@example.com`` must end up as
+        ``連絡先: [EMAIL_001]``, not ``連絡先: [PERSON_001]``. The email
+        pattern runs first and produces ``[EMAIL_001]``; the ``person``
+        label pattern must recognise that value as already-masked and skip
+        re-masking it under a less-specific category."""
+        sanitizer = SensitiveDataSanitizer()
+        document = sanitizer.sanitize("contact.md", "連絡先: yamada@example.com")
+        self.assertIn("[EMAIL_001]", document.sanitized_excerpt)
+        self.assertNotIn("[PERSON_001]", document.sanitized_excerpt)
+        # The original email must not survive in the sanitized output.
+        self.assertNotIn("yamada@example.com", document.sanitized_excerpt)
+        # Replacement records must record the email category, not person.
+        categories = {rec.category for rec in document.replacements}
+        self.assertIn("email", categories)
+        self.assertNotIn("person", categories)
+
+    def test_label_pattern_still_masks_natural_language_values(self) -> None:
+        """The label-based ``person`` pattern must still mask plain-text
+        values that are not already placeholders. Regression guard for the
+        R-J fix above — we want the early-exit only when the captured value
+        IS a placeholder, not in general."""
+        sanitizer = SensitiveDataSanitizer()
+        document = sanitizer.sanitize("contact.md", "担当者: 山田太郎")
+        self.assertIn("[PERSON_001]", document.sanitized_excerpt)
+        self.assertNotIn("山田太郎", document.sanitized_excerpt)
+
+    def test_label_pattern_skips_remask_for_each_category(self) -> None:
+        """The R-J fix must apply uniformly across all label-based patterns
+        (company / project / ticket / person) — none of them should re-mask
+        an existing placeholder. We verify this with a value that gets
+        placeholder-ised by the labelled hostname pattern first."""
+        sanitizer = SensitiveDataSanitizer()
+        # ``hostname tokyo-rtr-01`` → ``[HOSTNAME_001]``. Then ``担当者: ...``
+        # references the same identifier; we want the second occurrence to
+        # stay ``[HOSTNAME_001]``, not become ``[PERSON_001]``.
+        document = sanitizer.sanitize(
+            "ops.md",
+            "hostname tokyo-rtr-01\n担当者: tokyo-rtr-01",
+        )
+        # The hostname placeholder must survive in both spots.
+        self.assertEqual(document.sanitized_excerpt.count("[HOSTNAME_001]"), 2)
+        self.assertNotIn("[PERSON_001]", document.sanitized_excerpt)
+
 
 if __name__ == "__main__":
     unittest.main()

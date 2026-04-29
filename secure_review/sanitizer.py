@@ -79,6 +79,14 @@ INTERNAL_HOSTNAME_DEVICE_KEYWORDS: tuple[str, ...] = (
 )
 
 
+# R-J: detect the canonical placeholder shape ``[CATEGORY_NNN]`` used by this
+# sanitizer. Used by `_replace_pattern` to skip re-masking values that have
+# already been placeholder-ised by a more specific (earlier) pattern. The
+# trailing digit count is open-ended so future hierarchies (e.g. 4-digit
+# counters) keep working without changing this regex.
+_PLACEHOLDER_REUSE_PATTERN: re.Pattern[str] = re.compile(r"\[[A-Z][A-Z0-9_]*_\d+\]")
+
+
 def _build_internal_hostname_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
     """Compile the bare-hostname regex from a device-keyword vocabulary.
 
@@ -306,6 +314,15 @@ class SensitiveDataSanitizer:
         def replacement(match: re.Match[str]) -> str:
             if match.lastindex and match.lastindex >= 2:
                 value = match.group(2)
+                # R-J: when the captured value is already a sanitizer placeholder
+                # (e.g. ``[EMAIL_001]`` from an earlier pattern), the more specific
+                # category that produced it is the correct semantic label. Do not
+                # re-mask under this looser label-based pattern. This prevents
+                # collisions like ``連絡先: yamada@example.com`` getting masked as
+                # ``[PERSON_001]`` after ``email`` already turned the address into
+                # ``[EMAIL_001]``.
+                if _PLACEHOLDER_REUSE_PATTERN.fullmatch(value.strip()):
+                    return match.group(0)
                 placeholder = self._placeholder(category, value)
                 self._append_record(records, placeholder, value, category)
                 return match.group(0).replace(value, placeholder)

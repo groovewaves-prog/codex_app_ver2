@@ -96,6 +96,11 @@ class ReviewResult:
     classification_confidence: str = ""
     classification_reason: str = ""
     raw_response: str = ""
+    # R-B / R-C (ε): the concrete model identifier (e.g. ``gemma-4-31b-it``)
+    # surfaced separately from the internal ``provider`` slug
+    # (e.g. ``gemma-4-gemini-api``). Empty for providers that do not have a
+    # distinct model concept (mock).
+    model: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -109,4 +114,5 @@ class ReviewResult:
             "classification_confidence": self.classification_confidence,
             "classification_reason": self.classification_reason,
             "raw_response": self.raw_response,
+            "model": self.model,
         }

@@ -491,11 +491,19 @@ if review is not None:
     left, right = st.columns([4, 2])
     with left:
         st.markdown(f"**サマリ** — {review.summary}")
+        # R-B + R-C (ε): show the concrete model identifier alongside the
+        # internal provider slug so operators can see at a glance which
+        # model produced this review.
+        meta_parts = [f"プロバイダ: {review.provider}"]
+        if review.model:
+            meta_parts.append(f"モデル: {review.model}")
+        meta_parts.append(f"ルーブリック: {review.rubric_name or review.rubric_id or '-'}")
+        meta_parts.append(
+            f"プロファイル: {_profile_label(review.document_profile)} "
+            f"({review.classification_confidence or '-'})"
+        )
         st.markdown(
-            f'<div class="provider-line">プロバイダ: {review.provider} · '
-            f"ルーブリック: {review.rubric_name or review.rubric_id or '-'} · "
-            f'プロファイル: {_profile_label(review.document_profile)} '
-            f"({review.classification_confidence or '-'})</div>",
+            f'<div class="provider-line">{" · ".join(meta_parts)}</div>',
             unsafe_allow_html=True,
         )
     with right:

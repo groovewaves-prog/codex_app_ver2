@@ -538,6 +538,7 @@ https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
 | #2 | feature/streamlit-cloud-secrets | `e05a7b5` | `st.secrets` → `os.environ` ブリッジ、Streamlit Cloud デプロイ可能化 |
 | #3 | feature/japanese-ui | `9f2be91` | UI 完全日本語化（A+B+C+D+E すべて） |
 | #4 | feature/json-review-output | (HEAD) | Gemini JSON モード対応、プレースホルダ echo 撃退、生レスポンス表示エクスパンダ追加、HeuristicSensitivityClassifier 日本語化 |
+| #8 | feature/r-b-c-j-summary-and-placeholder-reuse | `9b7ee32` | R-B/R-C: モデル由来サマリの UI 表示化と `ReviewResult.model` フィールド追加。R-J: ラベル系パターンが既存プレースホルダを再マスクする問題を修正。テスト 9 件追加で合計 76 件通過。 |
 
 ---
 

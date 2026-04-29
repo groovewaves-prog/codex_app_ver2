@@ -172,6 +172,88 @@ class SanitizerTests(unittest.TestCase):
         self.assertEqual(response.sanitized_text, "[COMPANY_001]\n[SITE_012]")
         self.assertEqual(response.outbound_risk, "low")
 
+    # ------------------------------------------------------------------
+    # R-H / M1: bare hostname detection via internal naming convention.
+    # ------------------------------------------------------------------
+
+    def test_internal_hostname_pattern_detects_naming_convention_variants(self) -> None:
+        """Positive cases: regex must catch site-internal device identifiers
+        without a ``hostname:`` label, across the documented variants
+        (separator, casing, segment count, digit width)."""
+        sanitizer = SensitiveDataSanitizer()
+        positives = [
+            "tokyo-rtr-01",       # basic 3-segment, hyphen
+            "osaka-fw-001",       # 3-digit number
+            "lb-001",             # 2-segment form (no location prefix)
+            "Prd-DB-001",         # mixed case
+            "prd_app_01",         # underscore separator
+            "srv.web.001",        # dot separator
+            "host-12345",         # 5-digit number
+        ]
+        for sample in positives:
+            with self.subTest(sample=sample):
+                document = sanitizer.sanitize("doc.md", f"connect to {sample} for verification")
+                self.assertIn(
+                    "[HOSTNAME_",
+                    document.sanitized_excerpt,
+                    f"expected {sample} to be masked but excerpt was {document.sanitized_excerpt!r}",
+                )
+                self.assertNotIn(sample, document.sanitized_excerpt)
+
+    def test_internal_hostname_pattern_does_not_overmatch_common_strings(self) -> None:
+        """Negative cases: regex must not flag common non-secret strings such
+        as version numbers, dates, encoding labels, internal review ids,
+        documentation strings, and tokens that *contain* a device keyword
+        as a substring of a longer word (``localhost``, ``combat``)."""
+        sanitizer = SensitiveDataSanitizer()
+        negatives = [
+            "python-3.11",            # version: middle is a digit, not a keyword
+            "utf-8",                  # encoding label: middle is a digit
+            "windows-server-2019",    # 'server' is not in vocabulary (only 'srv')
+            "gemma-4-31b",            # documentation string, middle is a digit
+            "2026-04-27",             # date: middle '04' is not a keyword
+            "r1-r4",                  # 'r4' is not a keyword and second token has no digits
+            "localhost-01",           # 'host' is inside 'localhost', not a separate token
+            "combat-01",              # 'bat' is inside 'combat', not a separate token
+        ]
+        for sample in negatives:
+            with self.subTest(sample=sample):
+                document = sanitizer.sanitize("doc.md", f"reference {sample} in passing")
+                self.assertNotIn(
+                    "[HOSTNAME_",
+                    document.sanitized_excerpt,
+                    f"{sample} was masked but should not have been; excerpt={document.sanitized_excerpt!r}",
+                )
+                self.assertIn(sample, document.sanitized_excerpt)
+
+    def test_internal_hostname_pattern_consistent_placeholder_for_same_value(self) -> None:
+        """The same bare hostname appearing multiple times must collapse to a
+        single placeholder (``[HOSTNAME_001]``), not get a fresh number on
+        each occurrence."""
+        sanitizer = SensitiveDataSanitizer()
+        document = sanitizer.sanitize(
+            "ops.md",
+            "rebooted tokyo-rtr-01 at 10:00. tokyo-rtr-01 came back online at 10:05.",
+        )
+        self.assertIn("[HOSTNAME_001]", document.sanitized_excerpt)
+        self.assertNotIn("[HOSTNAME_002]", document.sanitized_excerpt)
+        self.assertNotIn("tokyo-rtr-01", document.sanitized_excerpt)
+        # Both occurrences should now read [HOSTNAME_001].
+        self.assertEqual(document.sanitized_excerpt.count("[HOSTNAME_001]"), 2)
+
+    def test_internal_hostname_pattern_unifies_with_labelled_hostname_detection(self) -> None:
+        """A document mixing the labelled form (``hostname tokyo-rtr-01``)
+        and the bare form must end up with one consistent placeholder for
+        the same underlying value."""
+        sanitizer = SensitiveDataSanitizer()
+        document = sanitizer.sanitize(
+            "router.cfg",
+            "hostname tokyo-rtr-01\n! later in the doc, bare reference: tokyo-rtr-01 is the active node.",
+        )
+        self.assertIn("[HOSTNAME_001]", document.sanitized_excerpt)
+        self.assertNotIn("[HOSTNAME_002]", document.sanitized_excerpt)
+        self.assertNotIn("tokyo-rtr-01", document.sanitized_excerpt)
+
 
 if __name__ == "__main__":
     unittest.main()

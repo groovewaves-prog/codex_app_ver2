@@ -88,13 +88,13 @@ git log --oneline -5
 
 ### 1.2 テスト
 
-**63 件全通過**(`tests/` 全体を `python -m unittest discover tests` で実行した場合)。
+**67 件全通過**(`tests/` 全体を `python -m unittest discover tests` で実行した場合)。
 
 ```powershell
 python -m unittest discover tests
 ```
 
-※ `python -m unittest tests.test_reviewer tests.test_sensitivity tests.test_sanitizer` のように 3 ファイル指定で実行した場合は 36 件。`discover` 実行では `test_app.py` / `test_env_loader.py` / `test_extractor.py` / `test_network_guard.py` を含めた **63 件** が真値。
+※ `python -m unittest tests.test_reviewer tests.test_sensitivity tests.test_sanitizer` のように 3 ファイル指定で実行した場合は 40 件(うち sanitizer は 13 件、R-H で 4 件追加済み)。`discover` 実行では `test_app.py` / `test_env_loader.py` / `test_extractor.py` / `test_network_guard.py` を含めた **67 件** が真値。
 
 ### 1.3 デプロイ環境
 
@@ -336,7 +336,6 @@ MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
 | **R-B** | `reviewer.py` のサマリ `Received review result from Gemini API model gemma-4-31b-it.` を日本語化 | 低 |
 | **R-C** | Gemma 4 の応答 summary を実際にレビュー結果のサマリに反映表示（現状は固定文言） | 中 |
 | **R-F** | OneDrive 配下リポジトリの git ロック問題を handoff.md に明記（再発を防ぐ運用 Tips として） | 低 |
-| **R-H** | 社内命名規則 regex の追加（裸ホスト名・装置名のパターン、例: `[a-z]+-[a-z]+-\d{2,3}`）を一次マスキングに組み込み。M1 の主犯対応 | 中 |
 | **R-I** | 文書要約 + 「目的」整合性チェック機能。Gemma 4 にレビュー対象文書の内容要約を生成させ UI に表示。さらに文書中に「目的」セクションが存在する場合、LLM 生成要約と「目的」の内容が一致しているか運用者が判断できる形で並列表示。乖離があれば文書品質指摘の候補（『目的と本文の整合性が取れていない』等）として独立フィールド出力 | 中 |
 
 ### 6.2 実データテスト（ユーザー環境でしか確認できない）
@@ -354,7 +353,7 @@ MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
 
 | # | 内容 | 優先 | 状態 |
 |---|---|---|---|
-| M1 | 裸ホスト名（`tokyo-rtr-01` 等）の検出強化 | 中 | **§6.1 R-H として着手予定**（社内命名規則 regex 追加で主犯対応） |
+| M1 | 裸ホスト名（`tokyo-rtr-01` 等）の検出強化 | 中 | **対応済み**（社内命名規則 regex `_build_internal_hostname_pattern` を `sanitizer.py` に追加。機器種別語彙ベースで過検出を抑制。テスト 4 件追加で合計 67 件全通過） |
 | L1 | findings / reasons の重複ノイズ整理 | 低 | 未対応 |
 | L2 | provider 名の表記ゆれ統一 (`gemma4` / `gemma-4-gemini-api`) | 低 | 未対応 |
 | L5 | `env_loader._strip_quotes` のエスケープシーケンス対応 | 低 | 未対応 |

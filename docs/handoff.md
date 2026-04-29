@@ -1,13 +1,13 @@
 # Handoff
 
-Last updated: 2026-04-29 (R-H 命名規則 regex / R-B/R-C モデル由来サマリ表示化 / R-J ラベルパターンによるプレースホルダ再マスク防止 すべて main へマージ済み)
+Last updated: 2026-04-30 (R-K: プロファイル自動判定をファイル名最優先に改修。設計書を手順書として誤判定する問題を解消、競合検出と UI 警告を追加)
 
 ## 0. 次のチャットを開く方へ（最重要）
 
 このファイルは、**次のチャット開始時に Claude にこれ 1 本渡せば現状復元できる**
 ことを目的に書かれています。まずは次の節（0.1–0.4）を読んでください。
 
-### 0.1 現在の到達点（2026-04-29 現在）
+### 0.1 現在の到達点（2026-04-30 現在）
 
 **ツールは Streamlit Community Cloud 上で稼働中です**。
 
@@ -22,6 +22,13 @@ Last updated: 2026-04-29 (R-H 命名規則 regex / R-B/R-C モデル由来サマ
   - **R-J** (`sanitizer.py`, PR #8): ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題を修正。`_PLACEHOLDER_REUSE_PATTERN` を導入し `_replace_pattern` で早期 return。
   - テスト件数: 67 → **76 件**（reviewer に R-B/R-C で 6 件、sanitizer に R-J で 3 件追加）。`python -m unittest discover tests` で全件通過確認済み。
 
+- **2026-04-30 追加分** (R-K):
+  - **R-K** (`rubric.py`, `streamlit_app.py`, 新 PR): プロファイル自動判定ロジックをファイル名最優先方式に改修。旧ロジックは本文中の「変更」「切替」「運用」「保守」等のキーワードで判定していたため、設計書中の自然な用語にも反応して **設計書を手順書 (change_runbook) として誤判定** していた。
+    - **改修内容**: ファイル名 / PDF Title から「設計書」「手順書」「運用手順」等のキーワードを検出して profile signal とし、これを最優先。本文 signal は「タイムチャート」「切戻し」「go/no-go」「エスカレーション」等の手順書特有の語に厳格化。
+    - **競合検出**: ファイル名と本文 signal が食い違う場合(例: 「可用性設計書」というファイル名 + 本文に切戻し記述)、新しい confidence 値 `"conflict"` を導入し、UI ステップ 4 のレビュー結果ヘッダ直下に黄色い警告ボックスで「自動判定で競合あり、サイドバーから手動上書き可」と表示。
+    - **テスト件数**: 76 → **90 件**（`tests/test_rubric_classification.py` を新規追加、14 件）。`python -m unittest discover tests` で全件通過確認済み。
+    - **動作確認**: 12 件の本物の基本設計書 PDF で誤判定が解消することを文字列ベースで検証済み(実機検証は PR マージ後)。
+
 **現在の構成**:
 
 | 段階 | 実装 |
@@ -30,6 +37,7 @@ Last updated: 2026-04-29 (R-H 命名規則 regex / R-B/R-C モデル由来サマ
 | 一次マスキング | regex ベース（`SensitiveDataSanitizer`、R-H 命名規則 regex / R-J 再マスク防止 反映済み） |
 | ローカル LLM 二次マスキング | **使用しない**（`LOCAL_SANITIZER_PROVIDER=none`） |
 | 機密度判定 | regex + heuristic ベース（`HeuristicSensitivityClassifier`、`LOCAL_SENSITIVITY_PROVIDER=heuristic`） |
+| プロファイル自動判定 | ファイル名最優先方式（`secure_review/rubric.py`、R-K で改修済み。競合検出時は UI に警告表示） |
 | 確認ゲート | UI のチェックボックス（`MASK_AND_CONTINUE_REQUIRE_CONFIRM=true`） |
 | 外部レビュー LLM | Gemini API 経由の Gemma 4 31B（`gemma-4-31b-it`、JSON モード強制、モデル由来サマリ表示）|
 
@@ -96,13 +104,13 @@ git log --oneline -5
 
 ### 1.2 テスト
 
-**76 件全通過**(`tests/` 全体を `python -m unittest discover tests` で実行した場合)。
+**90 件全通過**(`tests/` 全体を `python -m unittest discover tests` で実行した場合)。
 
 ```powershell
 python -m unittest discover tests
 ```
 
-※ `python -m unittest tests.test_reviewer tests.test_sensitivity tests.test_sanitizer` のように 3 ファイル指定で実行した場合は 49 件(うち sanitizer は 16 件で R-H で 4 件 + R-J で 3 件追加済み、reviewer は R-B / R-C で 6 件追加済み)。`discover` 実行では `test_app.py` / `test_env_loader.py` / `test_extractor.py` / `test_network_guard.py` を含めた **76 件** が真値。
+※ `python -m unittest tests.test_reviewer tests.test_sensitivity tests.test_sanitizer tests.test_rubric_classification` のように個別指定で実行した場合は 63 件(うち sanitizer は 16 件で R-H で 4 件 + R-J で 3 件追加済み、reviewer は R-B / R-C で 6 件追加済み、`test_rubric_classification` は R-K で 14 件新設)。`discover` 実行では `test_app.py` / `test_env_loader.py` / `test_extractor.py` / `test_network_guard.py` を含めた **90 件** が真値。
 
 ### 1.3 デプロイ環境
 
@@ -119,7 +127,7 @@ python -m unittest discover tests
 - `secure_review/models.py` — `ReviewResult.raw_response`, `model` フィールド
 - `secure_review/app.py` — R1-R4 + JSON モード対応
 - `secure_review/extractor.py` — PDF + zip bomb 対策
-- `secure_review/rubric.py` — 研究知見 + 作業計画書テンプレート反映
+- `secure_review/rubric.py` — 研究知見 + 作業計画書テンプレート反映 + R-K 改修済み (ファイル名最優先プロファイル判定 / 競合検出)
 - `docs/security_boundaries.md` — R1-R4 境界仕様
 - `docs/v3_streamlit_verification.md` — 実データ検証手順
 - `tests/test_network_guard.py`, `tests/test_app.py`
@@ -395,6 +403,7 @@ MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
 | L6 | `_has_unprotected_command_execution` の `exec(` が SQL `EXEC` に過剰マッチ | 低 | 未対応 |
 | L7 | `HeuristicSensitivityClassifier` が sanitizer findings を再評価している冗長性 | 低 | 未対応 |
 | L8 | ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題 | 中 | **対応済み**（`_replace_pattern` で値が `_PLACEHOLDER_REUSE_PATTERN` にマッチする場合は再マスクをスキップ。R-J として PR #8 マージ済み、テスト 3 件追加で合計 76 件通過） |
+| L9 | プロファイル自動判定が「変更」「切替」「運用」等の本文キーワードに反応し、設計書を手順書 (change_runbook) として誤判定する問題 | 中 | **対応済み**（`detect_document_profile` をファイル名最優先方式に書き換え。本文 signal は「タイムチャート」「切戻し」「go/no-go」「エスカレーション」等の手順書特有語に厳格化。競合検出時は新 confidence 値 `"conflict"` で UI に警告表示。R-K として新 PR、テスト 14 件新設で合計 90 件通過） |
 
 ### 6.4 機能拡張候補
 
@@ -457,7 +466,7 @@ codex_app/
 │   ├── models.py                   # ReviewResult.raw_response, model フィールド追加済み (R-B/R-C)
 │   ├── network_guard.py            # R1/R3 中核
 │   ├── reviewer.py                 # JSON モード対応済み、R-B/R-C 対応済み (model 由来 summary 優先表示 + フォールバック)
-│   ├── rubric.py                   # 研究 + テンプレート反映
+│   ├── rubric.py                   # 研究 + テンプレート反映、R-K 対応済み (ファイル名最優先プロファイル判定 / 競合検出)
 │   ├── sanitizer.py                # R-H/R-J 対応済み (内部命名規則 regex / プレースホルダ再マスク防止)
 │   └── sensitivity.py              # 日本語化済み
 ├── static/
@@ -469,6 +478,7 @@ codex_app/
     ├── test_env_loader.py
     ├── test_network_guard.py
     ├── test_reviewer.py            # R-B/R-C で 6 件追加（合計 25 件）
+    ├── test_rubric_classification.py  # R-K で新設（14 件）
     ├── test_sanitizer.py           # R-H で 4 件 + R-J で 3 件追加（合計 16 件）
     └── test_sensitivity.py
 ```
@@ -580,8 +590,12 @@ https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
 | #6 | feature/docs-cleanup-2026-04-27 | `71e8e98` | docs cleanup（2026-04-27） |
 | #7 | feature/r-h-internal-hostname-regex | `31ae41a` | R-H / M1: 社内命名規則 regex `_build_internal_hostname_pattern` を `sanitizer.py` に追加。機器種別語彙ベースで過検出を抑制。テスト 4 件追加。 |
 | #8 | feature/r-b-c-j-summary-and-placeholder-reuse | `9b7ee32` | R-B/R-C: モデル由来サマリの UI 表示化と `ReviewResult.model` フィールド追加。R-J: ラベル系パターンが既存プレースホルダを再マスクする問題を修正。テスト 9 件追加で合計 76 件通過。 |
+| #9 | chore/handoff-update-2026-04-29 | `c356d63` | docs(handoff): §11 PR 履歴に PR #8 行を追記(他の更新は反映漏れ、PR #10 で補完) |
+| #10 | fix/handoff-actual-content-2026-04-29 | `5efeccc` | docs(handoff): PR #9 で漏れた 2026-04-29 大規模更新 (§0.1 / §1.1 / §2.3 / §3.6 / §3.7 / §6.3 / §7 / §9.3 等) を本反映 |
+| #(TBD) | feature/r-k-filename-first-classification | (本作業の commit) | R-K: プロファイル自動判定をファイル名最優先方式に改修。設計書を手順書として誤判定する旧ロジックを置換、競合検出と UI 警告を追加。テスト 14 件新設で合計 90 件通過。 |
 
 ※ PR #5 はインフラ・微修正系で本記録には含めていない。詳細は GitHub Pull requests 一覧を参照のこと。
+※ `#(TBD)` は本作業のマージ完了後、実際の PR 番号に置換すること。
 
 ---
 

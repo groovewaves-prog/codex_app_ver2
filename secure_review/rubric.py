@@ -116,6 +116,89 @@ OPTIONAL_CHECKS = (
 )
 
 
+# ---------------------------------------------------------------------------
+# R-K: filename-first profile detection signals
+# ---------------------------------------------------------------------------
+# Keywords matched against the document filename (lower-cased). Multi-character
+# Japanese keywords are matched as substrings; single short Japanese terms
+# (e.g. "設計" alone) are intentionally excluded to avoid spurious hits in
+# compound names like "○○運用設計書". English keywords are stored in lower-case.
+
+FILENAME_DESIGN_KEYWORDS: tuple[str, ...] = (
+    "設計書",
+    "設計仕様書",
+    "設計仕様",
+    "基本設計",
+    "詳細設計",
+    "仕様書",
+    "design document",
+    "design spec",
+    "specification",
+    "architecture",
+)
+
+FILENAME_CHANGE_RUNBOOK_KEYWORDS: tuple[str, ...] = (
+    "手順書",
+    "作業手順書",
+    "作業計画書",
+    "変更計画書",
+    "切替計画書",
+    "切替手順書",
+    "移行計画書",
+    "移行手順書",
+    "切戻し手順書",
+    "リリース計画書",
+    "runbook",
+    "procedure",
+    "work plan",
+    "change plan",
+    "cutover plan",
+    "migration plan",
+    "release plan",
+)
+
+FILENAME_OPERATIONS_RUNBOOK_KEYWORDS: tuple[str, ...] = (
+    "運用手順",
+    "運用設計",
+    "保守手順",
+    "監視手順",
+    "障害対応手順",
+    "運用要領",
+    "日次運用",
+    "インシデント対応",
+    "operations runbook",
+    "ops runbook",
+    "maintenance procedure",
+    "monitoring runbook",
+    "incident response",
+)
+
+# Body-text strong signals: rare in design documents, common in real runbooks.
+BODY_CHANGE_RUNBOOK_STRONG_SIGNALS: tuple[str, ...] = (
+    "タイムチャート",
+    "タイムテーブル",
+    "time chart",
+    "schedule chart",
+    "切戻し",
+    "切り戻し",
+    "ロールバック",
+    "rollback",
+    "backout",
+    "fallback procedure",
+    "go/no-go",
+    "go no go",
+    "gonogo",
+    "進行可否判定",
+    "続行判断",
+)
+
+BODY_OPERATIONS_STRONG_SIGNALS: tuple[str, ...] = (
+    "エスカレーション",
+    "on-call",
+    "oncall",
+)
+
+
 SOURCE_CODE_EXTENSIONS = {
     ".py",
     ".ps1",
@@ -521,7 +604,7 @@ def classify_documents(
             return ReviewClassification(
                 document_profile=normalized,
                 confidence="forced",
-                reason=f"The document profile was explicitly overridden to '{normalized}'.",
+                reason=f"プロファイルを '{normalized}' に明示的に指定しました。",
             )
 
     return detect_document_profile(documents)
@@ -533,11 +616,12 @@ def detect_document_profile(documents: list[SanitizedDocument]) -> ReviewClassif
     code_like_count = sum(1 for document in documents if _looks_like_source_code(document.outbound_text))
     documents_count = max(len(documents), 1)
 
+    # ----- Source code detection (unchanged behaviour, Japanese reasons) -----
     if documents and suffixes and suffixes.issubset(SOURCE_CODE_EXTENSIONS):
         return ReviewClassification(
             document_profile="source_code",
             confidence="high",
-            reason="All uploaded files use known source-code extensions.",
+            reason="すべてのファイルがソースコードの拡張子を持っています。",
         )
 
     if any(
@@ -561,52 +645,84 @@ def detect_document_profile(documents: list[SanitizedDocument]) -> ReviewClassif
         return ReviewClassification(
             document_profile="source_code",
             confidence=confidence,
-            reason="The content contains source-code syntax and execution constructs.",
+            reason="本文にソースコード構文 (def / class / import 等) が含まれています。",
         )
 
-    if any(
-        keyword in corpus
-        for keyword in (
-            "変更",
-            "切替",
-            "切り替え",
-            "rollback",
-            "backout",
-            "timechart",
-            "タイムチャート",
-            "change",
-            "switchover",
-            "cutover",
-            "runbook",
+    # ----- R-K: filename-first profile detection -----
+    name_signals = _collect_filename_signals(documents)
+    body_signals = _collect_body_strong_signals(corpus)
+
+    name_profiles_hit = [profile for profile, count in name_signals.items() if count > 0]
+    body_profiles_hit = [profile for profile, hit in body_signals.items() if hit]
+
+    # Conflict case 1: multiple distinct profiles hit in filenames.
+    if len(name_profiles_hit) >= 2:
+        priority = ("design", "change_runbook", "operations_runbook")
+        provisional = max(
+            priority,
+            key=lambda p: (name_signals[p], -priority.index(p)),
         )
-    ):
         return ReviewClassification(
-            document_profile="change_runbook",
-            confidence="medium",
-            reason="The content includes change or switchover vocabulary.",
+            document_profile=provisional,
+            confidence="conflict",
+            reason=(
+                "ファイル名から複数のプロファイル signal が検出されました "
+                f"({', '.join(name_profiles_hit)})。"
+                f"暫定的に '{provisional}' を選択しています。"
+                "サイドバーから手動で選択することを推奨します。"
+            ),
         )
 
-    if any(
-        keyword in corpus
-        for keyword in ("保守", "運用", "障害", "監視", "エスカレーション", "operations", "monitoring")
-    ):
+    # Conflict case 2: filename signal disagrees with body strong signal.
+    if name_profiles_hit and body_profiles_hit:
+        name_profile = name_profiles_hit[0]
+        body_profile = body_profiles_hit[0]
+        if name_profile != body_profile:
+            return ReviewClassification(
+                document_profile=name_profile,
+                confidence="conflict",
+                reason=(
+                    f"ファイル名は '{name_profile}' を示唆していますが、"
+                    f"本文には '{body_profile}' の強い signal "
+                    "(タイムチャート/切戻し/エスカレーション等) が含まれています。"
+                    f"暫定的に '{name_profile}' を選択しています。"
+                    "サイドバーから手動で選択することを推奨します。"
+                ),
+            )
+
+    # Clean classification: filename only.
+    if name_profiles_hit:
+        profile = name_profiles_hit[0]
         return ReviewClassification(
-            document_profile="operations_runbook",
-            confidence="medium",
-            reason="The content includes operations or incident-management vocabulary.",
+            document_profile=profile,
+            confidence="high",
+            reason=f"ファイル名から '{profile}' プロファイルと判定しました。",
         )
 
+    # Clean classification: body strong signal only.
+    if body_profiles_hit:
+        profile = body_profiles_hit[0]
+        return ReviewClassification(
+            document_profile=profile,
+            confidence="medium",
+            reason=(
+                f"本文から '{profile}' の強い signal を検出しました "
+                "(ファイル名からの判定はできませんでした)。"
+            ),
+        )
+
+    # ----- Fallback -----
     if documents and suffixes and suffixes.issubset(DESIGN_EXTENSIONS) and code_like_count == 0:
         return ReviewClassification(
             document_profile="design",
             confidence="medium",
-            reason="The file extensions match common design or document formats.",
+            reason="ファイル拡張子が文書系フォーマットと一致しています。",
         )
 
     return ReviewClassification(
         document_profile="design",
         confidence="low",
-        reason="No strong code or runbook signals were detected, so the documents were treated as design artifacts.",
+        reason="コード・ファイル名・本文のいずれからも強い signal が検出されなかったため、設計書として扱います。",
     )
 
 
@@ -639,6 +755,63 @@ def render_rubric_for_prompt(rubric: ReviewRubric) -> str:
             lines.append(f"- {policy}")
 
     return "\n".join(lines)
+
+
+def _normalize_for_signal_match(text: str) -> str:
+    """Lower-case the text for case-insensitive keyword matching.
+
+    Japanese keywords are stored in canonical form in the constant
+    dictionaries, so no further normalisation (full/half-width, hiragana/
+    katakana) is performed here.
+    """
+    return text.lower()
+
+
+def _collect_filename_signals(
+    documents: list[SanitizedDocument],
+) -> dict[str, int]:
+    """Count how many documents matched each profile signal by filename.
+
+    Returns a dict with keys "design", "change_runbook", "operations_runbook"
+    and integer counts. Each document contributes to at most one profile
+    (first match wins, in priority order: design -> change_runbook ->
+    operations_runbook).
+    """
+    counts: dict[str, int] = {
+        "design": 0,
+        "change_runbook": 0,
+        "operations_runbook": 0,
+    }
+    for document in documents:
+        name = _normalize_for_signal_match(document.name or "")
+        if not name:
+            continue
+        if any(keyword in name for keyword in FILENAME_DESIGN_KEYWORDS):
+            counts["design"] += 1
+            continue
+        if any(keyword in name for keyword in FILENAME_CHANGE_RUNBOOK_KEYWORDS):
+            counts["change_runbook"] += 1
+            continue
+        if any(keyword in name for keyword in FILENAME_OPERATIONS_RUNBOOK_KEYWORDS):
+            counts["operations_runbook"] += 1
+            continue
+    return counts
+
+
+def _collect_body_strong_signals(corpus: str) -> dict[str, bool]:
+    """Detect strong runbook signals in the combined body corpus.
+
+    The corpus is expected to be already lower-cased by the caller.
+    Returns a dict like {"change_runbook": True, "operations_runbook": False}.
+    """
+    return {
+        "change_runbook": any(
+            keyword in corpus for keyword in BODY_CHANGE_RUNBOOK_STRONG_SIGNALS
+        ),
+        "operations_runbook": any(
+            keyword in corpus for keyword in BODY_OPERATIONS_STRONG_SIGNALS
+        ),
+    }
 
 
 def _suffix_of(name: str) -> str:

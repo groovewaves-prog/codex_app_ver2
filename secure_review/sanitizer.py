@@ -54,6 +54,59 @@ APPROVED_LOCAL_PLACEHOLDERS = [
 ]
 
 
+# Internal naming-convention vocabulary for bare hostname detection (R-H / M1).
+#
+# Used by `_build_internal_hostname_pattern` to match site-internal device
+# identifiers like ``tokyo-rtr-01`` that have no ``hostname:`` label and would
+# otherwise slip past the labelled regex above.
+#
+# Design intent: only match when the *middle* segment is a recognised device
+# keyword. This keeps false positives low — generic ``foo-bar-01`` strings,
+# package versions like ``python-3.11``, dates like ``2026-04-27``, and
+# documentation strings like ``gemma-4-31b`` do not match because their middle
+# segment is not in this vocabulary.
+#
+# Operators may extend this list as new device-type abbreviations appear in
+# real production data. See `docs/operations_policy.md` § 3.2 for the
+# governing policy.
+INTERNAL_HOSTNAME_DEVICE_KEYWORDS: tuple[str, ...] = (
+    # Network equipment
+    "rtr", "fw", "sw", "lb", "nlb", "alb", "gw", "vpn", "ips", "ids", "wlc", "ap",
+    # Servers / compute
+    "srv", "vm", "host", "node", "app", "web", "api", "bat",
+    # Storage / database
+    "db", "nas", "san", "bk", "dr",
+)
+
+
+def _build_internal_hostname_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
+    """Compile the bare-hostname regex from a device-keyword vocabulary.
+
+    Matches strings of the form ``[<location-or-env>{sep}]<device-kw>{sep}<digits>``
+    where:
+
+    - location-or-env (optional)  : one or more alphanumeric chars starting
+      with a letter (e.g. ``tokyo``, ``prd``, ``Tokyo``)
+    - device-kw  (mandatory)       : exact match against ``keywords``
+    - sep                          : ``-`` / ``_`` / ``.``
+    - digits                       : 1-5 decimal digits
+
+    The whole match is case-insensitive. Word boundaries (``\\b``) at both
+    ends prevent partial matches inside larger tokens like ``localhost-01``
+    or ``combat-01``.
+    """
+    keyword_alt = "|".join(re.escape(kw) for kw in keywords)
+    pattern = (
+        r"\b"
+        r"(?:[A-Za-z][A-Za-z0-9]*[-_.])?"   # optional location/env segment
+        rf"(?:{keyword_alt})"               # device-type keyword (mandatory)
+        r"[-_.]"                            # separator
+        r"\d{1,5}"                          # numeric suffix (1-5 digits)
+        r"\b"
+    )
+    return re.compile(pattern, re.IGNORECASE)
+
+
 # Patterns that detect placeholder-like tokens that are NOT in our approved
 # list. If the local LLM invents its own masking style (<REDACTED>, ***, etc.)
 # we want to flag that rather than silently trust it.
@@ -133,6 +186,14 @@ class SensitiveDataSanitizer:
                 re.compile(
                     r"(?im)\b(hostname|device-name|system-name)\b\s*[:= \t]+\s*([A-Za-z0-9_.-]+)"
                 ),
+            ),
+            # R-H / M1: bare hostnames using internal naming convention
+            # (e.g. ``tokyo-rtr-01``). Falls back to the same ``hostname``
+            # category so the placeholder ``[HOSTNAME_NNN]`` numbering stays
+            # consistent with labelled detections above.
+            (
+                "hostname",
+                _build_internal_hostname_pattern(INTERNAL_HOSTNAME_DEVICE_KEYWORDS),
             ),
             (
                 "company",

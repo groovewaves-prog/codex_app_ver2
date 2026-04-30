@@ -181,9 +181,37 @@ SEVERITY_LABELS = {
 
 PROFILE_LABELS = {
     "design": "設計書",
+    "proposal": "企画書",
     "change_runbook": "変更・切替手順書",
     "operations_runbook": "保守・運用手順書",
     "source_code": "ソースコード",
+}
+
+# B3: total verdict labels (A / B / C / D from the structured summary).
+VERDICT_LABELS = {
+    "A": "A: 問題なし",
+    "B": "B: 軽微な指摘",
+    "C": "C: 重要指摘あり",
+    "D": "D: リリース不可",
+}
+
+# B3: total verdict to existing decision-* CSS class for color reuse.
+# A reuses decision-safe (green), B uses decision-safe-light (light green),
+# C reuses decision-mask (orange/amber), D reuses decision-block (red).
+VERDICT_CSS_CLASS = {
+    "A": "decision-safe",
+    "B": "decision-safe",
+    "C": "decision-mask",
+    "D": "decision-block",
+}
+
+# B3: required_timing badge to color hint. Mapped to existing decision-*
+# classes for visual consistency.
+REQUIRED_TIMING_CSS_CLASS = {
+    "リリース前必須": "decision-block",      # red
+    "詳細設計開始前": "decision-mask",        # orange
+    "運用開始前": "decision-mask",            # orange
+    "次フェーズで可": "decision-safe",        # green
 }
 
 
@@ -205,6 +233,30 @@ def _profile_label(value: str | None) -> str:
     if value is None:
         return "-"
     return PROFILE_LABELS.get(value, value)
+
+
+def _verdict_badge(verdict: str) -> str:
+    """B3: render an A/B/C/D verdict badge using existing decision-* classes."""
+    if not verdict:
+        return ""
+    label = VERDICT_LABELS.get(verdict, f"判定: {verdict}")
+    css = VERDICT_CSS_CLASS.get(verdict, "decision-mask")
+    return f'<span class="decision-badge {css}">{label}</span>'
+
+
+def _required_timing_badge(timing: str) -> str:
+    """B3: render a required-timing badge with color based on urgency."""
+    if not timing:
+        return ""
+    css = REQUIRED_TIMING_CSS_CLASS.get(timing, "decision-mask")
+    return f'<span class="decision-badge {css}">{timing}</span>'
+
+
+def _re_review_badge(re_review_required: bool) -> str:
+    """B3: render a re-review-required badge."""
+    if re_review_required:
+        return '<span class="decision-badge decision-mask">再レビュー要</span>'
+    return ""
 
 
 def _reset_state() -> None:
@@ -490,7 +542,46 @@ if review is not None:
 
     left, right = st.columns([4, 2])
     with left:
-        st.markdown(f"**サマリ** — {review.summary}")
+        # B3: render structured summary (4 sections + verdict) when present;
+        # fall back to legacy single-line summary when summary_structured is empty.
+        ss = review.summary_structured
+        if not ss.is_empty():
+            # New structured summary - render 4 sections with verdict badge.
+            if ss.purpose:
+                st.markdown(f"**目的** — {ss.purpose}")
+            if ss.purpose_section_in_document or ss.purpose_divergence:
+                # Show divergence between AI-inferred purpose and the document's
+                # stated purpose, when available.
+                divergence_parts = []
+                if ss.purpose_section_in_document:
+                    divergence_parts.append(
+                        f"_文書記載箇所_: {ss.purpose_section_in_document}"
+                    )
+                if ss.purpose_divergence:
+                    divergence_parts.append(f"_乖離_: {ss.purpose_divergence}")
+                if divergence_parts:
+                    st.markdown(
+                        "<div style='margin-top:0.3rem;color:#5a5040;font-size:0.9rem;'>"
+                        + " · ".join(divergence_parts)
+                        + "</div>",
+                        unsafe_allow_html=True,
+                    )
+            if ss.content_outline:
+                st.markdown(f"**内容要約** — {ss.content_outline}")
+            if ss.overall_evaluation:
+                # Render overall evaluation alongside the verdict badge.
+                badge = _verdict_badge(ss.verdict)
+                st.markdown(
+                    f"**全体評価** — {ss.overall_evaluation} {badge}",
+                    unsafe_allow_html=True,
+                )
+            elif ss.verdict:
+                # Edge case: verdict supplied but no overall_evaluation.
+                badge = _verdict_badge(ss.verdict)
+                st.markdown(f"**総合判定**: {badge}", unsafe_allow_html=True)
+        else:
+            # Legacy: plain-text summary in a single line.
+            st.markdown(f"**サマリ** — {review.summary}")
         # R-B + R-C (ε): show the concrete model identifier alongside the
         # internal provider slug so operators can see at a glance which
         # model produced this review.
@@ -535,16 +626,63 @@ if review is not None:
 
     for issue in sorted_issues:
         severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
-        st.markdown(
-            f"<div class='issue-row {issue.severity}'>"
-            f"<b>[{severity_jp}]</b> {issue.title} "
-            f'<span class="doc-meta"> · 出典: {issue.source_document}</span><br/>'
-            f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
-            f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
-            f"<b>推奨対応:</b> {issue.recommendation}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
+        # B3: prefer structured display when issue has new fields (current_state,
+        # issue, impact, etc.); fall back to legacy details/recommendation only.
+        if issue.has_structured_fields():
+            # New structured display.
+            id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
+            section_suffix = (
+                f' · 章: {issue.section}' if issue.section else ''
+            )
+            timing_badge = _required_timing_badge(issue.required_timing)
+            re_review_badge = _re_review_badge(issue.re_review_required)
+            badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
+            badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
+
+            body_parts = []
+            if issue.current_state:
+                body_parts.append(
+                    f"<div style='margin-top:0.3rem;'>"
+                    f"<b>現状:</b> {issue.current_state}</div>"
+                )
+            if issue.issue:
+                body_parts.append(
+                    f"<div style='margin-top:0.2rem;'>"
+                    f"<b>問題点:</b> {issue.issue}</div>"
+                )
+            if issue.impact:
+                body_parts.append(
+                    f"<div style='margin-top:0.2rem;'>"
+                    f"<b>影響:</b> {issue.impact}</div>"
+                )
+            if issue.recommendation:
+                body_parts.append(
+                    f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+                    f"<b>推奨対応:</b> {issue.recommendation}</div>"
+                )
+
+            st.markdown(
+                f"<div class='issue-row {issue.severity}'>"
+                f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
+                f'<span class="doc-meta"> · 出典: {issue.source_document}{section_suffix}</span>'
+                + "".join(body_parts)
+                + badges_html
+                + "</div>",
+                unsafe_allow_html=True,
+            )
+        else:
+            # Legacy display (pre-B2 LLM responses or providers that don't yet
+            # produce the new schema).
+            st.markdown(
+                f"<div class='issue-row {issue.severity}'>"
+                f"<b>[{severity_jp}]</b> {issue.title} "
+                f'<span class="doc-meta"> · 出典: {issue.source_document}</span><br/>'
+                f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
+                f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
+                f"<b>推奨対応:</b> {issue.recommendation}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
         st.code(review.prompt_preview or "(空)", language="text")

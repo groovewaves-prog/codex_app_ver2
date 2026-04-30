@@ -175,5 +175,112 @@ class BackwardCompatibilityTests(unittest.TestCase):
         self.assertEqual(result.confidence, "medium")
 
 
+# ----------------------------------------------------------------------
+# B1 (R-L) tests: rubric deepening, proposal profile, filename signal extension
+# ----------------------------------------------------------------------
+
+
+class DesignRubricDeepeningTests(unittest.TestCase):
+    """B1: design rubric was deepened from 2 MCs to 5 MCs and from 3-checkpoint
+    EAs to 5-7-checkpoint EAs."""
+
+    def test_design_has_five_mandatory_checks(self) -> None:
+        from secure_review.rubric import RUBRICS
+        design = RUBRICS["design"]
+        self.assertEqual(len(design.mandatory_checks), 5)
+        ids = [mc.id for mc in design.mandatory_checks]
+        self.assertIn("requirement_traceability", ids)
+        self.assertIn("non_functional_coverage", ids)
+        self.assertIn("risk_and_open_issues", ids)
+
+    def test_design_evaluation_axes_weight_sum_is_100(self) -> None:
+        from secure_review.rubric import RUBRICS
+        design = RUBRICS["design"]
+        total = sum(ax.weight for ax in design.evaluation_axes)
+        self.assertEqual(total, 100)
+
+    def test_design_security_axis_has_more_than_three_checkpoints(self) -> None:
+        """B1 enriched the security axis from 3 to 7 checkpoints."""
+        from secure_review.rubric import RUBRICS
+        design = RUBRICS["design"]
+        sec_axis = next(ax for ax in design.evaluation_axes if ax.id == "security")
+        self.assertGreater(len(sec_axis.checkpoints), 3)
+
+
+class ProposalProfileTests(unittest.TestCase):
+    """B1: new ``proposal`` profile for 企画書 / 提案書."""
+
+    def test_proposal_rubric_exists(self) -> None:
+        from secure_review.rubric import RUBRICS
+        self.assertIn("proposal", RUBRICS)
+
+    def test_proposal_rubric_has_four_mandatory_checks(self) -> None:
+        """proposal applies purpose / configuration / traceability / risks
+        but not non_functional_coverage (which is design-only)."""
+        from secure_review.rubric import RUBRICS
+        proposal = RUBRICS["proposal"]
+        self.assertEqual(len(proposal.mandatory_checks), 4)
+        ids = [mc.id for mc in proposal.mandatory_checks]
+        self.assertNotIn("non_functional_coverage", ids)
+
+    def test_proposal_evaluation_axes_weight_sum_is_100(self) -> None:
+        from secure_review.rubric import RUBRICS
+        proposal = RUBRICS["proposal"]
+        total = sum(ax.weight for ax in proposal.evaluation_axes)
+        self.assertEqual(total, 100)
+
+
+class ProposalFilenameSignalTests(unittest.TestCase):
+    """B1: filename signal extended with FILENAME_PROPOSAL_KEYWORDS."""
+
+    def test_filename_proposal_simple(self) -> None:
+        result = detect_document_profile(
+            [_doc("新メールリレーシステム企画書.pdf", "ビジネス目的の概要")]
+        )
+        self.assertEqual(result.document_profile, "proposal")
+        self.assertEqual(result.confidence, "high")
+
+    def test_design_takes_priority_over_proposal(self) -> None:
+        """When both design and proposal keywords appear, design wins."""
+        result = detect_document_profile(
+            [_doc("運用設計書(企画段階).pdf", "")]
+        )
+        self.assertEqual(result.document_profile, "design")
+
+    def test_proposal_takes_priority_over_change_runbook(self) -> None:
+        """When both proposal and change_runbook signals are present
+        (no design), proposal wins by priority order."""
+        result = detect_document_profile(
+            [
+                _doc("企画書 v1.pdf", ""),
+                _doc("移行作業計画書.pdf", ""),
+            ]
+        )
+        # Both filenames hit, so confidence=conflict and the priority
+        # tuple breaks the tie in favour of proposal.
+        self.assertEqual(result.document_profile, "proposal")
+        self.assertEqual(result.confidence, "conflict")
+
+
+class MandatoryCheckSelectionTests(unittest.TestCase):
+    """B1: ``_select_mandatory_checks`` filters by applies_to."""
+
+    def test_design_picks_traceability_and_non_functional_and_risks(self) -> None:
+        from secure_review.rubric import _select_mandatory_checks
+        ids = [mc.id for mc in _select_mandatory_checks("design")]
+        self.assertIn("requirement_traceability", ids)
+        self.assertIn("non_functional_coverage", ids)
+        self.assertIn("risk_and_open_issues", ids)
+        # timechart is runbook-only, must NOT be included for design
+        self.assertNotIn("timechart_information", ids)
+
+    def test_change_runbook_picks_timechart_but_not_traceability(self) -> None:
+        from secure_review.rubric import _select_mandatory_checks
+        ids = [mc.id for mc in _select_mandatory_checks("change_runbook")]
+        self.assertIn("timechart_information", ids)
+        self.assertNotIn("requirement_traceability", ids)
+        self.assertNotIn("non_functional_coverage", ids)
+
+
 if __name__ == "__main__":
     unittest.main()

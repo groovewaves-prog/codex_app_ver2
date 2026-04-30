@@ -73,15 +73,89 @@ class SensitivityAssessment:
 
 
 @dataclass
+class ReviewSummary:
+    """Structured summary of a review result.
+
+    Introduced in B0 (R-L preparation) alongside the unstructured ``summary``
+    string on ``ReviewResult`` for backward compatibility. Fields are all
+    optional so older LLM responses that don't supply this structure still
+    parse cleanly.
+
+    Fields:
+        purpose: AI-inferred purpose of the document set.
+        purpose_section_in_document: If a "目的" / "本書の位置付け" section
+            exists in the document, where it is located (e.g. "1.1 本書の位置付け").
+            Empty string if not found.
+        purpose_divergence: Description of any divergence between the
+            document's stated purpose and the AI-inferred purpose. Empty
+            string if there's no divergence or no stated purpose.
+        content_outline: AI-generated outline of what the document(s) contain.
+        overall_evaluation: Overall assessment, equivalent to the legacy
+            ``summary`` string but explicitly framed as evaluation rather
+            than mixed purpose/content/evaluation prose.
+        verdict: Overall verdict - one of "A" (no issues), "B" (minor),
+            "C" (significant issues, re-review recommended), "D" (cannot
+            release as-is). Empty string if the LLM did not provide one.
+    """
+
+    purpose: str = ""
+    purpose_section_in_document: str = ""
+    purpose_divergence: str = ""
+    content_outline: str = ""
+    overall_evaluation: str = ""
+    verdict: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    def is_empty(self) -> bool:
+        """True if no fields are populated (LLM did not return a structured summary)."""
+        return not any(
+            (
+                self.purpose,
+                self.purpose_section_in_document,
+                self.purpose_divergence,
+                self.content_outline,
+                self.overall_evaluation,
+                self.verdict,
+            )
+        )
+
+
+@dataclass
 class ReviewIssue:
     severity: str
     title: str
     details: str
     recommendation: str
     source_document: str
+    # B0: structured-issue fields. All optional so legacy LLM responses
+    # (with only details / recommendation) still parse cleanly. When the LLM
+    # returns the new schema, these are populated and ``details`` may be
+    # synthesised from current_state + issue + impact for backward-compat
+    # display paths.
+    issue_id: str = ""
+    section: str = ""
+    current_state: str = ""
+    issue: str = ""
+    impact: str = ""
+    required_timing: str = ""
+    re_review_required: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    def has_structured_fields(self) -> bool:
+        """True if at least one B0 structured field is populated."""
+        return bool(
+            self.issue_id
+            or self.section
+            or self.current_state
+            or self.issue
+            or self.impact
+            or self.required_timing
+            or self.re_review_required
+        )
 
 
 @dataclass
@@ -101,10 +175,17 @@ class ReviewResult:
     # (e.g. ``gemma-4-gemini-api``). Empty for providers that do not have a
     # distinct model concept (mock).
     model: str = ""
+    # B0: structured summary (purpose / divergence / outline / evaluation /
+    # verdict). The legacy ``summary`` string field above is preserved for
+    # backward compatibility - older callers can keep using it. New callers
+    # should prefer ``summary_structured`` when populated. Defaults to an
+    # empty ReviewSummary, whose ``is_empty()`` returns True.
+    summary_structured: ReviewSummary = field(default_factory=ReviewSummary)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "summary": self.summary,
+            "summary_structured": self.summary_structured.to_dict(),
             "issues": [issue.to_dict() for issue in self.issues],
             "provider": self.provider,
             "prompt_preview": self.prompt_preview,

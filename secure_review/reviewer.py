@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from secure_review.models import ReviewIssue, ReviewResult, SanitizedDocument
+from secure_review.models import ReviewIssue, ReviewResult, ReviewSummary, SanitizedDocument
 from secure_review.network_guard import UpstreamHttpError, post_json_safely
 from secure_review.rubric import ReviewRubric, classify_documents, choose_rubric, render_rubric_for_prompt
 
@@ -17,60 +17,93 @@ from secure_review.rubric import ReviewRubric, classify_documents, choose_rubric
 LOGGER = logging.getLogger("secure_review.reviewer")
 
 
-SYSTEM_PROMPT = """あなたはネットワーク、インフラ、コードのシニアレビュー担当者です。
+SYSTEM_PROMPT = """あなたは日本のIT業界における設計レビュー担当者です。
 匿名化済みの成果物をレビューしてください。原文の秘密情報や本人特定情報を求めないでください。
-リスク、矛盾、強化漏れ、運用上の懸念、決定的な不足内容に焦点を当て、必ず日本語で簡潔にフィードバックしてください。
+
+# 役割と評価姿勢
+
+- 指摘は感情的・主観的表現を避け、事実ベースで客観的に記述してください。
+- 「不適切である」のような断定よりも「〜の改善余地がある」「〜のリスクがある」のような事実ベースの記述を好んでください。
+- 設計・構築・運用・セキュリティ・監査・可用性・コストへの影響を意識してください。
+
+# 評価方針 (指摘の構造)
+
+各指摘は必ず以下のフィールドを持つ JSON オブジェクトとして返してください。
+
+- severity: "high" / "medium" / "low" / "info" のいずれか
+- title: 指摘のタイトル (日本語、簡潔に)
+- source_document: 対象文書のファイル名
+- section: 対象箇所の章番号や見出し (例: "2.4 システム構成図")。特定できない場合は空文字列。
+- current_state: ドキュメントに何が書かれているか (現状の事実描写)
+- issue: なぜそれが問題か (問題の本質)
+- impact: 放置するとどう影響するか (運用・構築・セキュリティ・監査・コスト等の観点で具体的に列挙)
+- recommendation: 修正すべき具体項目を列挙形式で記述 (抽象的な「対応してください」ではなく、含めるべき要素を明示)
+- required_timing: 以下のいずれか:
+  - "リリース前必須": リリース前に必ず是正すべき (高重要度に多い)
+  - "詳細設計開始前": 詳細設計フェーズに入る前に解決すべき
+  - "運用開始前": 運用開始までに整備すべき
+  - "次フェーズで可": 当該フェーズでは見送り可能、次フェーズで対応
+- re_review_required: true / false (指摘是正後に再レビューが必要か)
+- details: 後方互換のため、現状/問題点/影響を 1-2 文に要約した文 (省略可、空文字列でも可)
+
+# サマリー方針 (4 セクション + 総合判定)
+
+レスポンス全体の summary は文字列ではなく以下の構造のオブジェクトにしてください。
+
+- purpose: ドキュメントから読み取った目的の記述 (日本語)
+- purpose_section_in_document: ドキュメント内に「目的」「本書の位置付け」等のセクションがある場合、その章番号や見出し (例: "1.1 本書の位置付け")。なければ空文字列。
+- purpose_divergence: 上記の目的セクションの記述と、あなたが読み取った目的に乖離がある場合、その内容。乖離がない、または目的セクションがない場合は空文字列。
+- content_outline: ドキュメントの内容要約 (何が書かれているか、3-5 文程度)
+- overall_evaluation: 全体評価 (整合性・重大懸念点・全体的な品質、3-5 文)
+- verdict: 総合判定。以下のいずれか:
+  - "A": 問題なし
+  - "B": 軽微な指摘のみ、軽い修正で可
+  - "C": 重要指摘あり、修正後に再レビュー推奨
+  - "D": 重大指摘あり、現時点ではリリース不可
 
 # 出力形式 (JSON 必須)
 
 必ず以下の構造の JSON オブジェクトのみを返してください。説明文や markdown のコードブロック (```) を付けないでください。
 
 {
-  "summary": "全体サマリの文章 (日本語)",
+  "summary": {
+    "purpose": "...",
+    "purpose_section_in_document": "...",
+    "purpose_divergence": "...",
+    "content_outline": "...",
+    "overall_evaluation": "...",
+    "verdict": "C"
+  },
   "issues": [
     {
       "severity": "high",
-      "title": "指摘のタイトル (日本語、簡潔に)",
-      "details": "詳細説明 (日本語)",
-      "recommendation": "推奨対応 (日本語)",
-      "source_document": "対象文書のファイル名"
+      "title": "...",
+      "source_document": "...",
+      "section": "...",
+      "current_state": "...",
+      "issue": "...",
+      "impact": "...",
+      "recommendation": "...",
+      "required_timing": "リリース前必須",
+      "re_review_required": true,
+      "details": ""
     }
   ]
 }
 
 # 重要な指示
 
-- severity は必ず "high" / "medium" / "low" / "info" のいずれかの文字列値を使うこと。
-- "title", "details", "recommendation", "source_document" には、上記の構造例の文字列ではなく、実際のレビュー内容を入れること。
-- "severity" や "title" などのフィールド名そのものを値として返さないこと。
 - 重大度の判定基準:
-  - high: ブロッキング相当 (送信前に修正必須、安全性・整合性に重大な穴)
-  - medium: 必須に近い改善
-  - low: 改善推奨
-  - info: 補足情報
-- issues 配列が空でもよい。その場合は summary に「重大な指摘なし」等を明記する。
-
-# 出力の具体例 (この具体例の値は例示用。実際のレビュー対象に合わせて中身を必ず置き換えること)
-
-{
-  "summary": "提示された変更手順書には目的と切戻し条件の記載があるが、構成情報の参照先と go/no-go 判定基準が不明確である。",
-  "issues": [
-    {
-      "severity": "high",
-      "title": "構成情報の参照先が不明",
-      "details": "本書には「構成図: 別紙参照」との記載があるが、別紙の正式名称や格納先が示されていないため、作業前確認に支障が出る可能性がある。",
-      "recommendation": "構成図の正式名称・格納先パス・版数を本文に明記すること。",
-      "source_document": "example.txt"
-    },
-    {
-      "severity": "medium",
-      "title": "go/no-go 判定基準が未定義",
-      "details": "切戻し条件は記載されているが、各作業段階での作業継続/中止 (go/no-go) の判定基準が示されていない。",
-      "recommendation": "各作業段階に go/no-go チェックポイントと具体的な判定基準を追記すること。",
-      "source_document": "example.txt"
-    }
-  ]
-}
+  - high: ブロッキング相当 (リリース前必須是正、安全性・整合性に重大な穴)
+  - medium: 必須に近い改善 (詳細設計開始前か運用開始前に対応)
+  - low: 改善推奨 (次フェーズで可)
+  - info: 補足情報・参考事項
+- "title", "current_state", "issue", "impact", "recommendation" には実際のレビュー内容を入れること。フィールド名そのものを値として返さないこと。
+- "impact" は箇条書き的に複数の影響観点 (運用・セキュリティ・コスト等) を述べること。単に「影響がある」のような抽象表現は避けること。
+- "recommendation" は「〜してください」だけでなく、含めるべき具体項目を列挙すること。
+- issues 配列が空でもよい。その場合は overall_evaluation に「重大な指摘なし」等を明記する。
+- ルーブリックの mandatory_checks に違反する箇所は high または medium で確実に拾うこと。
+- ルーブリックの evaluation_axes の checkpoint / fail_condition と照らして、抜け漏れを確認すること。
 """
 
 
@@ -78,10 +111,31 @@ SYSTEM_PROMPT = """あなたはネットワーク、インフラ、コードの�
 # server-side when the model supports responseSchema. For models that ignore
 # it (or for non-Gemini providers), the prompt above still describes the same
 # structure, and the parser handles graceful fallback.
+#
+# B2: schema extended to cover the structured-summary and 6-field issue
+# format. All new fields are optional so older prompts/responses still
+# validate. ``required`` is kept minimal (severity + title + source_document
+# for issues, nothing for summary itself) to avoid the API rejecting valid
+# legacy responses.
 REVIEW_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
-        "summary": {"type": "string"},
+        "summary": {
+            "anyOf": [
+                {"type": "string"},
+                {
+                    "type": "object",
+                    "properties": {
+                        "purpose": {"type": "string"},
+                        "purpose_section_in_document": {"type": "string"},
+                        "purpose_divergence": {"type": "string"},
+                        "content_outline": {"type": "string"},
+                        "overall_evaluation": {"type": "string"},
+                        "verdict": {"type": "string"},
+                    },
+                },
+            ]
+        },
         "issues": {
             "type": "array",
             "items": {
@@ -95,12 +149,16 @@ REVIEW_RESPONSE_SCHEMA = {
                     "details": {"type": "string"},
                     "recommendation": {"type": "string"},
                     "source_document": {"type": "string"},
+                    "section": {"type": "string"},
+                    "current_state": {"type": "string"},
+                    "issue": {"type": "string"},
+                    "impact": {"type": "string"},
+                    "required_timing": {"type": "string"},
+                    "re_review_required": {"type": "boolean"},
                 },
                 "required": [
                     "severity",
                     "title",
-                    "details",
-                    "recommendation",
                     "source_document",
                 ],
             },
@@ -426,10 +484,13 @@ class HttpLlmReviewProvider(ReviewProvider):
         content = _extract_openai_like_text(response)
         # R-B + R-C: same pattern as the Gemma provider — prefer the model's
         # own summary; fall back to an explicit Japanese notice when absent.
-        model_summary, issues = _parse_review_payload(content, documents)
+        # B2: extract structured summary too; assign profile-based issue IDs.
+        model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        _assign_issue_ids(issues, classification.document_profile)
         summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
         return _build_review_result(
             summary=summary,
+            summary_structured=summary_struct,
             issues=issues,
             provider=self.name,
             documents=documents,
@@ -514,10 +575,13 @@ class GeminiApiReviewProvider(ReviewProvider):
         # operators can spot misbehaving responses (choice γ from the design
         # discussion). The English boilerplate previously shown unconditionally
         # is removed.
-        model_summary, issues = _parse_review_payload(content, documents)
+        # B2: also extract the structured summary and assign issue IDs.
+        model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        _assign_issue_ids(issues, classification.document_profile)
         summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
         return _build_review_result(
             summary=summary,
+            summary_structured=summary_struct,
             issues=issues,
             provider=self.name,
             documents=documents,
@@ -619,6 +683,7 @@ def _build_review_result(
     prompt: str | None = None,
     raw_response: str = "",
     model: str = "",
+    summary_structured: ReviewSummary | None = None,
 ) -> ReviewResult:
     prompt_text = prompt or build_prompt(documents, rubric)
     return ReviewResult(
@@ -633,6 +698,7 @@ def _build_review_result(
         classification_reason=classification_reason,
         raw_response=raw_response,
         model=model,
+        summary_structured=summary_structured or ReviewSummary(),
     )
 
 
@@ -704,44 +770,84 @@ def _parse_review_response(content: str, documents: list[SanitizedDocument]) -> 
     pipe-delimited parser only for backwards compatibility.
 
     Backwards-compat shim: returns issues only. Callers that also need the
-    LLM-supplied summary should use ``_parse_review_payload`` instead.
+    LLM-supplied summary or the structured ReviewSummary should use
+    ``_parse_review_payload`` instead.
     """
-    _, issues = _parse_review_payload(content, documents)
+    _, _, issues = _parse_review_payload(content, documents)
+    return issues
+
+
+# B2: profile-based prefixes for Python-side issue ID assignment.
+# When the LLM does not supply an ID (or when we want consistent prefixes
+# regardless of LLM behaviour), callers invoke ``_assign_issue_ids`` after
+# parsing.
+_PROFILE_ID_PREFIX = {
+    "design": "D",
+    "proposal": "P",
+    "change_runbook": "CR",
+    "operations_runbook": "OR",
+    "source_code": "SC",
+}
+
+
+def _assign_issue_ids(
+    issues: list[ReviewIssue], document_profile: str
+) -> list[ReviewIssue]:
+    """Assign IDs of the form "{prefix}-{NNN}" to issues that don't have one.
+
+    The prefix is derived from the document profile (e.g. design -> "D-001").
+    Issues whose ``issue_id`` is already populated (LLM supplied one) are
+    left untouched.
+    """
+    prefix = _PROFILE_ID_PREFIX.get(document_profile, "I")
+    counter = 1
+    for issue in issues:
+        if not issue.issue_id:
+            issue.issue_id = f"{prefix}-{counter:03d}"
+        counter += 1
     return issues
 
 
 def _parse_review_payload(
     content: str, documents: list[SanitizedDocument]
-) -> tuple[str, list[ReviewIssue]]:
-    """Parse a review response and return ``(summary, issues)``.
+) -> tuple[str, ReviewSummary, list[ReviewIssue]]:
+    """Parse a review response and return ``(summary_text, summary_struct, issues)``.
 
-    R-C: extracts both the LLM-supplied ``summary`` field and the ``issues``
-    list from the JSON response, so the UI can show the model's actual
-    summary text rather than a fixed boilerplate string.
+    B2: extended to return both the legacy plain-text summary and the new
+    structured ``ReviewSummary``. Backward compatibility is preserved:
 
-    The summary is empty if the JSON did not include one, the response was
-    not valid JSON (legacy pipe format), or the value was not a string.
-    Callers are expected to fall back to a human-readable default when
-    the returned summary is empty (R-B / R-C choice γ).
+    - If the LLM returns the legacy schema (summary as string), summary_text
+      is populated and summary_struct is empty (``is_empty()`` returns True).
+    - If the LLM returns the new schema (summary as object), summary_text is
+      synthesised from ``overall_evaluation`` for legacy display paths, and
+      summary_struct holds the structured form.
+    - If the response is not JSON, falls back to the legacy pipe-format
+      parser as before, returning ("", empty_summary, issues).
+
+    Issues parsing also handles both old (title/details/recommendation only)
+    and new (current_state/issue/impact/required_timing/re_review_required)
+    schemas. Missing new fields default to empty strings / False.
     """
-    summary, json_issues = _parse_json_payload(content, documents)
+    summary_text, summary_struct, json_issues = _parse_json_payload(content, documents)
     if json_issues is not None:
-        return summary, json_issues
-    return "", _parse_issue_blocks(content, documents)
+        return summary_text, summary_struct, json_issues
+    return "", ReviewSummary(), _parse_issue_blocks(content, documents)
 
 
 def _parse_json_payload(
     content: str, documents: list[SanitizedDocument]
-) -> tuple[str, list[ReviewIssue] | None]:
-    """Internal: try to parse JSON and return ``(summary, issues_or_None)``.
+) -> tuple[str, ReviewSummary, list[ReviewIssue] | None]:
+    """Internal: try to parse JSON and return ``(summary_text, summary_struct, issues_or_None)``.
 
-    Returns ``("", None)`` if the content is not JSON; the caller falls back
-    to the legacy parser. Returns ``(summary, issues)`` (issues possibly
-    empty) when JSON parses successfully.
+    Returns ``("", empty_summary, None)`` if the content is not JSON; the
+    caller falls back to the legacy parser. Returns
+    ``(summary_text, summary_struct, issues)`` (issues possibly empty) when
+    JSON parses successfully.
     """
     text = content.strip()
+    empty_summary = ReviewSummary()
     if not text:
-        return "", None
+        return "", empty_summary, None
 
     # Strip optional markdown fences the model may have added despite the
     # explicit instruction to return JSON only.
@@ -750,21 +856,41 @@ def _parse_json_payload(
         text = re.sub(r"\s*```$", "", text)
 
     if not (text.startswith("{") and text.rstrip().endswith("}")):
-        return "", None
+        return "", empty_summary, None
 
     try:
         payload = json.loads(text)
     except (json.JSONDecodeError, ValueError):
-        return "", None
+        return "", empty_summary, None
     if not isinstance(payload, dict):
-        return "", None
+        return "", empty_summary, None
 
+    # B2: summary may be either a string (legacy) or an object (new schema).
     summary_raw = payload.get("summary", "")
-    summary = str(summary_raw).strip() if isinstance(summary_raw, str) else ""
+    summary_text = ""
+    summary_struct = ReviewSummary()
+    if isinstance(summary_raw, str):
+        # Legacy schema: plain text summary.
+        summary_text = summary_raw.strip()
+    elif isinstance(summary_raw, dict):
+        # New schema: structured summary.
+        summary_struct = ReviewSummary(
+            purpose=str(summary_raw.get("purpose", "")).strip(),
+            purpose_section_in_document=str(
+                summary_raw.get("purpose_section_in_document", "")
+            ).strip(),
+            purpose_divergence=str(summary_raw.get("purpose_divergence", "")).strip(),
+            content_outline=str(summary_raw.get("content_outline", "")).strip(),
+            overall_evaluation=str(summary_raw.get("overall_evaluation", "")).strip(),
+            verdict=str(summary_raw.get("verdict", "")).strip(),
+        )
+        # Synthesise legacy plain-text summary from overall_evaluation so
+        # callers that still read ``ReviewResult.summary`` keep working.
+        summary_text = summary_struct.overall_evaluation
 
     raw_issues = payload.get("issues", [])
     if not isinstance(raw_issues, list):
-        return summary, []
+        return summary_text, summary_struct, []
 
     default_source = documents[0].name if documents else "-"
     parsed: list[ReviewIssue] = []
@@ -779,9 +905,38 @@ def _parse_json_payload(
         recommendation = str(raw.get("recommendation", "")).strip()
         source = str(raw.get("source_document", "")).strip() or default_source
 
+        # B2: new structured fields (all optional).
+        section = str(raw.get("section", "")).strip()
+        current_state = str(raw.get("current_state", "")).strip()
+        issue_text = str(raw.get("issue", "")).strip()
+        impact = str(raw.get("impact", "")).strip()
+        required_timing = str(raw.get("required_timing", "")).strip()
+        re_review_raw = raw.get("re_review_required", False)
+        re_review_required = bool(re_review_raw) if isinstance(re_review_raw, bool) else False
+
         candidate_values = [title.lower(), details.lower(), recommendation.lower()]
         if any(value in _PLACEHOLDER_TOKENS for value in candidate_values):
             continue
+        # B2: also reject placeholder values in the new fields.
+        new_field_values = [
+            current_state.lower(), issue_text.lower(), impact.lower(),
+        ]
+        if any(value in _PLACEHOLDER_TOKENS for value in new_field_values):
+            continue
+
+        # B2: synthesise legacy ``details`` when only the new fields are
+        # populated, so backward-compat display paths still have something
+        # to show.
+        if not details and (current_state or issue_text or impact):
+            parts = []
+            if current_state:
+                parts.append(f"【現状】{current_state}")
+            if issue_text:
+                parts.append(f"【問題点】{issue_text}")
+            if impact:
+                parts.append(f"【影響】{impact}")
+            details = " ".join(parts)
+
         if not title and not details:
             continue
 
@@ -792,10 +947,18 @@ def _parse_json_payload(
                 details=details or "(詳細なし)",
                 recommendation=recommendation or "(推奨対応の記載なし)",
                 source_document=source,
+                # B2: structured fields. issue_id is not set here - callers
+                # assign it after parsing via _assign_issue_ids().
+                section=section,
+                current_state=current_state,
+                issue=issue_text,
+                impact=impact,
+                required_timing=required_timing,
+                re_review_required=re_review_required,
             )
         )
 
-    return summary, parsed
+    return summary_text, summary_struct, parsed
 
 
 def _parse_json_issues(

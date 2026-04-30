@@ -307,7 +307,7 @@ class ReviewPayloadParsingTests(unittest.TestCase):
             '"details": "詳細", "recommendation": "追加すること", '
             '"source_document": "doc.md"}]}'
         )
-        summary, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        summary, _, issues = _parse_review_payload(content, [_doc(name="doc.md")])
         self.assertEqual(summary, "提示された手順書は目的の記載があるが構成図が無い。")
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].severity, "high")
@@ -321,7 +321,7 @@ class ReviewPayloadParsingTests(unittest.TestCase):
             '{"issues": [{"severity": "low", "title": "minor", '
             '"details": "x", "recommendation": "y", "source_document": "doc.md"}]}'
         )
-        summary, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        summary, _, issues = _parse_review_payload(content, [_doc(name="doc.md")])
         self.assertEqual(summary, "")
         self.assertEqual(len(issues), 1)
 
@@ -331,7 +331,7 @@ class ReviewPayloadParsingTests(unittest.TestCase):
         from secure_review.reviewer import _parse_review_payload
 
         content = "ISSUE|high|legacy title|legacy details|legacy reco|doc.md"
-        summary, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        summary, _, issues = _parse_review_payload(content, [_doc(name="doc.md")])
         self.assertEqual(summary, "")
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].title, "legacy title")
@@ -425,6 +425,128 @@ class GeminiSummarySurfacingTests(unittest.TestCase):
         self.assertEqual(result.model, "gemma-4-31b-it")
         # The internal provider slug stays separate.
         self.assertEqual(result.provider, "gemma-4-gemini-api")
+
+
+# ----------------------------------------------------------------------
+# B2 (R-L) tests: structured-summary parsing, 6-field issues, ID assignment
+# ----------------------------------------------------------------------
+
+
+class StructuredSummaryParsingTests(unittest.TestCase):
+    """B2: when LLM returns ``summary`` as an object, parser populates
+    ReviewSummary; when it returns a string (legacy), it goes into the
+    plain-text summary slot and ReviewSummary stays empty."""
+
+    def test_new_schema_object_summary(self) -> None:
+        from secure_review.reviewer import _parse_review_payload
+        content = (
+            '{"summary": {'
+            '"purpose": "AWS SES でのメール基盤", '
+            '"purpose_section_in_document": "1.1", '
+            '"purpose_divergence": "", '
+            '"content_outline": "ネットワーク構成と運用方針を記載", '
+            '"overall_evaluation": "全体方向性は妥当", '
+            '"verdict": "C"}, '
+            '"issues": []}'
+        )
+        text, struct, issues = _parse_review_payload(content, [_doc(name="d.pdf")])
+        self.assertFalse(struct.is_empty())
+        self.assertEqual(struct.verdict, "C")
+        self.assertEqual(struct.purpose, "AWS SES でのメール基盤")
+        # plain-text summary is synthesised from overall_evaluation
+        self.assertEqual(text, "全体方向性は妥当")
+
+    def test_legacy_string_summary_keeps_struct_empty(self) -> None:
+        from secure_review.reviewer import _parse_review_payload
+        content = '{"summary": "全体OK", "issues": []}'
+        text, struct, issues = _parse_review_payload(content, [_doc(name="d.pdf")])
+        self.assertEqual(text, "全体OK")
+        self.assertTrue(struct.is_empty())
+
+
+class StructuredIssueParsingTests(unittest.TestCase):
+    """B2: parser extracts 6 new optional fields from issue objects."""
+
+    def test_new_six_field_issue_parses(self) -> None:
+        from secure_review.reviewer import _parse_review_payload
+        content = (
+            '{"summary": {}, "issues": [{'
+            '"severity": "high", "title": "認証情報の保管", '
+            '"source_document": "design.pdf", "section": "5. メール設計", '
+            '"current_state": "GoogleDriveで永久保管", '
+            '"issue": "汎用ストレージで機密情報を長期保管", '
+            '"impact": "漏洩時影響大、SES制限リスク", '
+            '"recommendation": "Secrets Manager移行、ローテーション", '
+            '"required_timing": "リリース前必須", '
+            '"re_review_required": true}]}'
+        )
+        _, _, issues = _parse_review_payload(content, [_doc(name="design.pdf")])
+        self.assertEqual(len(issues), 1)
+        i = issues[0]
+        self.assertTrue(i.has_structured_fields())
+        self.assertEqual(i.section, "5. メール設計")
+        self.assertEqual(i.current_state, "GoogleDriveで永久保管")
+        self.assertEqual(i.required_timing, "リリース前必須")
+        self.assertTrue(i.re_review_required)
+
+    def test_details_synthesised_from_new_fields(self) -> None:
+        """When LLM returns only the new fields (no legacy ``details``),
+        the parser synthesises ``details`` from current_state + issue + impact
+        for backward-compat display paths."""
+        from secure_review.reviewer import _parse_review_payload
+        content = (
+            '{"summary": {}, "issues": [{'
+            '"severity": "low", "title": "x", "source_document": "d.pdf", '
+            '"current_state": "状態A", "issue": "問題B", "impact": "影響C", '
+            '"recommendation": "対応D"}]}'
+        )
+        _, _, issues = _parse_review_payload(content, [_doc(name="d.pdf")])
+        self.assertEqual(len(issues), 1)
+        # The synthesised ``details`` contains all three new-field bracketed
+        # sections so legacy display paths can render something readable.
+        self.assertIn("【現状】", issues[0].details)
+        self.assertIn("【問題点】", issues[0].details)
+        self.assertIn("【影響】", issues[0].details)
+
+
+class IssueIdAssignmentTests(unittest.TestCase):
+    """B2: ``_assign_issue_ids`` adds profile-prefixed IDs."""
+
+    def test_design_profile_gets_d_prefix(self) -> None:
+        from secure_review.reviewer import _assign_issue_ids
+        from secure_review.models import ReviewIssue
+        issues = [
+            ReviewIssue(severity="high", title="t1", details="d1",
+                        recommendation="r1", source_document="x.pdf"),
+            ReviewIssue(severity="low", title="t2", details="d2",
+                        recommendation="r2", source_document="x.pdf"),
+        ]
+        _assign_issue_ids(issues, "design")
+        self.assertEqual(issues[0].issue_id, "D-001")
+        self.assertEqual(issues[1].issue_id, "D-002")
+
+    def test_proposal_profile_gets_p_prefix(self) -> None:
+        from secure_review.reviewer import _assign_issue_ids
+        from secure_review.models import ReviewIssue
+        issues = [
+            ReviewIssue(severity="medium", title="t", details="d",
+                        recommendation="r", source_document="x.pdf"),
+        ]
+        _assign_issue_ids(issues, "proposal")
+        self.assertEqual(issues[0].issue_id, "P-001")
+
+    def test_existing_id_preserved(self) -> None:
+        """If LLM supplied an issue_id, ``_assign_issue_ids`` must not
+        overwrite it."""
+        from secure_review.reviewer import _assign_issue_ids
+        from secure_review.models import ReviewIssue
+        issues = [
+            ReviewIssue(severity="high", title="t", details="d",
+                        recommendation="r", source_document="x.pdf",
+                        issue_id="LLM-CUSTOM-42"),
+        ]
+        _assign_issue_ids(issues, "design")
+        self.assertEqual(issues[0].issue_id, "LLM-CUSTOM-42")
 
 
 if __name__ == "__main__":

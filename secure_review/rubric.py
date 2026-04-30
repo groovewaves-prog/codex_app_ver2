@@ -87,7 +87,87 @@ COMMON_MANDATORY_CHECKS = (
         ),
         applies_to=("build_runbook", "change_runbook", "operations_runbook"),
     ),
+    # B1: traceability between requirements and design (R-L)
+    MandatoryCheck(
+        id="requirement_traceability",
+        name="要件とのトレーサビリティ",
+        requirement=(
+            "企画書または要件定義書の内容が設計書に反映され、各要件に対応する設計項目が"
+            "確認できること。要件側の文書が同一レビューに含まれない場合は、本資料側に"
+            "前提とする要件・制約条件の参照記述があれば可とする。"
+        ),
+        check_points=(
+            "前提とする要件・要望が冒頭または背景に記載されている",
+            "機能要件と設計項目の対応が読み取れる",
+            "非機能要件(可用性・性能・セキュリティ等)が設計に落ちている",
+            "要件にない構成や機能が混入していない",
+        ),
+        fail_conditions=(
+            "要件への参照がまったくなく、設計判断の根拠が不明",
+            "設計書に突然出てくる機能や構成があり、要件との対応が取れない",
+        ),
+        applies_to=("design", "proposal"),
+    ),
+    # B1: non-functional requirements coverage (R-L)
+    MandatoryCheck(
+        id="non_functional_coverage",
+        name="非機能要件の網羅",
+        requirement=(
+            "可用性・性能・拡張性・セキュリティ・運用性・保守性・監査性・DR・"
+            "バックアップ・ログ管理 の各観点が設計に反映されていること。すべてを"
+            "詳述する必要はないが、各観点に方針または『対象外』の判断理由が記載"
+            "されていること。"
+        ),
+        check_points=(
+            "可用性方針(冗長化・SPOF排除等)が記載されている",
+            "性能要件または性能目標が記載されている",
+            "拡張性方針(スケーリング戦略等)が記載されている",
+            "セキュリティ方針(認証・認可・暗号化等)が記載されている",
+            "運用性・保守性方針が記載されている",
+            "監査ログまたは証跡の取得方針が記載されている",
+            "DR / バックアップ / リストア方針が記載されている",
+            "ログ管理方針(取得対象・保管期間・アクセス制御)が記載されている",
+        ),
+        fail_conditions=(
+            "可用性・セキュリティ・運用性のいずれかが完全に欠落している",
+            "DR や監査要件が必要な案件で関連方針が未記載",
+        ),
+        applies_to=("design",),
+    ),
+    # B1: risk and open-issue disclosure (R-L)
+    MandatoryCheck(
+        id="risk_and_open_issues",
+        name="リスク・課題の明示",
+        requirement=(
+            "未決事項・既知リスク・他社/他部署への作業依存が明示されていること。"
+            "課題管理表が別紙の場合は、本文から参照されていること。"
+        ),
+        check_points=(
+            "未決事項または『詳細設計フェーズで決定』等の TBD 項目が一覧化されている",
+            "既知リスクと対応方針(緩和策・受容理由)が記載されている",
+            "他社・他部署の作業依存(顧客側作業、外部接続等)が明確に切り分けられている",
+        ),
+        fail_conditions=(
+            "未決事項が本文中に散在しており一覧化されていない",
+            "他社作業依存があるのに責任分界点が記載されていない",
+        ),
+        applies_to=("design", "proposal"),
+    ),
 )
+
+
+def _select_mandatory_checks(profile: str) -> tuple[MandatoryCheck, ...]:
+    """Filter COMMON_MANDATORY_CHECKS by profile applicability.
+
+    Checks with empty ``applies_to`` apply to every profile (backward
+    compatible with pre-B1 entries). Checks with a non-empty
+    ``applies_to`` are only included when the requested profile is in
+    the tuple.
+    """
+    return tuple(
+        check for check in COMMON_MANDATORY_CHECKS
+        if not check.applies_to or profile in check.applies_to
+    )
 
 
 # Optional checks are not required; they are only verified when the artifact
@@ -173,6 +253,20 @@ FILENAME_OPERATIONS_RUNBOOK_KEYWORDS: tuple[str, ...] = (
     "incident response",
 )
 
+# B1: proposal-document filename signals (R-L)
+FILENAME_PROPOSAL_KEYWORDS: tuple[str, ...] = (
+    "企画書",
+    "提案書",
+    "構想書",
+    "概要書",
+    "企画案",
+    "提案資料",
+    "proposal",
+    "business plan",
+    "project charter",
+    "business case",
+)
+
 # Body-text strong signals: rare in design documents, common in real runbooks.
 BODY_CHANGE_RUNBOOK_STRONG_SIGNALS: tuple[str, ...] = (
     "タイムチャート",
@@ -227,7 +321,10 @@ RUBRICS = {
         rubric_name="ネットワーク・サーバ設計書レビュー基準",
         document_profile="design",
         target_documents=("基本設計書", "詳細設計書"),
-        mandatory_checks=COMMON_MANDATORY_CHECKS[:2],
+        # B1: select MCs by applies_to. For "design" this includes
+        # purpose / configuration / requirement_traceability /
+        # non_functional_coverage / risk_and_open_issues (5 MCs).
+        mandatory_checks=_select_mandatory_checks("design"),
         evaluation_axes=(
             EvaluationAxis(
                 id="completeness",
@@ -235,23 +332,34 @@ RUBRICS = {
                 weight=20,
                 purpose="必要な情報が不足なく記載されているか",
                 checkpoints=(
-                    "対象範囲が明記されている",
-                    "対象機器、役割、接続先が分かる",
-                    "前提条件、制約条件が記載されている",
+                    "対象範囲(対象システム / 対象機能 / 対象環境)が明記されている",
+                    "対象機器、役割、接続先、外部依存先が分かる",
+                    "前提条件、制約条件、対象外範囲が記載されている",
+                    "機能一覧と各機能の処理概要・入出力・異常系が確認できる",
+                    "移行・切替方式の概要が記載されている(詳細手順は別途で可)",
+                    "現状課題や期待効果が背景・目的セクションで把握できる",
                 ),
-                fail_conditions=("対象機器が特定できない", "前提条件が未記載"),
+                fail_conditions=(
+                    "対象機器が特定できない",
+                    "前提条件が未記載",
+                    "対象外範囲が示されておらず、設計の境界が不明",
+                ),
             ),
             EvaluationAxis(
                 id="consistency",
                 name="整合性",
-                weight=20,
+                weight=15,
                 purpose="資料内および関連資料との矛盾がないか",
                 checkpoints=(
-                    "構成図と本文の機器名が一致する",
-                    "IPアドレス、IF名、ホスト名に矛盾がない",
-                    "設計内容と試験観点の対応が取れている",
+                    "構成図と本文の機器名・サービス名が一致する",
+                    "IPアドレス、IF名、ホスト名、リージョン名に矛盾がない",
+                    "章間の参照(例: 詳細はX章参照)の参照先が実在する",
+                    "設計内容と試験観点・運用観点の対応が取れている",
                 ),
-                fail_conditions=("機器名やIP体系に矛盾がある",),
+                fail_conditions=(
+                    "機器名やIP体系に矛盾がある",
+                    "参照先の章・別紙が存在しない、または記載と異なる",
+                ),
             ),
             EvaluationAxis(
                 id="security",
@@ -260,20 +368,36 @@ RUBRICS = {
                 purpose="安全な構成と運用方針が考慮されているか",
                 checkpoints=(
                     "認証方式と管理アクセス経路が明記されている",
-                    "不要サービス停止やログ取得方針がある",
-                    "権限管理や監査の考え方がある",
+                    "認証情報・機密情報の保管・受け渡し方式が安全である",
+                    "権限管理(最小権限・職務分掌)の考え方がある",
+                    "暗号化方針(保管時 / 通信時)が記載されている",
+                    "監査ログ・アクセスログ・操作ログの取得方針と保管期間がある",
+                    "インシデント対応・漏洩時の緊急対応フローが想定されている",
+                    "証跡保全・改ざん検知(整合性検証等)が考慮されている",
                 ),
-                fail_conditions=("平文認証や危険な設定を放置", "特権ID運用が不明"),
+                fail_conditions=(
+                    "平文認証や危険な設定を放置している",
+                    "特権ID運用や緊急時の権限取り扱いが不明",
+                    "認証情報を汎用ストレージで長期保管する等、明らかなリスクが残存",
+                ),
             ),
             EvaluationAxis(
                 id="operability",
                 name="運用保守性",
-                weight=15,
-                purpose="保守担当が迷わず運用できるか",
+                weight=20,
+                purpose="保守担当が迷わず運用でき、将来変更にも対応できるか",
                 checkpoints=(
-                    "監視項目が定義されている",
-                    "障害時の確認ポイントがある",
-                    "引継ぎ可能な説明粒度になっている",
+                    "監視項目・閾値・アラート条件が定義されている",
+                    "障害時の一次対応・確認ポイント・エスカレーション先がある",
+                    "DR / バックアップ / リストア方針が記載されている",
+                    "DR 切替時の責任分界点と作業手順の概要が示されている",
+                    "権限棚卸し・証明書/認証情報の有効期限管理の方針がある",
+                    "将来の機能追加・変更を阻害しない構造になっている(疎結合・標準化)",
+                    "引継ぎ可能な説明粒度になっている(暗黙知に依存しない)",
+                ),
+                fail_conditions=(
+                    "監視項目や障害時対応が一切定義されていない",
+                    "DR・バックアップ方針が未定義(該当案件で必要な場合)",
                 ),
             ),
             EvaluationAxis(
@@ -282,16 +406,119 @@ RUBRICS = {
                 weight=20,
                 purpose="設計内容が試験で確認できるか",
                 checkpoints=(
-                    "試験項目が設計内容に対応している",
-                    "期待結果が具体的に書かれている",
-                    "異常系または切替試験が考慮されている",
+                    "機能要件に対応する試験項目が想定されている",
+                    "非機能要件(可用性・性能・セキュリティ)の確認方法が考えられている",
+                    "期待結果が具体的に書かれている、または書ける程度に設計が具体的",
+                    "異常系・切替試験・DR切替試験が考慮されている",
+                    "試験環境(本番/検証)の差異が試験計画に反映可能",
+                ),
+                fail_conditions=(
+                    "設計が抽象的すぎて試験項目を導出できない",
+                    "異常系・切替試験への言及がない",
                 ),
             ),
         ),
         review_policy=(
             "冒頭の目的記載の有無を最優先で確認すること。",
             "構成図などの構成情報が無い場合は高リスクとして扱うこと。",
+            "セキュリティ事項(特に認証情報の取り扱い)は他の指摘より重く扱うこと。",
+            "未決事項・他社作業依存は『リスク・課題の明示』MC で確認すること。",
             "指摘は blocking / required / recommended の厳しさを意識して記述すること。",
+            "指摘は感情的・主観的表現を避け、事実ベースで客観的に記述すること。",
+        ),
+    ),
+    "proposal": ReviewRubric(
+        rubric_id="proposal_v1",
+        rubric_name="企画書・提案書レビュー基準",
+        document_profile="proposal",
+        target_documents=("企画書", "提案書", "構想書", "概要書"),
+        # B1: proposal applies the same purpose / configuration /
+        # requirement_traceability / risk_and_open_issues MCs.
+        # non_functional_coverage is design-only, not required at proposal stage.
+        mandatory_checks=_select_mandatory_checks("proposal"),
+        evaluation_axes=(
+            EvaluationAxis(
+                id="business_purpose",
+                name="目的・背景の妥当性",
+                weight=25,
+                purpose="ビジネス上の目的・背景・現状課題が明確で、企画として価値があるか",
+                checkpoints=(
+                    "ビジネス目的が明確に記載されている",
+                    "現状課題・問題点が具体的に分析されている",
+                    "導入効果・期待される改善が定量・定性で示されている",
+                    "対象ユーザー・関係者・影響範囲が明確",
+                ),
+                fail_conditions=(
+                    "目的が抽象的で『何のためにやるか』が不明",
+                    "現状課題の記載がなく、企画の必要性が判断できない",
+                ),
+            ),
+            EvaluationAxis(
+                id="alternatives_and_rationale",
+                name="代替案・採用理由",
+                weight=20,
+                purpose="代替案を比較検討した上で採用案が選ばれているか",
+                checkpoints=(
+                    "複数の代替案が比較されている",
+                    "採用案を選んだ理由(コスト・実現性・将来性等)が明確",
+                    "棄却した案の棄却理由が記載されている",
+                ),
+                fail_conditions=(
+                    "代替案の検討が一切なく、結論ありきになっている",
+                ),
+            ),
+            EvaluationAxis(
+                id="cost_and_schedule",
+                name="費用対効果・スケジュール",
+                weight=20,
+                purpose="費用対効果・スケジュールが現実的に検討されているか",
+                checkpoints=(
+                    "概算費用(初期費用 / 運用費用)が記載されている",
+                    "効果(コスト削減 / 売上増 / リスク削減)が金額または定量指標で示されている",
+                    "スケジュールが現実的(主要マイルストーン・前提条件・依存関係)",
+                    "投資回収期間または ROI が示されている(該当する場合)",
+                ),
+                fail_conditions=(
+                    "費用見積りが完全に欠落している",
+                    "効果が抽象的で意思決定に使えない",
+                ),
+            ),
+            EvaluationAxis(
+                id="feasibility",
+                name="実現可能性",
+                weight=20,
+                purpose="技術・体制・リスク面で実現可能か",
+                checkpoints=(
+                    "技術的実現可能性(既存技術 or 検証要)が判断されている",
+                    "実施体制(社内 / 外注 / 顧客側作業の分担)が示されている",
+                    "主要リスクが洗い出され、緩和策が示されている",
+                    "前提条件・制約条件が明示されている",
+                ),
+                fail_conditions=(
+                    "実施体制が不明で誰がやるか分からない",
+                    "リスク分析が一切ない",
+                ),
+            ),
+            EvaluationAxis(
+                id="success_criteria",
+                name="成功指標",
+                weight=15,
+                purpose="成功条件・評価指標が定義されているか",
+                checkpoints=(
+                    "成功条件(KPI / KGI)が具体的に定義されている",
+                    "効果測定の方法・タイミングが記載されている",
+                    "撤退基準(うまくいかなかった場合の判断基準)がある(該当する場合)",
+                ),
+                fail_conditions=(
+                    "成功条件が定義されておらず、後から成果を判定できない",
+                ),
+            ),
+        ),
+        review_policy=(
+            "ビジネス目的の明確性を最優先で確認すること。",
+            "代替案比較がなく結論ありきの場合は高リスクとして扱うこと。",
+            "費用対効果が抽象的な場合は『意思決定に使える形に具体化を』と指摘すること。",
+            "指摘は感情的・主観的表現を避け、事実ベースで客観的に記述すること。",
         ),
     ),
     "change_runbook": ReviewRubric(
@@ -299,7 +526,7 @@ RUBRICS = {
         rubric_name="変更・切替手順書レビュー基準",
         document_profile="change_runbook",
         target_documents=("変更手順書", "切替手順書", "構築手順書"),
-        mandatory_checks=COMMON_MANDATORY_CHECKS + (OPTIONAL_CHECKS[0],),
+        mandatory_checks=_select_mandatory_checks("change_runbook") + (OPTIONAL_CHECKS[0],),
         evaluation_axes=(
             EvaluationAxis(
                 id="completeness",
@@ -403,7 +630,7 @@ RUBRICS = {
         rubric_name="保守・運用手順書レビュー基準",
         document_profile="operations_runbook",
         target_documents=("保守手順書", "運用手順書", "障害対応手順書"),
-        mandatory_checks=COMMON_MANDATORY_CHECKS + (OPTIONAL_CHECKS[0],),
+        mandatory_checks=_select_mandatory_checks("operations_runbook") + (OPTIONAL_CHECKS[0],),
         evaluation_axes=(
             EvaluationAxis(
                 id="completeness",
@@ -657,7 +884,7 @@ def detect_document_profile(documents: list[SanitizedDocument]) -> ReviewClassif
 
     # Conflict case 1: multiple distinct profiles hit in filenames.
     if len(name_profiles_hit) >= 2:
-        priority = ("design", "change_runbook", "operations_runbook")
+        priority = ("design", "proposal", "change_runbook", "operations_runbook")
         provisional = max(
             priority,
             key=lambda p: (name_signals[p], -priority.index(p)),
@@ -772,13 +999,14 @@ def _collect_filename_signals(
 ) -> dict[str, int]:
     """Count how many documents matched each profile signal by filename.
 
-    Returns a dict with keys "design", "change_runbook", "operations_runbook"
-    and integer counts. Each document contributes to at most one profile
-    (first match wins, in priority order: design -> change_runbook ->
-    operations_runbook).
+    Returns a dict with keys "design", "proposal", "change_runbook",
+    "operations_runbook" and integer counts. Each document contributes to at
+    most one profile (first match wins, in priority order: design ->
+    proposal -> change_runbook -> operations_runbook).
     """
     counts: dict[str, int] = {
         "design": 0,
+        "proposal": 0,
         "change_runbook": 0,
         "operations_runbook": 0,
     }
@@ -788,6 +1016,9 @@ def _collect_filename_signals(
             continue
         if any(keyword in name for keyword in FILENAME_DESIGN_KEYWORDS):
             counts["design"] += 1
+            continue
+        if any(keyword in name for keyword in FILENAME_PROPOSAL_KEYWORDS):
+            counts["proposal"] += 1
             continue
         if any(keyword in name for keyword in FILENAME_CHANGE_RUNBOOK_KEYWORDS):
             counts["change_runbook"] += 1

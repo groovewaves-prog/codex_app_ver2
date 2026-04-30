@@ -19,8 +19,8 @@ findings from Fagan, Basili et al. (PBR), Brykczynski, Machado et al.
 work-plan template. All 59 tests pass.
 
 > ※ The "59 tests" count above reflects the state at PR #1 merge time.
-> Subsequent PRs (including R-H, R-B, R-C, R-J, R-K) have brought the total
-> to **90**, which is the value used by the verification checklist in
+> Subsequent PRs (including R-H, R-B, R-C, R-J, R-K, R-L) have brought the total
+> to **115**, which is the value used by the verification checklist in
 > § 6 below.
 
 ### PR summary (bullet version)
@@ -54,7 +54,7 @@ work-plan template. All 59 tests pass.
 - **Bug fixes found during self-review**: AAA false-positive on runbooks
   (gated to design profile), `_has_configuration_information` keyword
   miss for 概要図 / 全体概要 / 体制図.
-- **Tests**: 59 passing; 10 new suites/files. <!-- ※ PR #1 merge 時点の数字。現在は R-H/R-B/R-C/R-J/R-K 追加で 90 件 (§ 6 verification checklist 参照) -->
+- **Tests**: 59 passing; 10 new suites/files. <!-- ※ PR #1 merge 時点の数字。現在は R-H/R-B/R-C/R-J/R-K/R-L 追加で 115 件 (§ 6 verification checklist 参照) -->
 - **Docs**: `docs/security_boundaries.md` new; `docs/basic_design.md`,
   `docs/handoff.md`, `docs/traceability.md`, `docs/operations_policy.md`,
   `docs/local_ollama_verification.md` rewritten to match the current
@@ -245,7 +245,7 @@ document that the sensitivity gate marks `mask_and_continue`.
 
 All tests live under `tests/`, 59 tests total, all passing.
 
-> ※ 59 = PR #1 merge 時点の数字。R-H で 4 件、R-B/R-C で 6 件、R-J で 3 件、R-K で 14 件追加され、現在は **90 件**。`§ 6 Quick verification checklist` の `expect 90 passing` がカレント値。
+> ※ 59 = PR #1 merge 時点の数字。R-H で 4 件、R-B/R-C で 6 件、R-J で 3 件、R-K で 14 件、R-L で 25 件追加され、現在は **115 件**。`§ 6 Quick verification checklist` の `expect 115 passing` がカレント値。
 
 Run with:
 
@@ -308,7 +308,7 @@ working repository. The baseline layout was:
 After unpacking:
 
 1. `pip install -r requirements.txt`
-2. `python -m unittest discover tests` — expect 90 passing.
+2. `python -m unittest discover tests` — expect 115 passing.
 3. `python scripts/local_ollama_precheck.py` — should pass if your
    local Ollama is running, or clearly refuse a misconfigured non-
    loopback URL without crashing. Add `--input-file <path>` to

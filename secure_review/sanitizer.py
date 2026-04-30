@@ -161,7 +161,7 @@ class SensitiveDataSanitizer:
         self._counters: defaultdict[str, int] = defaultdict(int)
         self._seen: dict[tuple[str, str], str] = {}
         self._preview_limit = int(os.getenv("SANITIZED_PREVIEW_CHARS", "1200"))
-        self._outbound_limit = int(os.getenv("OUTBOUND_TEXT_CHARS", "12000"))
+        self._outbound_limit = int(os.getenv("OUTBOUND_TEXT_CHARS", "16000"))
         self._patterns: list[tuple[str, re.Pattern[str]]] = [
             (
                 "secret",

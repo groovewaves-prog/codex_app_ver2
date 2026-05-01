@@ -9,5 +9,13 @@ pypdf>=4.0
 # R-M experiment: GiNZA NER for proper-noun candidate extraction.
 # This is a feasibility check - confirming whether GiNZA can run on
 # Streamlit Cloud Free Tier (1GB RAM constraint).
+#
+# Note: ginza 5.2.0 was built against spaCy 3.7.x and produces a
+# ConfigValidationError (compound_splitter.split_mode = None) when paired
+# with spaCy 3.8.x. We pin spacy<3.8 to keep the bundled config valid.
+# If the resulting build fails on Streamlit Cloud's Python 3.14 (e.g. no
+# binary wheels for spacy 3.7.x on cp314), fall back to the spacy-official
+# ja_core_news_md model instead - that pipeline tracks spacy releases.
 ginza>=5.2
 ja_ginza>=5.2
+spacy>=3.7,<3.8

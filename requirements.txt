@@ -1,10 +1,13 @@
 # secure_review runtime.
 # Standard library is sufficient for the HTTP API. These dependencies are
 # optional; they enable the Streamlit UI and native PDF extraction.
-
 # Streamlit UI (primary UI as of 2026-04-23).
 streamlit>=1.33
-
 # PDF text extraction. Without this, the extractor falls back to `pdftotext`
 # on PATH, and if that is missing it records a warning and skips.
 pypdf>=4.0
+# R-M experiment: GiNZA NER for proper-noun candidate extraction.
+# This is a feasibility check - confirming whether GiNZA can run on
+# Streamlit Cloud Free Tier (1GB RAM constraint).
+ginza>=5.2
+ja_ginza>=5.2

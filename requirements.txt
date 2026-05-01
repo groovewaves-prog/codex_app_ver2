@@ -6,16 +6,11 @@ streamlit>=1.33
 # PDF text extraction. Without this, the extractor falls back to `pdftotext`
 # on PATH, and if that is missing it records a warning and skips.
 pypdf>=4.0
-# R-M experiment: GiNZA NER for proper-noun candidate extraction.
-# This is a feasibility check - confirming whether GiNZA can run on
-# Streamlit Cloud Free Tier (1GB RAM constraint).
-#
-# Note: ginza 5.2.0 was built against spaCy 3.7.x and produces a
-# ConfigValidationError (compound_splitter.split_mode = None) when paired
-# with spaCy 3.8.x. We pin spacy<3.8 to keep the bundled config valid.
-# If the resulting build fails on Streamlit Cloud's Python 3.14 (e.g. no
-# binary wheels for spacy 3.7.x on cp314), fall back to the spacy-official
-# ja_core_news_md model instead - that pipeline tracks spacy releases.
-ginza>=5.2
-ja_ginza>=5.2
-spacy>=3.7,<3.8
+# R-M experiment paused (2026-05-01): ginza/ja_ginza/spacy<3.8 caused a
+# boot loop on Streamlit Cloud (Python 3.14) because spacy 3.7.x has no
+# binary wheels for cp314 and the source build hangs. The Diagnostics
+# expander in streamlit_app.py remains in place; it surfaces an ImportError
+# in its own try/except when GiNZA is not installed and does not affect the
+# rest of the UI. Future R-M work should either (a) switch to spacy-official
+# ja_core_news_md, which tracks current spacy releases, or (b) drop NER and
+# rely on regex/heuristics + an external API for proper-noun classification.

@@ -702,3 +702,133 @@ if review is not None:
                 "生レスポンスは記録されていません (mock プロバイダ使用時、または "
                 "プロバイダ実装が raw_response を保持していない場合)。"
             )
+
+
+# ----------------------------------------------------------------------
+# R-M experiment: GiNZA Diagnostics expander.
+#
+# Step 2 of the R-M (custom mask dictionary) feasibility check.
+# Goal: confirm that GiNZA can be loaded and run NER on real Japanese text
+# within the Streamlit Cloud Free Tier (1GB RAM) constraint.
+#
+# This block is intentionally isolated:
+# - Located outside any review_result conditional, so it's always visible.
+# - Lazy-loads the model only when the user clicks the analyse button.
+# - Cached via @st.cache_resource so the model is loaded at most once
+#   per session; subsequent calls reuse the in-memory instance.
+# - Failure paths (import error, model load error) display st.error
+#   without affecting any of the existing R-K / R-L review functionality.
+# ----------------------------------------------------------------------
+
+
+@st.cache_resource(show_spinner="GiNZA モデルをロード中...")
+def _load_ginza_model():
+    """Lazy-load the ja_ginza pipeline. Cached so subsequent calls reuse it.
+
+    Returns the loaded spacy.Language pipeline, or raises an exception that
+    the caller should surface via st.error.
+    """
+    import spacy
+    return spacy.load("ja_ginza")
+
+
+def _format_memory_usage() -> str:
+    """Return a human-readable RSS memory string for the current process.
+
+    Returns ``"(取得不可)"`` if psutil is unavailable - we don't add psutil
+    as a hard dependency just for diagnostics.
+    """
+    try:
+        import os
+        import resource
+        # On Linux, ru_maxrss is in kilobytes.
+        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss_mb = rss_kb / 1024
+        return f"{rss_mb:.1f} MB (peak RSS)"
+    except Exception:
+        return "(取得不可)"
+
+
+_GINZA_DIAG_DEFAULT_TEXT = (
+    "KDDI様の府中DCから送信されるメールを Amazon SES で SMTP リレーするシステムを設計する。"
+    "担当: iret 開発チーム。検証環境は東京リージョンに構築し、"
+    "本番環境は大阪リージョンも併用する。"
+)
+
+
+with st.expander("🔍 GiNZA Diagnostics (R-M 実験)", expanded=False):
+    st.caption(
+        "R-M (カスタムマスク辞書) 実装に向けた予備調査。GiNZA で日本語固有表現抽出 (NER) "
+        "を試し、Streamlit Cloud Free Tier 上で動くかを確認します。既存のレビュー機能には"
+        "影響しません。"
+    )
+    diag_text = st.text_area(
+        "解析対象テキスト",
+        value=_GINZA_DIAG_DEFAULT_TEXT,
+        height=120,
+        key="ginza_diag_text",
+        help="ここに入れたテキストに対して、GiNZA で固有表現抽出を行います。",
+    )
+    if st.button("解析実行", key="ginza_diag_run"):
+        import time
+        try:
+            mem_before = _format_memory_usage()
+            t_load_start = time.perf_counter()
+            nlp = _load_ginza_model()
+            t_load_end = time.perf_counter()
+
+            t_parse_start = time.perf_counter()
+            doc = nlp(diag_text)
+            t_parse_end = time.perf_counter()
+
+            mem_after = _format_memory_usage()
+
+            st.success("解析完了")
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("モデルロード時間", f"{t_load_end - t_load_start:.2f} s")
+            with col2:
+                st.metric("解析時間", f"{(t_parse_end - t_parse_start) * 1000:.0f} ms")
+            with col3:
+                st.metric("メモリ (RSS)", mem_after)
+
+            if doc.ents:
+                st.markdown("**検出されたエンティティ**")
+                ent_rows = [
+                    {
+                        "テキスト": ent.text,
+                        "ラベル": ent.label_,
+                        "開始位置": ent.start_char,
+                        "終了位置": ent.end_char,
+                    }
+                    for ent in doc.ents
+                ]
+                st.dataframe(ent_rows, width="stretch")
+            else:
+                st.info("エンティティは検出されませんでした。")
+
+            with st.expander("形態素解析の詳細 (debug)", expanded=False):
+                token_rows = [
+                    {
+                        "表層形": tok.text,
+                        "品詞": tok.pos_,
+                        "詳細品詞": tok.tag_,
+                        "原形": tok.lemma_,
+                    }
+                    for tok in doc
+                ][:50]  # cap at first 50 tokens to keep UI light
+                st.dataframe(token_rows, width="stretch")
+                if len(doc) > 50:
+                    st.caption(f"先頭 50 トークンのみ表示 (全 {len(doc)} トークン中)")
+
+        except ImportError as e:
+            st.error(
+                "GiNZA (または spacy) が import できません。"
+                f"requirements.txt の設定を確認してください。詳細: {e}"
+            )
+        except Exception as e:
+            st.error(
+                "GiNZA の実行中にエラーが発生しました。"
+                f"Streamlit Cloud のログも確認してください。詳細: {type(e).__name__}: {e}"
+            )

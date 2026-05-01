@@ -705,11 +705,18 @@ if review is not None:
 
 
 # ----------------------------------------------------------------------
-# R-M experiment: GiNZA Diagnostics expander.
+# R-M experiment: Japanese NER Diagnostics expander.
 #
 # Step 2 of the R-M (custom mask dictionary) feasibility check.
-# Goal: confirm that GiNZA can be loaded and run NER on real Japanese text
-# within the Streamlit Cloud Free Tier (1GB RAM) constraint.
+# Goal: confirm that a Japanese NER pipeline can be loaded and used on
+# real Japanese text within the Streamlit Cloud Free Tier (1GB RAM)
+# constraint.
+#
+# The model used is spacy-official ``ja_core_news_md`` rather than GiNZA.
+# GiNZA was tried first (2026-05-01) but ginza 5.2.0 requires spacy 3.7.x,
+# which has no cp314 wheels - the resulting source build hung Streamlit
+# Cloud in a boot loop. The spacy-official Japanese pipeline tracks
+# current spacy releases and runs cleanly on Python 3.14.
 #
 # This block is intentionally isolated:
 # - Located outside any review_result conditional, so it's always visible.
@@ -721,15 +728,16 @@ if review is not None:
 # ----------------------------------------------------------------------
 
 
-@st.cache_resource(show_spinner="GiNZA モデルをロード中...")
-def _load_ginza_model():
-    """Lazy-load the ja_ginza pipeline. Cached so subsequent calls reuse it.
+@st.cache_resource(show_spinner="日本語 NER モデル (spaCy ja_core_news_md) をロード中...")
+def _load_spacy_ja_model():
+    """Lazy-load the spacy-official ja_core_news_md pipeline. Cached so
+    subsequent calls reuse it.
 
     Returns the loaded spacy.Language pipeline, or raises an exception that
     the caller should surface via st.error.
     """
     import spacy
-    return spacy.load("ja_ginza")
+    return spacy.load("ja_core_news_md")
 
 
 def _format_memory_usage() -> str:
@@ -749,32 +757,32 @@ def _format_memory_usage() -> str:
         return "(取得不可)"
 
 
-_GINZA_DIAG_DEFAULT_TEXT = (
+_SPACY_JA_DIAG_DEFAULT_TEXT = (
     "KDDI様の府中DCから送信されるメールを Amazon SES で SMTP リレーするシステムを設計する。"
     "担当: iret 開発チーム。検証環境は東京リージョンに構築し、"
     "本番環境は大阪リージョンも併用する。"
 )
 
 
-with st.expander("🔍 GiNZA Diagnostics (R-M 実験)", expanded=False):
+with st.expander("🔍 日本語 NER Diagnostics (R-M 実験)", expanded=False):
     st.caption(
-        "R-M (カスタムマスク辞書) 実装に向けた予備調査。GiNZA で日本語固有表現抽出 (NER) "
-        "を試し、Streamlit Cloud Free Tier 上で動くかを確認します。既存のレビュー機能には"
-        "影響しません。"
+        "R-M (カスタムマスク辞書) 実装に向けた予備調査。spaCy 公式の日本語パイプライン "
+        "(ja_core_news_md) で固有表現抽出 (NER) を試し、Streamlit Cloud Free Tier 上で"
+        "動くかを確認します。既存のレビュー機能には影響しません。"
     )
     diag_text = st.text_area(
         "解析対象テキスト",
-        value=_GINZA_DIAG_DEFAULT_TEXT,
+        value=_SPACY_JA_DIAG_DEFAULT_TEXT,
         height=120,
-        key="ginza_diag_text",
-        help="ここに入れたテキストに対して、GiNZA で固有表現抽出を行います。",
+        key="spacy_ja_diag_text",
+        help="ここに入れたテキストに対して、spaCy で日本語固有表現抽出を行います。",
     )
-    if st.button("解析実行", key="ginza_diag_run"):
+    if st.button("解析実行", key="spacy_ja_diag_run"):
         import time
         try:
             mem_before = _format_memory_usage()
             t_load_start = time.perf_counter()
-            nlp = _load_ginza_model()
+            nlp = _load_spacy_ja_model()
             t_load_end = time.perf_counter()
 
             t_parse_start = time.perf_counter()
@@ -824,11 +832,11 @@ with st.expander("🔍 GiNZA Diagnostics (R-M 実験)", expanded=False):
 
         except ImportError as e:
             st.error(
-                "GiNZA (または spacy) が import できません。"
+                "spaCy または ja_core_news_md モデルが import できません。"
                 f"requirements.txt の設定を確認してください。詳細: {e}"
             )
         except Exception as e:
             st.error(
-                "GiNZA の実行中にエラーが発生しました。"
+                "日本語 NER の実行中にエラーが発生しました。"
                 f"Streamlit Cloud のログも確認してください。詳細: {type(e).__name__}: {e}"
             )

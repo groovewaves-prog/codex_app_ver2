@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-05-01 (R-L: レビュー出力の構造化深化。サマリーを 4 セクション化、指摘を 6 フィールド構造に、企画書プロファイル追加、design ルーブリック大幅深化、SYSTEM_PROMPT 全面書き直し)
+Last updated: 2026-05-01 (R-L docs 確定: PR #12 / #13 のマージ番号を反映、§11 PR 履歴で `#(TBD)` を解消)
 
 ## 0. 次のチャットを開く方へ（最重要）
 
@@ -606,10 +606,10 @@ https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
 | #9 | chore/handoff-update-2026-04-29 | `c356d63` | docs(handoff): §11 PR 履歴に PR #8 行を追記(他の更新は反映漏れ、PR #10 で補完) |
 | #10 | fix/handoff-actual-content-2026-04-29 | `5efeccc` | docs(handoff): PR #9 で漏れた 2026-04-29 大規模更新 (§0.1 / §1.1 / §2.3 / §3.6 / §3.7 / §6.3 / §7 / §9.3 等) を本反映 |
 | #11 | feature/r-k-filename-first-classification | `c67c79d` | R-K: プロファイル自動判定をファイル名最優先方式に改修。設計書を手順書として誤判定する旧ロジックを置換、競合検出と UI 警告を追加。テスト 14 件新設で合計 90 件通過。 |
-| #(TBD) | feature/r-l-structured-review-deepening | (本作業の commit) | R-L: レビュー出力構造を全面深化。サマリーを 4 セクション化(目的/目的乖離/内容要約/全体評価) + 総合判定 A-D、指摘を 6 フィールド構造化(現状/問題点/影響/推奨対応/対応期限/再レビュー要否)、design ルーブリック深化(MC 2→5, EA checkpoint 増強)、企画書プロファイル新規追加、SYSTEM_PROMPT 全面書き直し。テスト 25 件新設で合計 115 件通過。 |
+| #12 | feature/r-l-structured-review-deepening | `25a5eae` | R-L: レビュー出力構造を全面深化。サマリーを 4 セクション化(目的/目的乖離/内容要約/全体評価) + 総合判定 A-D、指摘を 6 フィールド構造化(現状/問題点/影響/推奨対応/対応期限/再レビュー要否)、design ルーブリック深化(MC 2→5, EA checkpoint 増強)、企画書プロファイル新規追加、SYSTEM_PROMPT 全面書き直し。テスト 25 件新設で合計 115 件通過。 |
+| #13 | feature/r-l-structured-review-deepening (空コミット) | `e27f67f` | docs/git: R-L マージ作業中に GitHub Web UI のキャッシュ表示遅延に遭遇し、Compare 画面が「There isn't anything to compare」と誤表示された。原因究明のため `git commit --allow-empty -m "trigger github reindex"` を投入したが、実は PR #12 が既に正常マージされていただけであり、空コミットは無害ながら main に取り込まれた。**機能・テストへの影響はゼロ**。今後は Branches ページを先に確認し、最新 PR の有無を見てから対処することを推奨。 |
 
 ※ PR #5 はインフラ・微修正系で本記録には含めていない。詳細は GitHub Pull requests 一覧を参照のこと。
-※ `#(TBD)` は本作業のマージ完了後、実際の PR 番号に置換すること。
 
 ---
 

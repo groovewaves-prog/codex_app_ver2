@@ -6,11 +6,13 @@ streamlit>=1.33
 # PDF text extraction. Without this, the extractor falls back to `pdftotext`
 # on PATH, and if that is missing it records a warning and skips.
 pypdf>=4.0
-# R-M experiment paused (2026-05-01): ginza/ja_ginza/spacy<3.8 caused a
-# boot loop on Streamlit Cloud (Python 3.14) because spacy 3.7.x has no
-# binary wheels for cp314 and the source build hangs. The Diagnostics
-# expander in streamlit_app.py remains in place; it surfaces an ImportError
-# in its own try/except when GiNZA is not installed and does not affect the
-# rest of the UI. Future R-M work should either (a) switch to spacy-official
-# ja_core_news_md, which tracks current spacy releases, or (b) drop NER and
-# rely on regex/heuristics + an external API for proper-noun classification.
+# R-M (custom mask dictionary) Phase 1: Japanese NER for proper-noun
+# candidate extraction. Switched from GiNZA to spacy-official ja_core_news_md
+# after the GiNZA boot loop on 2026-05-01: ginza 5.2.0 expects spacy 3.7.x,
+# which has no binary wheels for Python 3.14 (Streamlit Cloud's default).
+# The spacy-official Japanese model tracks current spacy releases so it
+# works on Python 3.14 without needing to delete and re-deploy the app.
+# Accuracy on company-name detection is somewhat lower than GiNZA, but the
+# trade-off is worth keeping the existing deployment intact.
+spacy>=3.8
+https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.8.0/ja_core_news_md-3.8.0.tar.gz

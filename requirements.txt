@@ -6,16 +6,13 @@ streamlit>=1.33
 # PDF text extraction. Without this, the extractor falls back to `pdftotext`
 # on PATH, and if that is missing it records a warning and skips.
 pypdf>=4.0
-# R-M experiment: try Transformer-based Japanese NER (ja_core_news_trf)
-# instead of the CNN-based ja_core_news_md. Goal is improved accuracy on
-# minor company names like "iret" via BERT-style contextual understanding
-# (e.g. "担当: ___ 開発チーム" pattern).
-#
-# RISK: ja_core_news_trf relies on spacy-transformers + torch (~700MB)
-# and the BERT model itself adds ~500MB. Combined RAM at inference time
-# is expected to be 1.5-2GB, which is likely to exceed the Streamlit
-# Cloud Free Tier 1GB limit. If this is the case, deployment logs will
-# show "Killed" or "MemoryError", and a follow-up hotfix PR will revert
-# requirements.txt to the working ja_core_news_md baseline.
-spacy[transformers]>=3.8
-https://github.com/explosion/spacy-models/releases/download/ja_core_news_trf-3.8.0/ja_core_news_trf-3.8.0.tar.gz
+# R-M (custom mask dictionary) Phase 1: Japanese NER for proper-noun
+# candidate extraction. Switched from GiNZA to spacy-official ja_core_news_md
+# after the GiNZA boot loop on 2026-05-01: ginza 5.2.0 expects spacy 3.7.x,
+# which has no binary wheels for Python 3.14 (Streamlit Cloud's default).
+# The spacy-official Japanese model tracks current spacy releases so it
+# works on Python 3.14 without needing to delete and re-deploy the app.
+# Accuracy on company-name detection is somewhat lower than GiNZA, but the
+# trade-off is worth keeping the existing deployment intact.
+spacy>=3.8
+https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.8.0/ja_core_news_md-3.8.0.tar.gz

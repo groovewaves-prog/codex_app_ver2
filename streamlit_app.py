@@ -705,18 +705,28 @@ if review is not None:
 
 
 # ----------------------------------------------------------------------
-# R-M experiment: Japanese NER Diagnostics expander (Transformer version).
+# R-M experiment: Japanese NER Diagnostics expander.
 #
-# Step 3 of the R-M (custom mask dictionary) feasibility check.
-# Goal: try the Transformer-based ja_core_news_trf pipeline to see if
-# minor company names (e.g. "iret") can be detected via BERT-style
-# contextual understanding. The CNN-based ja_core_news_md (verified
-# 2026-05-01) detected KDDI/府中DC/Amazon SES/東京/大阪 but missed iret.
+# Step 2 of the R-M (custom mask dictionary) feasibility check.
+# Goal: confirm that a Japanese NER pipeline can be loaded and used on
+# real Japanese text within the Streamlit Cloud Free Tier (1GB RAM)
+# constraint.
 #
-# RISK: this trial may exceed the 1GB Streamlit Cloud Free Tier RAM
-# limit (torch + BERT model + inference tensors = ~1.5-2GB expected).
-# If deployment fails with Killed/MemoryError, a hotfix PR will revert
-# requirements.txt back to ja_core_news_md.
+# The model used is spacy-official ``ja_core_news_md`` rather than GiNZA.
+# GiNZA was tried first (2026-05-01) but ginza 5.2.0 requires spacy 3.7.x,
+# which has no cp314 wheels - the resulting source build hung Streamlit
+# Cloud in a boot loop. The spacy-official Japanese pipeline tracks
+# current spacy releases and runs cleanly on Python 3.14.
+#
+# A later attempt to upgrade to ja_core_news_trf for better minor-company
+# detection (e.g. "iret") also failed: spacy[transformers] pulls in
+# spacy-alignments which depends on blis 0.7.11, and blis has no cp314
+# wheels and its source build fails. Reverted to ja_core_news_md.
+#
+# As a follow-up optimisation we now load ja_core_news_md with the
+# non-NER pipeline components disabled (parser, senter, attribute_ruler).
+# This reduces RAM and parse latency without affecting NER accuracy
+# - tok2vec (which the NER head depends on) and ner itself stay enabled.
 #
 # This block is intentionally isolated:
 # - Located outside any review_result conditional, so it's always visible.
@@ -728,16 +738,23 @@ if review is not None:
 # ----------------------------------------------------------------------
 
 
-@st.cache_resource(show_spinner="日本語 NER モデル (spaCy ja_core_news_trf, Transformer 版) をロード中...")
+@st.cache_resource(show_spinner="日本語 NER モデル (spaCy ja_core_news_md) をロード中...")
 def _load_spacy_ja_model():
-    """Lazy-load the spacy-official ja_core_news_trf pipeline (Transformer
-    based, BERT). Cached so subsequent calls reuse it.
+    """Lazy-load the spacy-official ja_core_news_md pipeline. Cached so
+    subsequent calls reuse it.
 
     Returns the loaded spacy.Language pipeline, or raises an exception that
     the caller should surface via st.error.
     """
     import spacy
-    return spacy.load("ja_core_news_trf")
+    # Disable pipeline components we don't need for NER, to reduce RAM
+    # and inference latency. ja_core_news_md's full pipeline is:
+    # tok2vec, parser, senter, ner, attribute_ruler.
+    # We need tok2vec (NER depends on it) and ner. The rest can go.
+    return spacy.load(
+        "ja_core_news_md",
+        disable=["parser", "senter", "attribute_ruler"],
+    )
 
 
 def _format_memory_usage() -> str:
@@ -767,7 +784,7 @@ _SPACY_JA_DIAG_DEFAULT_TEXT = (
 with st.expander("🔍 日本語 NER Diagnostics (R-M 実験)", expanded=False):
     st.caption(
         "R-M (カスタムマスク辞書) 実装に向けた予備調査。spaCy 公式の日本語パイプライン "
-        "(ja_core_news_trf, Transformer 版) で固有表現抽出 (NER) を試し、Streamlit Cloud Free Tier 上で"
+        "(ja_core_news_md) で固有表現抽出 (NER) を試し、Streamlit Cloud Free Tier 上で"
         "動くかを確認します。既存のレビュー機能には影響しません。"
     )
     diag_text = st.text_area(
@@ -832,7 +849,7 @@ with st.expander("🔍 日本語 NER Diagnostics (R-M 実験)", expanded=False):
 
         except ImportError as e:
             st.error(
-                "spaCy または ja_core_news_trf モデルが import できません。"
+                "spaCy または ja_core_news_md モデルが import できません。"
                 f"requirements.txt の設定を確認してください。詳細: {e}"
             )
         except Exception as e:

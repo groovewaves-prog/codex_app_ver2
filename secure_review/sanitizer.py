@@ -304,6 +304,40 @@ class SensitiveDataSanitizer:
             outbound_risk=self._risk_from_score(risk_score),
         )
 
+    def register_ner_finding(
+        self, value: str, category: str
+    ) -> tuple[str, SanitizationRecord]:
+        """NER 経由で発見されたエンティティをプレイスホルダに採番する。
+
+        R-M Phase 1+2: ner_masker.py / hojin_lookup.py で確定したマスクを
+        既存のプレイスホルダ採番ロジック (``_placeholder`` + ``_seen`` +
+        ``_counters``) に乗せるための入口。同一インスタンス内で regex 経路と
+        番号を共有するため、同じ ``[COMPANY_NNN]`` 連番が維持される。
+
+        Notes:
+            テキスト置換と台帳への record 追加は呼び出し側の責務。本メソッドは
+            プレイスホルダ採番と SanitizationRecord の組み立てのみ担当する。
+            これは NER 検出位置の追跡と regex 由来の置換結果との衝突を避ける
+            ための責務分離である (sanitize_text() のローカル records とは別管理)。
+
+        Args:
+            value: マスク対象の元文字列 (例: "KDDI")。alias 統合する場合は
+                呼び出し側で canonical 名に正規化済みのものを渡す。
+            category: 既存マスクカテゴリ ("company" / "site" / "person" 等)。
+                ner_masker 側で spaCy ラベルから変換済みのものを渡す。
+
+        Returns:
+            (placeholder, record) のタプル。placeholder は既に同じ
+            (category, value) で採番済みなら同じ値が返る (冪等)。
+        """
+        placeholder = self._placeholder(category, value)
+        record = SanitizationRecord(
+            placeholder=placeholder,
+            original=value,
+            category=category,
+        )
+        return placeholder, record
+
     def _replace_pattern(
         self,
         text: str,

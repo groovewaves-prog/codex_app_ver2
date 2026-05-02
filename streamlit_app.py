@@ -857,3 +857,200 @@ with st.expander("🔍 日本語 NER Diagnostics (R-M 実験)", expanded=False):
                 "日本語 NER の実行中にエラーが発生しました。"
                 f"Streamlit Cloud のログも確認してください。詳細: {type(e).__name__}: {e}"
             )
+
+
+# ----------------------------------------------------------------------
+# R-M experiment: gBizINFO API Diagnostics expander.
+#
+# Step 5 of the R-M (custom mask dictionary) feasibility check.
+# Goal: confirm that the spacy NER + EntityRuler combo can be augmented
+# with a dynamic lookup against gBizINFO's REST API to detect company
+# names that are not in the seed dictionary (e.g. "iret").
+#
+# Strategy: when the user types a candidate string, hit gBizINFO's
+# /hojin endpoint with name= as the query. If any results come back,
+# the candidate is highly likely a real company name. The free-tier API
+# requires a token (GBIZINFO_API_TOKEN in Streamlit Secrets) that is
+# obtained by submitting an application at
+# https://info.gbiz.go.jp/hojin/various_registration/form
+#
+# This block is intentionally isolated:
+# - Located outside any review_result conditional.
+# - All HTTP I/O wrapped in try/except so a network outage or invalid
+#   token surfaces a clear st.error inside the expander only - the rest
+#   of the UI keeps working as long as Gemini reviews are still possible.
+# - When GBIZINFO_API_TOKEN is missing, the expander shows a friendly
+#   notice rather than crashing.
+# ----------------------------------------------------------------------
+
+
+_GBIZINFO_API_BASE_V2 = "https://api.info.gbiz.go.jp/hojin/v2"
+_GBIZINFO_API_BASE_V1 = "https://info.gbiz.go.jp/hojin/v1"
+_GBIZINFO_DIAG_DEFAULT_NAME = "iret"
+
+
+def _get_gbizinfo_token() -> str | None:
+    """Fetch GBIZINFO_API_TOKEN from Streamlit Secrets, or None if absent."""
+    try:
+        return st.secrets.get("GBIZINFO_API_TOKEN")
+    except Exception:
+        return None
+
+
+def _gbizinfo_search_by_name(
+    name: str,
+    token: str,
+    api_base: str = _GBIZINFO_API_BASE_V2,
+    timeout: float = 10.0,
+) -> tuple[int, dict | None, str | None]:
+    """Call gBizINFO /hojin?name={name} and return (status_code, json_or_none,
+    error_message_or_none).
+
+    Errors are returned as a string in the third tuple element rather than
+    raised, so the caller can show them inline without aborting the page.
+    """
+    import urllib.parse
+    import urllib.request
+    import json as _json
+
+    encoded_name = urllib.parse.quote(name)
+    url = f"{api_base}/hojin?name={encoded_name}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "X-hojinInfo-api-token": token,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+            try:
+                payload = _json.loads(body)
+            except _json.JSONDecodeError as e:
+                return resp.status, None, f"JSON 解析エラー: {e}"
+            return resp.status, payload, None
+    except urllib.error.HTTPError as e:
+        return e.code, None, f"HTTP エラー {e.code}: {e.reason}"
+    except urllib.error.URLError as e:
+        return 0, None, f"通信エラー: {e.reason}"
+    except Exception as e:  # noqa: BLE001
+        return 0, None, f"想定外のエラー: {type(e).__name__}: {e}"
+
+
+with st.expander("🏢 gBizINFO 検索 Diagnostics (R-M Phase 2 実験)", expanded=False):
+    st.caption(
+        "R-M Phase 2 の予備調査。gBizINFO REST API に法人名を問い合わせ、"
+        "未知の固有名詞が「企業名らしさ」を持つかを動的に判定できるかを確認します。"
+        "出典: 経済産業省 gBizINFO。"
+    )
+
+    _gbizinfo_token = _get_gbizinfo_token()
+    if not _gbizinfo_token:
+        st.warning(
+            "GBIZINFO_API_TOKEN が Streamlit Secrets に設定されていません。"
+            "https://info.gbiz.go.jp/hojin/various_registration/form で利用申請を行い、"
+            "メールで届いた API トークンを Streamlit Secrets に "
+            "`GBIZINFO_API_TOKEN = \"...\"` の形式で追加してください。"
+        )
+    else:
+        st.caption("✅ GBIZINFO_API_TOKEN は設定済みです。")
+
+    gbiz_query = st.text_input(
+        "検索する法人名",
+        value=_GBIZINFO_DIAG_DEFAULT_NAME,
+        key="gbizinfo_diag_query",
+        help="部分一致検索。例: 'iret' → 'アイレット株式会社' がヒットするかを確認",
+    )
+
+    gbiz_api_version = st.radio(
+        "API バージョン",
+        options=["v2", "v1"],
+        index=0,
+        horizontal=True,
+        key="gbizinfo_diag_version",
+        help="v2 が推奨。v1 はフォールバック確認用",
+    )
+
+    if st.button(
+        "gBizINFO 検索実行",
+        key="gbizinfo_diag_run",
+        disabled=not _gbizinfo_token,
+    ):
+        import time
+
+        api_base = (
+            _GBIZINFO_API_BASE_V2 if gbiz_api_version == "v2" else _GBIZINFO_API_BASE_V1
+        )
+        with st.spinner(f"gBizINFO ({gbiz_api_version}) を検索中..."):
+            t0 = time.perf_counter()
+            status, payload, err = _gbizinfo_search_by_name(
+                gbiz_query, _gbizinfo_token, api_base=api_base
+            )
+            elapsed = time.perf_counter() - t0
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("レスポンスコード", str(status))
+        with col2:
+            st.metric("検索時間", f"{elapsed * 1000:.0f} ms")
+
+        if err:
+            st.error(f"検索失敗: {err}")
+            st.caption(
+                "考えられる原因: トークンが無効 / API バージョン不一致 / "
+                "ネットワーク制限 / レート制限超過 / API ダウン"
+            )
+        elif payload is None:
+            st.warning(
+                "レスポンスは正常 (HTTP "
+                f"{status}) ですが、内容が空です。レート制限や検索結果ゼロの"
+                "可能性があります。"
+            )
+        else:
+            # Try common keys: "hojin-infos" (v1) and similar in v2.
+            hojin_list = (
+                payload.get("hojin-infos")
+                or payload.get("hojinInfos")
+                or payload.get("hojinInfo")
+                or []
+            )
+            if not isinstance(hojin_list, list):
+                hojin_list = [hojin_list] if hojin_list else []
+
+            st.success(f"ヒット件数: {len(hojin_list)} 件")
+
+            if hojin_list:
+                # Show up to 10 rows for inspection.
+                rows = []
+                for h in hojin_list[:10]:
+                    if not isinstance(h, dict):
+                        continue
+                    rows.append(
+                        {
+                            "法人名": h.get("name") or h.get("hojin_name") or "",
+                            "法人番号": h.get("corporate_number")
+                            or h.get("corporateNumber")
+                            or "",
+                            "所在地": h.get("location")
+                            or h.get("address")
+                            or "",
+                            "法人種別": h.get("kind") or "",
+                        }
+                    )
+                if rows:
+                    st.dataframe(rows, width="stretch")
+                if len(hojin_list) > 10:
+                    st.caption(
+                        f"先頭 10 件のみ表示 (全 {len(hojin_list)} 件)"
+                    )
+
+            with st.expander("生のレスポンス JSON (debug)", expanded=False):
+                import json as _json
+
+                st.code(
+                    _json.dumps(payload, ensure_ascii=False, indent=2)[:5000],
+                    language="json",
+                )
+                if len(_json.dumps(payload, ensure_ascii=False)) > 5000:
+                    st.caption("先頭 5000 文字のみ表示")

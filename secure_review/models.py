@@ -83,8 +83,8 @@ class ReviewSummary:
 
     Fields:
         purpose: AI-inferred purpose of the document set.
-        purpose_section_in_document: If a "目的" / "本書の位置付け" section
-            exists in the document, where it is located (e.g. "1.1 本書の位置付け").
+        purpose_section_in_document: If a "逶ｮ逧・ / "譛ｬ譖ｸ縺ｮ菴咲ｽｮ莉倥￠" section
+            exists in the document, where it is located (e.g. "1.1 譛ｬ譖ｸ縺ｮ菴咲ｽｮ莉倥￠").
             Empty string if not found.
         purpose_divergence: Description of any divergence between the
             document's stated purpose and the AI-inferred purpose. Empty
@@ -170,7 +170,7 @@ class ReviewResult:
     classification_confidence: str = ""
     classification_reason: str = ""
     raw_response: str = ""
-    # R-B / R-C (ε): the concrete model identifier (e.g. ``gemma-4-31b-it``)
+    # R-B / R-C (ﾎｵ): the concrete model identifier (e.g. ``gemma-4-31b-it``)
     # surfaced separately from the internal ``provider`` slug
     # (e.g. ``gemma-4-gemini-api``). Empty for providers that do not have a
     # distinct model concept (mock).
@@ -196,4 +196,74 @@ class ReviewResult:
             "classification_reason": self.classification_reason,
             "raw_response": self.raw_response,
             "model": self.model,
+        }
+
+
+@dataclass
+class NerCandidate:
+    """spaCy NER + EntityRuler が抽出したエンティティ候補。
+
+    R-M Phase 1: シード辞書ヒット (source="seed_dict") は confirmed=True、
+    統計 NER のみのヒット (source="spacy_ner") は confirmed=False となり
+    Phase 2 で gBizINFO 検索 + ユーザ確認に回される。
+    """
+
+    text: str
+    label: str          # 既存マスクカテゴリ ("COMPANY" / "SITE" / "PERSON")
+    spacy_label: str    # 元の spaCy ラベル ("ORG" / "GPE" / "FAC" / "PERSON")
+    start: int
+    end: int
+    source: str         # "seed_dict" | "spacy_ner"
+    confirmed: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class LookupResult:
+    """gBizINFO 法人名検索の結果。
+
+    R-M Phase 2: NER で抽出された未確定候補を gBizINFO に問い合わせ、
+    ヒット件数と上位法人名を取得する。error が空でない場合は API 呼び出しが
+    失敗したことを示し、UI では「検索失敗」として安全側 (マスクする) で扱う。
+    """
+
+    candidate_text: str
+    hits: int
+    top_names: list[str] = field(default_factory=list)
+    error: str = ""
+    cached: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MaskingPipelineState:
+    """1 ドキュメント分のマスキングパイプライン中間状態。
+
+    R-M: regex マスキング (sanitized) → NER で確定済み (confirmed_findings) +
+    未確定候補 (uncertain_candidates) → 各未確定候補について gBizINFO 検索
+    (lookups) までを保持する。最終 outbound_text は apply_user_decisions()
+    の戻り値として都度生成される (state は不変に保つ)。
+    """
+
+    name: str
+    sanitized: SanitizedDocument
+    confirmed_findings: list[tuple[str, str]] = field(default_factory=list)
+    uncertain_candidates: list[NerCandidate] = field(default_factory=list)
+    lookups: dict[str, LookupResult] = field(default_factory=dict)
+
+    @property
+    def has_uncertain(self) -> bool:
+        return len(self.uncertain_candidates) > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "sanitized": self.sanitized.to_dict(),
+            "confirmed_findings": [list(pair) for pair in self.confirmed_findings],
+            "uncertain_candidates": [c.to_dict() for c in self.uncertain_candidates],
+            "lookups": {k: v.to_dict() for k, v in self.lookups.items()},
         }

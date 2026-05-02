@@ -13,7 +13,15 @@ from __future__ import annotations
 
 import unittest
 
-from secure_review.models import ReviewIssue, ReviewResult, ReviewSummary
+from secure_review.models import (
+    LookupResult,
+    MaskingPipelineState,
+    NerCandidate,
+    ReviewIssue,
+    ReviewResult,
+    ReviewSummary,
+    SanitizedDocument,
+)
 
 
 class ReviewSummaryTests(unittest.TestCase):
@@ -91,6 +99,140 @@ class ReviewResultBackwardCompatTests(unittest.TestCase):
         self.assertEqual(d["summary_structured"]["verdict"], "B")
         # legacy ``summary`` field is preserved
         self.assertEqual(d["summary"], "legacy")
+
+
+class NerCandidateTests(unittest.TestCase):
+    """R-M Phase 1: NerCandidate dataclass の基本契約。"""
+
+    def test_seed_dict_candidate_is_confirmed(self) -> None:
+        c = NerCandidate(
+            text="KDDI",
+            label="COMPANY",
+            spacy_label="ORG",
+            start=0,
+            end=4,
+            source="seed_dict",
+            confirmed=True,
+        )
+        self.assertTrue(c.confirmed)
+        self.assertEqual(c.source, "seed_dict")
+
+    def test_to_dict_contains_all_fields(self) -> None:
+        c = NerCandidate(
+            text="アイレット",
+            label="COMPANY",
+            spacy_label="ORG",
+            start=10,
+            end=15,
+            source="spacy_ner",
+            confirmed=False,
+        )
+        d = c.to_dict()
+        for key in ("text", "label", "spacy_label", "start", "end", "source", "confirmed"):
+            self.assertIn(key, d)
+        self.assertEqual(d["confirmed"], False)
+        self.assertEqual(d["spacy_label"], "ORG")
+
+
+class LookupResultTests(unittest.TestCase):
+    """R-M Phase 2: gBizINFO 検索結果の基本契約。"""
+
+    def test_default_fields(self) -> None:
+        r = LookupResult(candidate_text="アイレット", hits=0)
+        self.assertEqual(r.top_names, [])
+        self.assertEqual(r.error, "")
+        self.assertFalse(r.cached)
+
+    def test_error_result_has_message(self) -> None:
+        r = LookupResult(
+            candidate_text="X", hits=0, error="timeout"
+        )
+        self.assertEqual(r.error, "timeout")
+        self.assertEqual(r.hits, 0)
+
+    def test_to_dict_contains_all_fields(self) -> None:
+        r = LookupResult(
+            candidate_text="アイレット",
+            hits=16,
+            top_names=["株式会社アイレット", "KDDIアイレット株式会社"],
+            cached=True,
+        )
+        d = r.to_dict()
+        self.assertEqual(d["candidate_text"], "アイレット")
+        self.assertEqual(d["hits"], 16)
+        self.assertEqual(len(d["top_names"]), 2)
+        self.assertTrue(d["cached"])
+
+
+class MaskingPipelineStateTests(unittest.TestCase):
+    """R-M: パイプライン中間状態の基本契約。
+
+    apply_user_decisions() の入力としての形を保証する。
+    """
+
+    def _make_sanitized(self) -> SanitizedDocument:
+        return SanitizedDocument(
+            name="x.txt",
+            original_excerpt="orig",
+            sanitized_excerpt="sani",
+            outbound_text="sani",
+        )
+
+    def test_minimal_state_has_no_uncertain(self) -> None:
+        """シード辞書のみで全マスクが確定したケース。
+        確認 UI を出してはならないので has_uncertain は False。
+        """
+        s = MaskingPipelineState(
+            name="x.txt",
+            sanitized=self._make_sanitized(),
+        )
+        self.assertFalse(s.has_uncertain)
+        self.assertEqual(s.confirmed_findings, [])
+        self.assertEqual(s.uncertain_candidates, [])
+        self.assertEqual(s.lookups, {})
+
+    def test_has_uncertain_is_true_when_candidates_exist(self) -> None:
+        candidate = NerCandidate(
+            text="サンプル",
+            label="COMPANY",
+            spacy_label="ORG",
+            start=0,
+            end=4,
+            source="spacy_ner",
+            confirmed=False,
+        )
+        s = MaskingPipelineState(
+            name="x.txt",
+            sanitized=self._make_sanitized(),
+            uncertain_candidates=[candidate],
+        )
+        self.assertTrue(s.has_uncertain)
+
+    def test_to_dict_normalizes_tuples_and_nested_types(self) -> None:
+        candidate = NerCandidate(
+            text="アイレット",
+            label="COMPANY",
+            spacy_label="ORG",
+            start=0,
+            end=5,
+            source="spacy_ner",
+            confirmed=False,
+        )
+        lookup = LookupResult(candidate_text="アイレット", hits=16)
+        s = MaskingPipelineState(
+            name="x.txt",
+            sanitized=self._make_sanitized(),
+            confirmed_findings=[("KDDI", "COMPANY")],
+            uncertain_candidates=[candidate],
+            lookups={"アイレット": lookup},
+        )
+        d = s.to_dict()
+        # confirmed_findings の tuple は list に正規化される
+        self.assertEqual(d["confirmed_findings"], [["KDDI", "COMPANY"]])
+        # nested 型も dict 化される
+        self.assertIsInstance(d["uncertain_candidates"][0], dict)
+        self.assertIsInstance(d["lookups"]["アイレット"], dict)
+        self.assertIsInstance(d["sanitized"], dict)
 
 
 if __name__ == "__main__":

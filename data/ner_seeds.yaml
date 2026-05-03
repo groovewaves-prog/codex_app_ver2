@@ -1,0 +1,78 @@
+# R-M Phase 1 シード辞書
+#
+# 構造:
+#   phrases:        完全一致で検出する公知エンティティ
+#   token_patterns: spaCy native token pattern の脱出ハッチ
+#
+# label は spaCy 語彙のみ許可: ORG / GPE / FAC / PERSON
+# 既存マスクカテゴリへのマップは ner_masker.py 側のコード固定マッピング。
+#
+# canonical (任意): 別名統合用。指定時は台帳の value としてこれを使う。
+# 例: "アイレット" を "KDDIアイレット" として正規化したい場合。
+#
+# Phase 1 方針 (handoff 判断 2):
+# - 含める: 公知日本企業
+# - 除外: AWS / Google 等の海外 IT 大手 (技術用語との衝突)、
+#         顧客名・案件名 (GitHub 公開リスク)
+#
+# 設計判断 (PR-B 実装時の発見):
+# - SudachiPy が「株式会社」を「株式」「会社」のように複数トークンに分割
+#   するため、「株式会社+1トークン」のような token pattern では句読点や
+#   助詞を巻き込む誤検出が多発する。
+# - そのため Phase 1 では suffixes / honorifics を採用せず、phrases のみ
+#   とする。「株式会社XYZ」のような未知企業名は、後段の統計 NER と
+#   ユーザ確認 UI (PR-D) で拾う設計 (handoff 判断 6 と整合)。
+
+version: 1
+
+phrases:
+  # 通信キャリア・大手
+  - text: "KDDI"
+    label: ORG
+  - text: "KDDIアイレット"
+    label: ORG
+  - text: "アイレット"
+    label: ORG
+    canonical: "KDDIアイレット"
+  - text: "NTT"
+    label: ORG
+  - text: "NTT東日本"
+    label: ORG
+  - text: "NTT西日本"
+    label: ORG
+  - text: "NTTコミュニケーションズ"
+    label: ORG
+  - text: "NTTドコモ"
+    label: ORG
+  - text: "NTTデータ"
+    label: ORG
+  - text: "ソフトバンク"
+    label: ORG
+  - text: "楽天"
+    label: ORG
+  - text: "楽天モバイル"
+    label: ORG
+
+  # 国内大手 IT・電機
+  - text: "富士通"
+    label: ORG
+  - text: "日立製作所"
+    label: ORG
+  - text: "東芝"
+    label: ORG
+  - text: "NEC"
+    label: ORG
+  - text: "三菱電機"
+    label: ORG
+
+  # 国内 ISP / クラウド
+  - text: "IIJ"
+    label: ORG
+  - text: "さくらインターネット"
+    label: ORG
+  - text: "ビッグローブ"
+    label: ORG
+
+# Phase 1 では空。複数トークンや POS フィルタが必要なパターンを後付け
+# する場合の脱出ハッチ。
+token_patterns: []

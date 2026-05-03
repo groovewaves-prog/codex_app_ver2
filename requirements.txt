@@ -16,3 +16,5 @@ pypdf>=4.0
 # trade-off is worth keeping the existing deployment intact.
 spacy>=3.8
 https://github.com/explosion/spacy-models/releases/download/ja_core_news_md-3.8.0/ja_core_news_md-3.8.0.tar.gz
+# R-M Phase 1: seed-dictionary YAML loader (data/ner_seeds.yaml).
+pyyaml>=6.0

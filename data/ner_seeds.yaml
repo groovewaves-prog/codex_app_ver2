@@ -8,39 +8,25 @@
 # 既存マスクカテゴリへのマップは ner_masker.py 側のコード固定マッピング。
 #
 # canonical (任意): 別名統合用。指定時は台帳の value としてこれを使う。
-# 例: "アイレット" を "KDDIアイレット" として正規化したい場合。
+# 例: "日立" を "日立製作所" として正規化したい場合。
 #
 # Phase 1 方針 (handoff 判断 2):
-# - 含める: 公知日本企業
-# - 除外: AWS / Google 等の海外 IT 大手 (技術用語との衝突)、
-#         顧客名・案件名 (GitHub 公開リスク)
+# - 含める: 公知日本企業 (大手キャリア、大手IT、銀行、SIer、製造業大手、
+#   官公庁など)
+# - 含めない: AWS / Google / Microsoft 等の海外 IT 大手
+#   → 技術文書中の正当な参照 (例: "AWS で構築") をマスクすると
+#     LLM レビュー品質が大幅に低下するため
+# - 含めない: 顧客固有名・案件名 → リポジトリ公開リスクのため
+# - 含めない: マイナー企業 → HojinLookup (gBizINFO) 経由でユーザ判断 UI へ
 #
-# 設計判断 (PR-B 実装時の発見):
-# - SudachiPy が「株式会社」を「株式」「会社」のように複数トークンに分割
-#   するため、「株式会社+1トークン」のような token pattern では句読点や
-#   助詞を巻き込む誤検出が多発する。
-# - そのため Phase 1 では suffixes / honorifics を採用せず、phrases のみ
-#   とする。「株式会社XYZ」のような未知企業名は、後段の統計 NER と
-#   ユーザ確認 UI (PR-D) で拾う設計 (handoff 判断 6 と整合)。
-
-version: 1
+# このファイルへの追加・削除は気軽に行ってよい (シード辞書は再起動毎に
+# 読み直されるため、本番運用中も差分マージで反映可能)。
 
 phrases:
-  # 通信キャリア・大手
+  # ----- メガキャリア / 通信 -----
   - text: "KDDI"
     label: ORG
-  - text: "KDDIアイレット"
-    label: ORG
-  - text: "アイレット"
-    label: ORG
-    canonical: "KDDIアイレット"
   - text: "NTT"
-    label: ORG
-  - text: "NTT東日本"
-    label: ORG
-  - text: "NTT西日本"
-    label: ORG
-  - text: "NTTコミュニケーションズ"
     label: ORG
   - text: "NTTドコモ"
     label: ORG
@@ -53,11 +39,14 @@ phrases:
   - text: "楽天モバイル"
     label: ORG
 
-  # 国内大手 IT・電機
+  # ----- 国内大手 IT・電機 -----
   - text: "富士通"
     label: ORG
   - text: "日立製作所"
     label: ORG
+  - text: "日立"
+    label: ORG
+    canonical: "日立製作所"
   - text: "東芝"
     label: ORG
   - text: "NEC"
@@ -65,12 +54,96 @@ phrases:
   - text: "三菱電機"
     label: ORG
 
-  # 国内 ISP / クラウド
+  # ----- 銀行・金融 -----
+  - text: "三菱UFJ銀行"
+    label: ORG
+  - text: "三井住友銀行"
+    label: ORG
+  - text: "みずほ銀行"
+    label: ORG
+  - text: "りそな銀行"
+    label: ORG
+
+  # ----- SIer / コンサル -----
+  - text: "野村総合研究所"
+    label: ORG
+  - text: "NRI"
+    label: ORG
+    canonical: "野村総合研究所"
+  - text: "アクセンチュア"
+    label: ORG
+  - text: "TIS"
+    label: ORG
+  - text: "SCSK"
+    label: ORG
+
+  # ----- 国内 ISP / クラウド / SaaS -----
   - text: "IIJ"
     label: ORG
   - text: "さくらインターネット"
     label: ORG
   - text: "ビッグローブ"
+    label: ORG
+  - text: "GMO"
+    label: ORG
+  - text: "freee"
+    label: ORG
+
+  # ----- 製造業大手 (技術文書で受託元として現れることがある) -----
+  - text: "トヨタ自動車"
+    label: ORG
+  - text: "ホンダ"
+    label: ORG
+  - text: "日産自動車"
+    label: ORG
+  - text: "ソニー"
+    label: ORG
+  - text: "パナソニック"
+    label: ORG
+  - text: "シャープ"
+    label: ORG
+
+  # ----- 官公庁 / 中央省庁 -----
+  # 機密性が特に高い発注元として登場することが多いため、
+  # 主要省庁 + 一般的な略称を含める。
+  - text: "内閣府"
+    label: ORG
+  - text: "内閣官房"
+    label: ORG
+  - text: "デジタル庁"
+    label: ORG
+  - text: "デジ庁"
+    label: ORG
+    canonical: "デジタル庁"
+  - text: "総務省"
+    label: ORG
+  - text: "外務省"
+    label: ORG
+  - text: "財務省"
+    label: ORG
+  - text: "文部科学省"
+    label: ORG
+  - text: "文科省"
+    label: ORG
+    canonical: "文部科学省"
+  - text: "厚生労働省"
+    label: ORG
+  - text: "厚労省"
+    label: ORG
+    canonical: "厚生労働省"
+  - text: "経済産業省"
+    label: ORG
+  - text: "経産省"
+    label: ORG
+    canonical: "経済産業省"
+  - text: "国土交通省"
+    label: ORG
+  - text: "国交省"
+    label: ORG
+    canonical: "国土交通省"
+  - text: "防衛省"
+    label: ORG
+  - text: "国税庁"
     label: ORG
 
 # Phase 1 では空。複数トークンや POS フィルタが必要なパターンを後付け

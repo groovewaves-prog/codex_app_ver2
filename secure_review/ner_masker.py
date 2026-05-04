@@ -49,6 +49,7 @@ class NerMasker:
         self,
         seed_yaml_path: str | Path = "data/ner_seeds.yaml",
         model_name: str = "ja_core_news_md",
+        allowlist_yaml_path: str | Path = "data/tech_allowlist.yaml",
     ) -> None:
         self._nlp = spacy.load(model_name)
         # tok2vec の中間 tensor をクリアしてメモリ抑制 (handoff 判断 5)
@@ -68,6 +69,13 @@ class NerMasker:
         seed_path = Path(seed_yaml_path)
         if seed_path.exists():
             self._load_seeds(seed_path)
+
+        # PR-G: 技術用語 allowlist (AWS / Azure / GCP のサービス名・概念用語)
+        # を読み込む。ここに含まれる用語は spaCy が誤検知しても候補から除外する。
+        self._tech_allowlist: set[str] = set()
+        allowlist_path = Path(allowlist_yaml_path)
+        if allowlist_path.exists():
+            self._load_tech_allowlist(allowlist_path)
 
     def _load_seeds(self, path: Path) -> None:
         """シード YAML をロードし EntityRuler パターンに変換する。"""
@@ -97,6 +105,34 @@ class NerMasker:
 
         if patterns:
             self._ruler.add_patterns(patterns)
+
+    def _load_tech_allowlist(self, path: Path) -> None:
+        """技術用語 allowlist YAML をロードして set に保持する (PR-G)。
+
+        YAML はカテゴリ別の dict になっているが、ここでは単純に
+        全エントリを 1 つの set に flatten する (カテゴリは人間が
+        メンテナンスしやすくするためだけのもの、コード側では区別不要)。
+
+        比較は大文字小文字を区別しないので、ここで lowercase に正規化
+        してから格納する。
+        """
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+
+        for category_items in data.values():
+            if not isinstance(category_items, list):
+                continue
+            for entry in category_items:
+                if isinstance(entry, str) and entry.strip():
+                    self._tech_allowlist.add(entry.strip().lower())
+
+    def _is_tech_term(self, text: str) -> bool:
+        """text が技術用語 allowlist に含まれていれば True (PR-G)。
+
+        大文字小文字を区別しない比較。完全一致のみ判定し、部分一致は
+        しない (例: "VPC" は許容、"VPC設定" は別物として扱う)。
+        """
+        return text.strip().lower() in self._tech_allowlist
 
     def add_phrase(self, text: str, label: str = "ORG") -> None:
         """セッション内ユーザ追加用 (永続化なし)。
@@ -137,6 +173,19 @@ class NerMasker:
                 category = SPACY_TO_MASK_CATEGORY.get(spacy_label)
                 if category is None:
                     continue  # PRODUCT 等は素通し
+
+                # PR-G: 技術用語 allowlist チェック。シード辞書ヒット
+                # (EntityRuler 経由) は通すが、spaCy 統計 NER の誤検知
+                # (例: 「DirectConnectGateway」を PERSON と誤判定) を弾く。
+                # シード辞書側で同じ用語を意図的に登録した場合は
+                # confirmed=True として通したいので、ent_id_ で seed/user
+                # 由来を確認してからフィルタする。
+                is_dict_match = bool(ent.ent_id_) and (
+                    ent.ent_id_.startswith("seed:")
+                    or ent.ent_id_.startswith("user:")
+                )
+                if not is_dict_match and self._is_tech_term(ent.text):
+                    continue  # 技術用語として誤検知された候補は除外
 
                 # canonical 統合: シード辞書で別名→正規名に正規化
                 surface = ent.text

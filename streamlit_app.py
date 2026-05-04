@@ -25,9 +25,18 @@ import streamlit as st
 
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
 from secure_review.env_loader import load_dotenv
-from secure_review.models import UploadedDocument
+from secure_review.models import (
+    MaskingPipelineState,
+    NerCandidate,
+    SanitizedDocument,
+    UploadedDocument,
+)
 from secure_review.network_guard import LocalUrlError
 from secure_review.reviewer import choose_provider
+from secure_review.run_masking_pipeline import (
+    apply_user_decisions,
+    run_masking_pipeline,
+)
 
 
 # Load .env once per session so settings survive reruns.
@@ -260,7 +269,16 @@ def _re_review_badge(re_review_required: bool) -> str:
 
 
 def _reset_state() -> None:
-    for key in ("preview_docs", "preview_warnings", "preview_security", "review_result"):
+    for key in (
+        "preview_docs",
+        "preview_warnings",
+        "preview_security",
+        "review_result",
+        # R-M (PR-D2)
+        "masking_states",
+        "user_decisions",
+        "last_uploaded_filenames",
+    ):
         st.session_state.pop(key, None)
 
 
@@ -277,6 +295,183 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
             )
         )
     return items
+
+
+# ----------------------------------------------------------------------
+# R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
+#
+# 設計判断 (handoff_R-M_2026-05-03.md D5/D6/D8):
+# - _is_rm_enabled: Streamlit Secrets の R_M_DISABLED が "true" でない限り
+#   R-M 機能は有効 (デフォルト ON、緊急時は Secrets で OFF にできる)
+# - _get_ner_masker / _get_hojin_lookup: @st.cache_resource でプロセス内
+#   に 1 回だけロード。失敗時は None を返してパイプラインを既存挙動に
+#   フォールバック
+# - _build_sanitizer: あえてキャッシュしない。SensitiveDataSanitizer は
+#   内部に counter を持つので、毎回新規にして文書ごとに [COMPANY_001]
+#   から始まるように保つ
+# ----------------------------------------------------------------------
+
+
+def _is_rm_enabled() -> bool:
+    """R-M (Phase 1+2) を有効にするか判定する。
+
+    Streamlit Secrets に ``R_M_DISABLED = "true"`` が設定されていれば
+    機能を完全に無効化 (UI も非表示)。デフォルトは ON。緊急時に
+    コード変更なしで Secrets だけで OFF にできるキルスイッチ。
+    """
+    try:
+        flag = st.secrets.get("R_M_DISABLED", "false")
+        return str(flag).lower() != "true"
+    except Exception:
+        return True
+
+
+@st.cache_resource(show_spinner="日本語 NER モデル (ja_core_news_md) をロード中...")
+def _get_ner_masker():
+    """NerMasker をロードして返す。失敗時は None。
+
+    R-M Phase 1: spaCy + EntityRuler + シード辞書 (data/ner_seeds.yaml)。
+    """
+    if not _is_rm_enabled():
+        return None
+    try:
+        from secure_review.ner_masker import NerMasker
+
+        return NerMasker(seed_yaml_path="data/ner_seeds.yaml")
+    except Exception as exc:  # noqa: BLE001
+        st.warning(
+            f"NER モデルの初期化に失敗しました。R-M 機能はオフで動作します。"
+            f"詳細: {type(exc).__name__}: {exc}"
+        )
+        return None
+
+
+@st.cache_resource
+def _get_hojin_lookup():
+    """HojinLookup をロードして返す。トークン未設定時は None。
+
+    R-M Phase 2: gBizINFO API クライアント。
+    GBIZINFO_API_TOKEN が Streamlit Secrets に未設定の環境では None を
+    返し、未確定候補に対する gBizINFO 検索は行われない (NER だけは動く)。
+    """
+    if not _is_rm_enabled():
+        return None
+    try:
+        token = st.secrets.get("GBIZINFO_API_TOKEN", "")
+    except Exception:
+        token = ""
+    if not token:
+        return None
+    try:
+        from secure_review.hojin_lookup import HojinLookup
+
+        return HojinLookup(api_token=token)
+    except Exception as exc:  # noqa: BLE001
+        st.warning(
+            f"HojinLookup の初期化に失敗しました。gBizINFO 検索は無効化されます。"
+            f"詳細: {type(exc).__name__}: {exc}"
+        )
+        return None
+
+
+def _build_sanitizer():
+    """SensitiveDataSanitizer を新規生成する (キャッシュしない)。
+
+    Sanitizer は内部に placeholder counter / _seen を持つので、
+    キャッシュすると複数文書で counter が連続してしまう。文書ごとに
+    [COMPANY_001] から始まるように、呼び出し毎に新規インスタンス。
+    """
+    from secure_review.sanitizer import SensitiveDataSanitizer
+
+    return SensitiveDataSanitizer()
+
+
+def _decision_key(doc_name: str, candidate_text: str) -> str:
+    """user_decisions の session_state キーを構築する。
+
+    同名候補が異なる文書に現れた場合に判断を独立させるため doc 名を含める。
+    """
+    return f"{doc_name}::{candidate_text}"
+
+
+def _render_uncertain_candidates_card(
+    state: MaskingPipelineState,
+) -> None:
+    """1 つの文書の未確定候補リストを UI に描画する。
+
+    各候補について gBizINFO 検索結果と「マスクする / しない」ラジオを
+    表示し、ユーザの選択を ``st.session_state.user_decisions`` に格納する。
+    デフォルトは「マスクする」(D4 安全側)。
+
+    Args:
+        state: その文書の MaskingPipelineState。
+    """
+    user_decisions = st.session_state.setdefault("user_decisions", {})
+
+    # 確定済み候補 (シード辞書ヒット) のサマリ
+    if state.confirmed_findings:
+        with st.expander(
+            f"自動マスク済み (シード辞書ヒット {len(state.confirmed_findings)} 件)",
+            expanded=False,
+        ):
+            for value, label in state.confirmed_findings:
+                st.markdown(f"- `{value}` → カテゴリ: **{label}**")
+
+    if not state.uncertain_candidates:
+        return
+
+    with st.expander(
+        f"⚠️ マスク候補 ({len(state.uncertain_candidates)} 件、ご確認ください)",
+        expanded=True,  # 注意喚起のため初期は開いておく
+    ):
+        st.caption(
+            "以下の固有名詞が未確定候補として検出されました。"
+            "それぞれについて、外部 LLM に送信する前にマスクするかをお選びください。"
+            "迷う場合は **マスクする** を推奨 (機密漏洩防止優先)。"
+        )
+
+        for cand in state.uncertain_candidates:
+            with st.container(border=True):
+                # 候補テキスト + ラベル
+                st.markdown(
+                    f"**「{cand.text}」** "
+                    f"<span class='muted'>(カテゴリ: {cand.label} / "
+                    f"spaCy: {cand.spacy_label})</span>",
+                    unsafe_allow_html=True,
+                )
+
+                # gBizINFO 検索結果
+                lookup = state.lookups.get(cand.text)
+                if lookup is None:
+                    st.caption("gBizINFO 検索: 未実行 (トークン未設定または機能無効)")
+                elif lookup.error:
+                    st.warning(
+                        f"🏢 gBizINFO 検索失敗: {lookup.error}。"
+                        "判断は人間にお任せします。"
+                    )
+                else:
+                    if lookup.hits == 0:
+                        st.caption("🏢 gBizINFO 検索: ヒット 0 件")
+                    else:
+                        top_str = "、".join(lookup.top_names[:5])
+                        st.markdown(
+                            f"🏢 gBizINFO 検索: **{lookup.hits} 件**ヒット"
+                            + (f" — {top_str}" if top_str else "")
+                        )
+
+                # ラジオボタン (デフォルト: マスクする)
+                key = _decision_key(state.name, cand.text)
+                # 初期値: 既存の判断があれば維持、なければ True (マスク)
+                current = user_decisions.get(key, True)
+                choice = st.radio(
+                    "判断",
+                    options=["マスクする (推奨)", "マスクしない"],
+                    index=0 if current else 1,
+                    key=f"radio_{key}",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+                user_decisions[key] = choice == "マスクする (推奨)"
 
 
 # ------------------------------------------------------------------- sidebar
@@ -337,6 +532,49 @@ st.markdown(
 )
 
 
+# ----------------------------------------------------------------------
+# R-M (PR-D2) 設定セクション
+# ----------------------------------------------------------------------
+
+if _is_rm_enabled():
+    with st.expander(
+        "🔧 R-M (カスタム辞書 + 法人名検索) 設定",
+        expanded=False,
+    ):
+        st.caption(
+            "R-M Phase 1+2: 既存の正規表現マスキングに加え、spaCy NER と "
+            "EntityRuler によるシード辞書、gBizINFO による法人名検索を統合し、"
+            "未確定の固有名詞についてユーザに判断を委ねる機能。"
+        )
+
+        # 機能 ON/OFF (デフォルト ON)
+        rm_enabled_user = st.checkbox(
+            "この機能を使う (推奨: ON)",
+            value=True,
+            key="rm_enabled_user",
+            help=(
+                "OFF にすると、既存の正規表現マスキングのみで処理します。"
+                "シード辞書ヒットや gBizINFO 検索は行いません。"
+            ),
+        )
+
+        # gBizINFO トークン状態の透明性表示
+        try:
+            _rm_token = st.secrets.get("GBIZINFO_API_TOKEN", "")
+        except Exception:
+            _rm_token = ""
+        if _rm_token:
+            st.caption("✅ GBIZINFO_API_TOKEN は設定済みです (gBizINFO 検索が有効)")
+        else:
+            st.caption(
+                "⚠️ GBIZINFO_API_TOKEN は未設定です。"
+                "シード辞書 + spaCy NER のみで動作し、未確定候補に対する"
+                "gBizINFO 検索結果は表示されません。"
+            )
+else:
+    rm_enabled_user = False
+
+
 # -- Step 1: Upload --------------------------------------------------------
 
 st.markdown('<div class="step-header">ステップ 1 — 文書アップロード</div>', unsafe_allow_html=True)
@@ -374,6 +612,64 @@ if preview_clicked:
         st.session_state.preview_docs = sanitized
         st.session_state.preview_warnings = warnings
         st.session_state.pop("review_result", None)
+
+        # ----- R-M (PR-D2): 未確定候補抽出と gBizINFO 検索 -----
+        # rm_enabled_user は Step 0 のチェックボックスで設定。
+        # 既存の sanitize は preview_docs に既に格納済み。R-M はそれを
+        # 上書きせず、masking_states として並行に管理する。送信時 (Step
+        # 3) に apply_user_decisions で preview_docs を再生成する。
+        if rm_enabled_user:
+            ner_masker = _get_ner_masker()
+            hojin_lookup = _get_hojin_lookup()
+            masking_states: dict[str, MaskingPipelineState] = {}
+            try:
+                with st.spinner("R-M (NER + 法人名検索) を実行中..."):
+                    for sdoc, doc in zip(sanitized, documents):
+                        # _run_sanitization_pipeline 経由の sanitized は
+                        # 既に regex マスク済みなので、再度 sanitize は
+                        # しない。run_masking_pipeline は内部でも
+                        # sanitizer.sanitize を呼ぶが、その結果は
+                        # state.sanitized に格納されるだけで、ここでは
+                        # 既存 preview_docs (sanitized) を引き続き使う。
+                        # 最終的な outbound テキストは apply_user_decisions
+                        # の戻り値で得る。
+                        try:
+                            text_for_ner = base64.b64decode(
+                                doc.content
+                            ).decode("utf-8", errors="replace") if doc.transfer_encoding == "base64" else doc.content
+                        except Exception:
+                            # バイナリ等で decode できない場合はスキップ
+                            continue
+                        sanitizer = _build_sanitizer()
+                        try:
+                            state = run_masking_pipeline(
+                                name=doc.name,
+                                text=text_for_ner,
+                                sanitizer=sanitizer,
+                                ner_masker=ner_masker,
+                                hojin_lookup=hojin_lookup,
+                            )
+                            masking_states[doc.name] = state
+                        except Exception as exc:  # noqa: BLE001
+                            # 1 文書の R-M 失敗が他文書を巻き込まないよう個別に防御
+                            st.warning(
+                                f"R-M パイプライン (文書 {doc.name}) で警告: "
+                                f"{type(exc).__name__}: {exc}"
+                            )
+                st.session_state.masking_states = masking_states
+                # 新しいプレビューでは過去のユーザ判断はリセット
+                st.session_state.user_decisions = {}
+            except Exception as exc:  # noqa: BLE001
+                st.warning(
+                    f"R-M 全体処理で警告: {type(exc).__name__}: {exc}。"
+                    "既存の正規表現マスキング結果のみで続行します。"
+                )
+                st.session_state.masking_states = {}
+                st.session_state.user_decisions = {}
+        else:
+            # R-M OFF の場合は既存 masking_states をクリア
+            st.session_state.masking_states = {}
+            st.session_state.user_decisions = {}
     except LocalUrlError as exc:
         st.error(
             "ローカル限定エンドポイントの設定に問題があります: "
@@ -433,6 +729,11 @@ if preview_docs:
             with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
                 for finding in doc.findings:
                     st.markdown(f"- {finding}")
+
+        # ----- R-M (PR-D2): 未確定候補カード (α 案: 各文書のカード内) -----
+        _masking_state = st.session_state.get("masking_states", {}).get(doc.name)
+        if _masking_state is not None:
+            _render_uncertain_candidates_card(_masking_state)
 
         tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
         with tabs[0]:
@@ -515,6 +816,46 @@ if preview_docs:
 
     if send_clicked:
         try:
+            # ----- R-M (PR-D2): ユーザ判断を反映して outbound テキストを再生成 -----
+            # masking_states があれば、各文書について
+            # apply_user_decisions を呼んで preview_docs を上書き。
+            # その後 _enforce_outbound_guard と provider.review に渡す。
+            _states = st.session_state.get("masking_states", {})
+            _decisions_all = st.session_state.get("user_decisions", {})
+            if _states:
+                rebuilt: list = []
+                for doc in preview_docs:
+                    state = _states.get(doc.name)
+                    if state is None:
+                        rebuilt.append(doc)
+                        continue
+                    # この文書に紐づくユーザ判断だけを抽出
+                    doc_decisions: dict[str, bool] = {}
+                    for cand in state.uncertain_candidates:
+                        key = _decision_key(doc.name, cand.text)
+                        # 未選択の場合はデフォルト True (マスク、安全側)
+                        doc_decisions[cand.text] = _decisions_all.get(key, True)
+                    sanitizer = _build_sanitizer()
+                    try:
+                        new_doc = apply_user_decisions(
+                            state=state,
+                            user_decisions=doc_decisions,
+                            sanitizer=sanitizer,
+                        )
+                        # 既存 doc の sensitivity 判定情報を保持
+                        # (apply_user_decisions は state.sanitized から構築するので、
+                        #  ローカル機密度判定は state 側にすでに反映済み)
+                        rebuilt.append(new_doc)
+                    except Exception as exc:  # noqa: BLE001
+                        st.warning(
+                            f"R-M apply_user_decisions (文書 {doc.name}) で警告: "
+                            f"{type(exc).__name__}: {exc}。元の sanitize 結果を使います。"
+                        )
+                        rebuilt.append(doc)
+                preview_docs = rebuilt
+                # session_state も新しい preview_docs に更新しておく
+                st.session_state.preview_docs = preview_docs
+
             provider_impl = choose_provider()
             _enforce_outbound_guard(provider_impl.name, preview_docs)
             with st.spinner(f"{provider_impl.name} でレビュー実行中..."):

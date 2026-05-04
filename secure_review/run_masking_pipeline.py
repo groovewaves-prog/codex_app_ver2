@@ -120,6 +120,24 @@ def run_masking_pipeline(
             )
         state.lookups[cand.text] = result
 
+    # Step 4: gBizINFO 検索失敗 (error あり) の候補を confirmed_findings へ昇格。
+    # 機密漏洩防止優先 (D4 安全側) の方針で、検索結果が判断材料として使えない
+    # ものはユーザに尋ねず自動的にマスクする。住所のような spaCy が高信頼で
+    # 検出した固有名詞を「人間に判断させる」のは UX として不自然なので、
+    # gBizINFO 404 / ネットワークエラー時の候補は自動マスクへ。
+    # 200 + 0 件 (実在しない法人) はユーザの目視判断材料として残す。
+    promoted_texts: set[str] = set()
+    for cand in list(state.uncertain_candidates):
+        result = state.lookups.get(cand.text)
+        if result is not None and result.error:
+            # 検索失敗 → 自動マスクへ昇格
+            state.confirmed_findings.append((cand.text, cand.label))
+            promoted_texts.add(cand.text)
+    if promoted_texts:
+        state.uncertain_candidates = [
+            c for c in state.uncertain_candidates if c.text not in promoted_texts
+        ]
+
     return state
 
 

@@ -1,0 +1,166 @@
+# R-M PR-G: 技術用語ホワイトリスト
+#
+# 役割:
+#   spaCy NER がここに含まれる用語を ORG / GPE / FAC / PERSON として誤検知
+#   した場合、マスク候補から除外する。
+#
+# 趣旨:
+#   AWS / Azure / GCP の公式サービス名・概念用語は機密情報ではなく、
+#   技術文書での正当な参照として登場する。これらをマスクすると
+#   「[COMPANY_001] で構築する」のような無意味な出力になり、
+#   外部 LLM のレビュー品質が大きく低下する。
+#
+# 比較ルール (ner_masker.py 側):
+#   - 大文字小文字を区別しない
+#   - 完全一致 (部分一致しない)
+#   - 空白の有無は別エントリとして登録 (例: "DirectConnect Gateway" と
+#     "DirectConnectGateway" は両方登録)
+#
+# 拡張方針:
+#   このリストは気軽に追加してよい (再起動毎に読み直されるため、
+#   本番運用中も差分マージで反映可能)。検出された誤マスク候補が
+#   技術用語であれば、ここに追加するのが第一手段。
+#
+# Phase 1 では含めない:
+#   - 一般的な英略語 (API, REST, JSON 等) → spaCy はそもそも検出しない
+#   - 監視ツール (Prometheus, Grafana 等) → 必要に応じて追加
+#   - 言語名・FW (Python, Java, Spring 等) → spaCy はそもそも検出しない
+
+# ---------- AWS 主要サービス (頻出順) ----------
+aws_services:
+  # コンピュート
+  - "EC2"
+  - "Lambda"
+  - "ECS"
+  - "EKS"
+  - "Fargate"
+  - "Batch"
+  - "Lightsail"
+
+  # ストレージ
+  - "S3"
+  - "EBS"
+  - "EFS"
+  - "FSx"
+  - "Glacier"
+  - "Storage Gateway"
+
+  # データベース
+  - "RDS"
+  - "Aurora"
+  - "DynamoDB"
+  - "ElastiCache"
+  - "Redshift"
+  - "DocumentDB"
+  - "Neptune"
+
+  # ネットワーキング
+  - "VPC"
+  - "Route 53"
+  - "Route53"
+  - "CloudFront"
+  - "Direct Connect"
+  - "DirectConnect"
+  - "Direct Connect Gateway"
+  - "DirectConnectGateway"
+  - "Transit Gateway"
+  - "TransitGateway"
+  - "VPN"
+  - "ELB"
+  - "ALB"
+  - "NLB"
+  - "API Gateway"
+  - "APIGateway"
+
+  # セキュリティ・ID
+  - "IAM"
+  - "Cognito"
+  - "KMS"
+  - "Secrets Manager"
+  - "WAF"
+  - "Shield"
+  - "GuardDuty"
+  - "Security Hub"
+  - "ACM"
+
+  # メッセージング・連携
+  - "SES"
+  - "SNS"
+  - "SQS"
+  - "EventBridge"
+  - "Step Functions"
+  - "Kinesis"
+  - "Firehose"
+  - "Data Firehose"
+
+  # 運用・監視
+  - "CloudWatch"
+  - "CloudTrail"
+  - "X-Ray"
+  - "Systems Manager"
+  - "Config"
+  - "Trusted Advisor"
+
+  # 開発・デプロイ
+  - "CodeBuild"
+  - "CodeDeploy"
+  - "CodePipeline"
+  - "CodeCommit"
+  - "CloudFormation"
+  - "CDK"
+
+  # 分析・ML
+  - "Athena"
+  - "Glue"
+  - "EMR"
+  - "QuickSight"
+  - "SageMaker"
+  - "Bedrock"
+
+# ---------- AWS 概念用語 ----------
+aws_concepts:
+  - "AvailabilityZone"
+  - "Availability Zone"
+  - "AZ"
+  - "Region"
+  - "Subnet"
+  - "Security Group"
+  - "SecurityGroup"
+  - "NACL"
+  - "Internet Gateway"
+  - "InternetGateway"
+  - "NAT Gateway"
+  - "NATGateway"
+
+# ---------- Azure 主要サービス ----------
+azure_services:
+  - "Azure"
+  - "App Service"
+  - "Azure Functions"
+  - "Cosmos DB"
+  - "CosmosDB"
+  - "Blob Storage"
+  - "BlobStorage"
+  - "Azure SQL"
+  - "Active Directory"
+  - "Entra ID"
+  - "Application Insights"
+  - "ARM"
+  - "Azure DevOps"
+
+# ---------- GCP 主要サービス ----------
+gcp_services:
+  - "GCP"
+  - "Compute Engine"
+  - "Cloud Storage"
+  - "Cloud Run"
+  - "Cloud Functions"
+  - "BigQuery"
+  - "Cloud SQL"
+  - "Spanner"
+  - "Firestore"
+  - "Pub/Sub"
+  - "PubSub"
+  - "Dataflow"
+  - "Vertex AI"
+  - "VertexAI"

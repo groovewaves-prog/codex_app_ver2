@@ -245,9 +245,12 @@ class RunMaskingPipelineTests(unittest.TestCase):
         self.assertEqual(state.confirmed_findings, [])
         self.assertEqual(state.uncertain_candidates, [])
 
-    def test_hojin_lookup_returns_error_result_propagates(self) -> None:
-        """HojinLookup が LookupResult.error を返した場合、それがそのまま
-        state.lookups に格納される (パイプライン全体は止まらない)。"""
+    def test_hojin_lookup_returns_error_result_promotes_to_confirmed(self) -> None:
+        """HojinLookup が LookupResult.error を返した場合、候補は安全側として
+        confirmed_findings に昇格し uncertain_candidates から外れる。
+
+        これは PR-F (R-M Phase 2 改善) で追加された挙動: gBizINFO 検索失敗時は
+        判断材料がないので、ユーザに尋ねず自動マスクに倒す (機密漏洩防止優先)。"""
         sanitizer = SensitiveDataSanitizer()
         ner = FakeNerMasker(
             candidates=[_candidate("XYZ", confirmed=False)]
@@ -266,11 +269,17 @@ class RunMaskingPipelineTests(unittest.TestCase):
             ner_masker=ner,
             hojin_lookup=hojin,
         )
-        self.assertEqual(len(state.uncertain_candidates), 1)
+        # uncertain からは外れて confirmed に昇格
+        self.assertEqual(len(state.uncertain_candidates), 0)
+        self.assertIn(("XYZ", "COMPANY"), state.confirmed_findings)
+        # lookups には error 情報が引き続き格納されている (UI 表示用)
         self.assertEqual(state.lookups["XYZ"].error, "HTTP 503")
 
     def test_hojin_lookup_hard_exception_caught(self) -> None:
-        """HojinLookup.search が例外を投げてもパイプラインは継続。"""
+        """HojinLookup.search が例外を投げてもパイプラインは継続。
+
+        ハード例外時も LookupResult.error が設定されるので、PR-F の昇格
+        ロジックが適用される (uncertain から外れて confirmed に昇格)。"""
         sanitizer = SensitiveDataSanitizer()
         ner = FakeNerMasker(
             candidates=[_candidate("XYZ", confirmed=False)]
@@ -285,6 +294,80 @@ class RunMaskingPipelineTests(unittest.TestCase):
         # error 付き LookupResult が格納されている
         self.assertEqual(len(state.lookups), 1)
         self.assertIn("unexpected", state.lookups["XYZ"].error)
+        # PR-F: ハード例外候補も confirmed に昇格
+        self.assertEqual(len(state.uncertain_candidates), 0)
+        self.assertIn(("XYZ", "COMPANY"), state.confirmed_findings)
+
+    def test_zero_hits_without_error_stays_uncertain(self) -> None:
+        """gBizINFO が 200 + 0 件 (実在しない法人) を返した候補は、
+        引き続き uncertain (ユーザ判断) に留まる。
+
+        PR-F の昇格対象は「LookupResult.error が空でない場合のみ」。
+        200 + 0 件は検索が成功した結果としての 0 件なので、ユーザに
+        判断材料 (=「gBizINFO に登録なし」という情報) として提示する。"""
+        sanitizer = SensitiveDataSanitizer()
+        ner = FakeNerMasker(
+            candidates=[_candidate("ZZZ_NOTREAL", confirmed=False)]
+        )
+        hojin = FakeHojinLookup(
+            results={
+                "ZZZ_NOTREAL": LookupResult(
+                    candidate_text="ZZZ_NOTREAL", hits=0
+                ),  # error 空
+            }
+        )
+        state = run_masking_pipeline(
+            name="doc.txt",
+            text="...",
+            sanitizer=sanitizer,
+            ner_masker=ner,
+            hojin_lookup=hojin,
+        )
+        # 200 + 0 件は uncertain に残る (昇格しない)
+        self.assertEqual(len(state.uncertain_candidates), 1)
+        self.assertEqual(state.uncertain_candidates[0].text, "ZZZ_NOTREAL")
+        self.assertEqual(state.lookups["ZZZ_NOTREAL"].hits, 0)
+        self.assertEqual(state.lookups["ZZZ_NOTREAL"].error, "")
+        # confirmed には昇格しない
+        self.assertNotIn(
+            ("ZZZ_NOTREAL", "COMPANY"), state.confirmed_findings
+        )
+
+    def test_mixed_promotion_keeps_searchable_candidates_uncertain(self) -> None:
+        """error あり/なしが混在する場合: error あり候補のみ昇格、
+        error なし候補は uncertain に残る (PR-F)。"""
+        sanitizer = SensitiveDataSanitizer()
+        ner = FakeNerMasker(
+            candidates=[
+                _candidate("FAILED_LOOKUP", confirmed=False),
+                _candidate("VALID_LOOKUP", confirmed=False),
+            ]
+        )
+        hojin = FakeHojinLookup(
+            results={
+                "FAILED_LOOKUP": LookupResult(
+                    candidate_text="FAILED_LOOKUP", hits=0, error="HTTP 404"
+                ),
+                "VALID_LOOKUP": LookupResult(
+                    candidate_text="VALID_LOOKUP",
+                    hits=5,
+                    top_names=["株式会社 X", "Y 商事"],
+                ),
+            }
+        )
+        state = run_masking_pipeline(
+            name="doc.txt",
+            text="...",
+            sanitizer=sanitizer,
+            ner_masker=ner,
+            hojin_lookup=hojin,
+        )
+        # FAILED は confirmed に昇格、VALID は uncertain に残る
+        self.assertIn(("FAILED_LOOKUP", "COMPANY"), state.confirmed_findings)
+        self.assertNotIn(("VALID_LOOKUP", "COMPANY"), state.confirmed_findings)
+        uncertain_texts = [c.text for c in state.uncertain_candidates]
+        self.assertIn("VALID_LOOKUP", uncertain_texts)
+        self.assertNotIn("FAILED_LOOKUP", uncertain_texts)
 
 
 # -----------------------------------------------------------------------------

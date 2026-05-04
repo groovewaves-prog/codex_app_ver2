@@ -396,6 +396,7 @@ def _decision_key(doc_name: str, candidate_text: str) -> str:
 
 def _render_uncertain_candidates_card(
     state: MaskingPipelineState,
+    full_text: str = "",
 ) -> None:
     """1 つの文書の未確定候補リストを UI に描画する。
 
@@ -403,17 +404,29 @@ def _render_uncertain_candidates_card(
     表示し、ユーザの選択を ``st.session_state.user_decisions`` に格納する。
     デフォルトは「マスクする」(D4 安全側)。
 
+    PR-F: 候補テキストの周辺コンテキスト (前後 30 文字) を表示する。
+    「東京」のような単語が「東京リージョン」「東京都」「東京駅」のいずれを
+    指すかをユーザが判断できるようにするため。``full_text`` が空文字の
+    場合 (古い呼び出しや抽出失敗) は文脈表示をスキップする。
+
     Args:
         state: その文書の MaskingPipelineState。
+        full_text: 元のテキスト全体 (extractor 抽出済み)。文脈抜粋に使う。
     """
     user_decisions = st.session_state.setdefault("user_decisions", {})
 
-    # 確定済み候補 (シード辞書ヒット) のサマリ
+    # 確定済み候補 (シード辞書ヒット + PR-F で gBizINFO 失敗から昇格したもの)
     if state.confirmed_findings:
         with st.expander(
-            f"自動マスク済み (シード辞書ヒット {len(state.confirmed_findings)} 件)",
+            f"自動マスク済み ({len(state.confirmed_findings)} 件)",
             expanded=False,
         ):
+            st.caption(
+                "シード辞書ヒット、または gBizINFO 検索が失敗 (404 / ネット"
+                "ワークエラー等) した候補です。後者は判断材料がないため安全側"
+                "でマスクしています。マスクを外したい場合は手動で対応して"
+                "ください。"
+            )
             for value, label in state.confirmed_findings:
                 st.markdown(f"- `{value}` → カテゴリ: **{label}**")
 
@@ -430,48 +443,79 @@ def _render_uncertain_candidates_card(
             "迷う場合は **マスクする** を推奨 (機密漏洩防止優先)。"
         )
 
-        for cand in state.uncertain_candidates:
-            with st.container(border=True):
-                # 候補テキスト + ラベル
-                st.markdown(
-                    f"**「{cand.text}」** "
-                    f"<span class='muted'>(カテゴリ: {cand.label} / "
-                    f"spaCy: {cand.spacy_label})</span>",
-                    unsafe_allow_html=True,
-                )
+        # PR-F: 候補数が多い場合は固定高さのスクロールコンテナに入れる。
+        # 5 件以下: 余白が出ないようコンテナなし。
+        # 6 件以上: height=600 px のスクロールコンテナで縦伸びを防ぐ。
+        _num_candidates = len(state.uncertain_candidates)
+        if _num_candidates > 5:
+            _scroll_container = st.container(height=600, border=False)
+        else:
+            _scroll_container = st.container(border=False)
 
-                # gBizINFO 検索結果
-                lookup = state.lookups.get(cand.text)
-                if lookup is None:
-                    st.caption("gBizINFO 検索: 未実行 (トークン未設定または機能無効)")
-                elif lookup.error:
-                    st.warning(
-                        f"🏢 gBizINFO 検索失敗: {lookup.error}。"
-                        "判断は人間にお任せします。"
+        with _scroll_container:
+            for cand in state.uncertain_candidates:
+                with st.container(border=True):
+                    # 候補テキスト + ラベル
+                    st.markdown(
+                        f"**「{cand.text}」** "
+                        f"<span class='muted'>(カテゴリ: {cand.label} / "
+                        f"spaCy: {cand.spacy_label})</span>",
+                        unsafe_allow_html=True,
                     )
-                else:
-                    if lookup.hits == 0:
-                        st.caption("🏢 gBizINFO 検索: ヒット 0 件")
-                    else:
-                        top_str = "、".join(lookup.top_names[:5])
+
+                    # コンテキスト抜粋 (PR-F)
+                    if full_text and cand.start >= 0 and cand.end > cand.start:
+                        ctx_start = max(0, cand.start - 30)
+                        ctx_end = min(len(full_text), cand.end + 30)
+                        before = full_text[ctx_start:cand.start]
+                        after = full_text[cand.end:ctx_end]
+                        # 改行は半角スペースに置換して 1 行に
+                        before_clean = before.replace("\n", " ").replace("\r", " ")
+                        after_clean = after.replace("\n", " ").replace("\r", " ")
+                        prefix = "..." if ctx_start > 0 else ""
+                        suffix = "..." if ctx_end < len(full_text) else ""
                         st.markdown(
-                            f"🏢 gBizINFO 検索: **{lookup.hits} 件**ヒット"
-                            + (f" — {top_str}" if top_str else "")
+                            f"📝 文脈: {prefix}{before_clean}**{cand.text}**{after_clean}{suffix}"
                         )
 
-                # ラジオボタン (デフォルト: マスクする)
-                key = _decision_key(state.name, cand.text)
-                # 初期値: 既存の判断があれば維持、なければ True (マスク)
-                current = user_decisions.get(key, True)
-                choice = st.radio(
-                    "判断",
-                    options=["マスクする (推奨)", "マスクしない"],
-                    index=0 if current else 1,
-                    key=f"radio_{key}",
-                    horizontal=True,
-                    label_visibility="collapsed",
-                )
-                user_decisions[key] = choice == "マスクする (推奨)"
+                    # gBizINFO 検索結果
+                    lookup = state.lookups.get(cand.text)
+                    if lookup is None:
+                        st.caption("gBizINFO 検索: 未実行 (トークン未設定または機能無効)")
+                    elif lookup.error:
+                        # PR-F: error あり候補は run_masking_pipeline の昇格処理で
+                        # confirmed に移されるため、本来 uncertain には現れないはず。
+                        # 念のため警告として表示。
+                        st.warning(
+                            f"🏢 gBizINFO 検索失敗: {lookup.error}。"
+                            "判断は人間にお任せします。"
+                        )
+                    else:
+                        if lookup.hits == 0:
+                            st.caption(
+                                "🏢 gBizINFO 検索: ヒット 0 件 "
+                                "(法人名としては未登録)"
+                            )
+                        else:
+                            top_str = "、".join(lookup.top_names[:5])
+                            st.markdown(
+                                f"🏢 gBizINFO 検索: **{lookup.hits} 件**ヒット"
+                                + (f" — {top_str}" if top_str else "")
+                            )
+
+                    # ラジオボタン (デフォルト: マスクする)
+                    key = _decision_key(state.name, cand.text)
+                    # 初期値: 既存の判断があれば維持、なければ True (マスク)
+                    current = user_decisions.get(key, True)
+                    choice = st.radio(
+                        "判断",
+                        options=["マスクする (推奨)", "マスクしない"],
+                        index=0 if current else 1,
+                        key=f"radio_{key}",
+                        horizontal=True,
+                        label_visibility="collapsed",
+                    )
+                    user_decisions[key] = choice == "マスクする (推奨)"
 
 
 # ------------------------------------------------------------------- sidebar
@@ -727,28 +771,37 @@ if preview_docs:
                 for finding in doc.findings:
                     st.markdown(f"- {finding}")
 
-        # ----- R-M (PR-D2): 未確定候補カード (α 案: 各文書のカード内) -----
+        # ----- R-M (PR-D2 + PR-F): 未確定候補カード (α 案: 各文書のカード内) -----
+        # PR-F: SanitizedDocument.original_excerpt を full_text として渡し、
+        # _render_uncertain_candidates_card がコンテキスト抜粋を表示できるように。
         _masking_state = st.session_state.get("masking_states", {}).get(doc.name)
         if _masking_state is not None:
-            _render_uncertain_candidates_card(_masking_state)
-
-        tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
-        with tabs[0]:
-            st.markdown(
-                f"<pre class='sanitized'>{doc.sanitized_excerpt or '(空)'}</pre>",
-                unsafe_allow_html=True,
+            _render_uncertain_candidates_card(
+                _masking_state,
+                full_text=doc.original_excerpt or "",
             )
-        with tabs[1]:
-            if doc.replacements:
-                rows = [
-                    {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
-                    for r in doc.replacements[:50]
-                ]
-                st.dataframe(rows, use_container_width=True, hide_index=True)
-                if len(doc.replacements) > 50:
-                    st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
-            else:
-                st.caption("置換は記録されませんでした。")
+
+        # PR-F: 「匿名化後の抜粋」「置換一覧」は長文化しがちなため
+        # エクスパンダーで折りたたむ。デフォルトは閉じておき、ユーザは
+        # マスク候補の検討に集中できる。
+        with st.expander("📄 匿名化後の抜粋・置換一覧", expanded=False):
+            tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
+            with tabs[0]:
+                st.markdown(
+                    f"<pre class='sanitized'>{doc.sanitized_excerpt or '(空)'}</pre>",
+                    unsafe_allow_html=True,
+                )
+            with tabs[1]:
+                if doc.replacements:
+                    rows = [
+                        {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
+                        for r in doc.replacements[:50]
+                    ]
+                    st.dataframe(rows, use_container_width=True, hide_index=True)
+                    if len(doc.replacements) > 50:
+                        st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
+                else:
+                    st.caption("置換は記録されませんでした。")
 
         st.markdown("</div>", unsafe_allow_html=True)
 

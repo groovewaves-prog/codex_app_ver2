@@ -624,36 +624,33 @@ if preview_clicked:
             masking_states: dict[str, MaskingPipelineState] = {}
             try:
                 with st.spinner("R-M (NER + 法人名検索) を実行中..."):
-                    for sdoc, doc in zip(sanitized, documents):
-                        # _run_sanitization_pipeline 経由の sanitized は
-                        # 既に regex マスク済みなので、再度 sanitize は
-                        # しない。run_masking_pipeline は内部でも
-                        # sanitizer.sanitize を呼ぶが、その結果は
-                        # state.sanitized に格納されるだけで、ここでは
-                        # 既存 preview_docs (sanitized) を引き続き使う。
-                        # 最終的な outbound テキストは apply_user_decisions
-                        # の戻り値で得る。
-                        try:
-                            text_for_ner = base64.b64decode(
-                                doc.content
-                            ).decode("utf-8", errors="replace") if doc.transfer_encoding == "base64" else doc.content
-                        except Exception:
-                            # バイナリ等で decode できない場合はスキップ
+                    for sdoc in sanitized:
+                        # _run_sanitization_pipeline は extractor で PDF /
+                        # DOCX / XLSX 等からテキスト抽出を済ませてから
+                        # regex マスキングを行う。NER の入力には
+                        # **抽出済みのテキスト** を使う必要があるため、
+                        # base64 で生バイナリを decode するのではなく、
+                        # SanitizedDocument.original_excerpt を渡す。
+                        # original_excerpt は extractor の出力、すなわち
+                        # 「人間が読めるテキスト形式」になっている。
+                        text_for_ner = sdoc.original_excerpt or ""
+                        if not text_for_ner.strip():
+                            # 抽出に失敗したファイル (画像等) はスキップ
                             continue
                         sanitizer = _build_sanitizer()
                         try:
                             state = run_masking_pipeline(
-                                name=doc.name,
+                                name=sdoc.name,
                                 text=text_for_ner,
                                 sanitizer=sanitizer,
                                 ner_masker=ner_masker,
                                 hojin_lookup=hojin_lookup,
                             )
-                            masking_states[doc.name] = state
+                            masking_states[sdoc.name] = state
                         except Exception as exc:  # noqa: BLE001
                             # 1 文書の R-M 失敗が他文書を巻き込まないよう個別に防御
                             st.warning(
-                                f"R-M パイプライン (文書 {doc.name}) で警告: "
+                                f"R-M パイプライン (文書 {sdoc.name}) で警告: "
                                 f"{type(exc).__name__}: {exc}"
                             )
                 st.session_state.masking_states = masking_states

@@ -48,6 +48,8 @@ def run_masking_pipeline(
     sanitizer: SensitiveDataSanitizer,
     ner_masker: "Optional[NerMasker]",
     hojin_lookup: "Optional[HojinLookup]",
+    *,
+    auto_mask_on_lookup_error: bool = False,
 ) -> MaskingPipelineState:
     """Phase 1+2 パイプラインを実行し、ユーザ判断前の中間状態を返す。
 
@@ -58,7 +60,10 @@ def run_masking_pipeline(
          - confirmed=False (統計 NER のみ)  → uncertain_candidates へ
       3. uncertain_candidates 各 text について hojin_lookup.search(name)
          で gBizINFO 問い合わせ (R-M Phase 2)
-      4. 結果を MaskingPipelineState にまとめて返す
+      4. (R-O 以降のデフォルト) gBizINFO 検索失敗候補も uncertain のまま
+         残す。``auto_mask_on_lookup_error=True`` を明示的に渡すと、
+         旧 PR-F の挙動 (検索失敗候補を confirmed_findings へ自動昇格)
+         に切り替わる。
 
     Args:
         name: ドキュメント名 (例: "report.pdf")。SanitizedDocument.name に
@@ -71,6 +76,15 @@ def run_masking_pipeline(
             (counter / _seen 共有のため)。
         ner_masker: 候補抽出器。None なら NER スキップで sanitize 結果のみ。
         hojin_lookup: gBizINFO クライアント。None なら gBizINFO 検索スキップ。
+        auto_mask_on_lookup_error: gBizINFO 検索失敗時に候補を自動的に
+            confirmed_findings へ昇格させるか。デフォルト False (R-O)。
+            False のとき、検索失敗候補は uncertain_candidates のまま残り、
+            ユーザの明示的な判断 (apply_user_decisions の user_decisions
+            引数) を必須にする。これは「実データで spaCy 統計 NER が
+            技術用語を多数誤検知した結果、検索失敗で全部自動マスクへ
+            昇格してしまいレビューが壊れる」事象 (R-O) への対策。
+            旧 PR-F 挙動を保ちたいテストや運用シナリオは明示的に
+            True を渡す。
 
     Returns:
         MaskingPipelineState: 不変な中間状態。``has_uncertain`` プロパティで
@@ -120,23 +134,36 @@ def run_masking_pipeline(
             )
         state.lookups[cand.text] = result
 
-    # Step 4: gBizINFO 検索失敗 (error あり) の候補を confirmed_findings へ昇格。
-    # 機密漏洩防止優先 (D4 安全側) の方針で、検索結果が判断材料として使えない
-    # ものはユーザに尋ねず自動的にマスクする。住所のような spaCy が高信頼で
-    # 検出した固有名詞を「人間に判断させる」のは UX として不自然なので、
-    # gBizINFO 404 / ネットワークエラー時の候補は自動マスクへ。
-    # 200 + 0 件 (実在しない法人) はユーザの目視判断材料として残す。
-    promoted_texts: set[str] = set()
-    for cand in list(state.uncertain_candidates):
-        result = state.lookups.get(cand.text)
-        if result is not None and result.error:
-            # 検索失敗 → 自動マスクへ昇格
-            state.confirmed_findings.append((cand.text, cand.label))
-            promoted_texts.add(cand.text)
-    if promoted_texts:
-        state.uncertain_candidates = [
-            c for c in state.uncertain_candidates if c.text not in promoted_texts
-        ]
+    # Step 4: gBizINFO 検索失敗 (error あり) の候補の扱い。
+    #
+    # R-O (2026-05-05): デフォルトでは昇格しない (uncertain のまま残す)。
+    # 旧 PR-F は「検索失敗 = 判断材料なし → 機密漏洩防止優先で自動マスク」
+    # という設計だったが、実データでは spaCy 統計 NER が AWS 公式
+    # サービス名・標準プロトコル名・PDF 抽出由来のスペース混入語などを
+    # 大量に誤検知し、`GBIZINFO_API_TOKEN` 未設定時は全件 error
+    # 扱いとなって、レビュー出力が ``[COMPANY_001] のバウンス率`` のような
+    # 無意味な表示で埋め尽くされた (R-O 報告)。
+    #
+    # 対策として _is_tech_term の R-O パターン強化と、本ステップの
+    # デフォルト無効化を組み合わせる。この 2 つで Streamlit Cloud の
+    # GBIZINFO_API_TOKEN 設定状況に左右されず、誤検知が減る方向にだけ
+    # 動く (技術用語は弾かれ、それ以外は人間判断に回る)。
+    #
+    # ``auto_mask_on_lookup_error=True`` を明示的に渡せば旧挙動を維持
+    # するので、既存テストや「機密漏洩を絶対避けたい運用」では引数指定で
+    # 切り替え可能。
+    if auto_mask_on_lookup_error:
+        promoted_texts: set[str] = set()
+        for cand in list(state.uncertain_candidates):
+            result = state.lookups.get(cand.text)
+            if result is not None and result.error:
+                # 検索失敗 → 自動マスクへ昇格 (旧 PR-F 挙動)
+                state.confirmed_findings.append((cand.text, cand.label))
+                promoted_texts.add(cand.text)
+        if promoted_texts:
+            state.uncertain_candidates = [
+                c for c in state.uncertain_candidates if c.text not in promoted_texts
+            ]
 
     return state
 

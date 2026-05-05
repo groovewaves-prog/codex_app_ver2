@@ -807,7 +807,27 @@ if preview_docs:
 
     # -- Step 3: Confirmation gate ----------------------------------------
 
-    mask_docs = [doc for doc in preview_docs if doc.local_sensitivity_decision == "mask_and_continue"]
+    # PR-I-FIX: 承認を要求する文書の判定基準を 2 系統に拡張する。
+    # (a) ローカル機密度判定が mask_and_continue (既存): 機密ブロッカー検出
+    # (b) R-M で uncertain 候補が残っている (新規): spaCy NER で検出された
+    #     企業名・人名等のうち、ユーザがまだ意思決定していない候補がある
+    # どちらか一方でもあれば、外部送信前にユーザの明示的な承認を必須にする。
+    # 元実装は (a) のみだったため、機密ゲートが safe を返した文書については
+    # R-M uncertain があっても承認なしで送信できてしまっていた。
+    _masking_states_for_gate = st.session_state.get("masking_states", {}) or {}
+
+    def _has_uncertain_candidates(name: str) -> bool:
+        state = _masking_states_for_gate.get(name)
+        if state is None:
+            return False
+        return bool(getattr(state, "uncertain_candidates", None))
+
+    mask_docs = [
+        doc
+        for doc in preview_docs
+        if doc.local_sensitivity_decision == "mask_and_continue"
+        or _has_uncertain_candidates(doc.name)
+    ]
     blocked_docs = [
         doc
         for doc in preview_docs
@@ -830,8 +850,18 @@ if preview_docs:
             "上記の匿名化後の抜粋を確認し、各文書について承認してください。"
         )
         for doc in mask_docs:
+            # PR-I-FIX: R-M uncertain がある場合は、文言で何を確認すべきかを補足
+            _is_rm_only = (
+                doc.local_sensitivity_decision != "mask_and_continue"
+                and _has_uncertain_candidates(doc.name)
+            )
+            _label_suffix = (
+                "(マスク候補の確認 + 匿名化結果の確認)"
+                if _is_rm_only
+                else "(匿名化後の抜粋の確認)"
+            )
             confirmations[doc.name] = st.checkbox(
-                f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。",
+                f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。 {_label_suffix}",
                 key=f"confirm_{doc.name}",
             )
 

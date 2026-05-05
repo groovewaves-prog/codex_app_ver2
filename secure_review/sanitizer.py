@@ -87,6 +87,156 @@ INTERNAL_HOSTNAME_DEVICE_KEYWORDS: tuple[str, ...] = (
 _PLACEHOLDER_REUSE_PATTERN: re.Pattern[str] = re.compile(r"\[[A-Z][A-Z0-9_]*_\d+\]")
 
 
+# R-N (2026-05-05): label-pattern hardening to stop the auto-masker from
+# producing nonsensical category assignments on Japanese AWS design docs.
+#
+# Background. The previous label-based regexes had three structural defects
+# that compounded each other:
+#
+#   1. The separator class ``[:=: ]+`` accepted *bare whitespace* as a label
+#      separator. That meant any keyword followed by a single space and 2+
+#      more chars looked like ``LABEL value``. So ``vendor SMTP AUTH`` got
+#      read as "company = SMTP AUTH" even though there is no colon.
+#   2. With the case-insensitive flag (``i``) and a permissive ``\b``
+#      prefix, common English words like ``manager`` / ``vendor`` matched
+#      whenever they appeared as the *second* word of a phrase
+#      (``Systems Manager``, ``Account Manager``, ``Software vendor``).
+#      The keyword was a real English word, but its label-meaning was
+#      wrong in context.
+#   3. The captured value pattern ``[^\r\n,;]{2,80}`` did not stop on
+#      Japanese punctuation (``、``, ``；``, ``。``), so a single match
+#      could greedily eat across clause boundaries.
+#
+# This block provides three small primitives the patterns below compose:
+#
+#   - ``_LABEL_PREFIX_EN`` requires English label keywords to occur at the
+#     start of a line (with optional indentation). This eliminates almost
+#     all "manager / vendor as part of a longer phrase" false positives.
+#     We accept that legitimate inline English labels are now missed; in
+#     this codebase's target docs (Japanese network/AWS design specs)
+#     labels are overwhelmingly Japanese, and English labels appear in
+#     tables/forms where the line-start anchor still applies.
+#   - ``_LABEL_PREFIX_JA`` keeps the existing relaxed ``(?:^|\b)`` rule
+#     for Japanese keywords. CJK characters are word characters in
+#     Python's UNICODE-aware regex, so ``\b`` correctly fires on
+#     transitions like ``、担当者:`` / ``）担当者:``.
+#   - ``_LABEL_SEP`` requires an explicit colon or equals sign (ASCII or
+#     full-width). Whitespace alone no longer counts as a separator.
+#   - ``_LABEL_VALUE`` stops on Japanese punctuation in addition to
+#     ASCII comma/semicolon.
+_LABEL_PREFIX_EN: str = r"^[ \t]*"
+_LABEL_PREFIX_JA: str = r"(?:^|\b)"
+_LABEL_SEP: str = r"\s*[:=\uFF1A]+\s*"
+_LABEL_VALUE: str = r"([^\r\n,;\u3001\uFF1B\u3002]{2,80})"
+
+
+def _build_label_pattern(en_keywords: str, ja_keywords: str) -> re.Pattern[str]:
+    """Compose a label-based regex with English-strict / Japanese-relaxed prefixes.
+
+    The returned pattern has two capture groups: group 1 is the matched
+    keyword (kept for compatibility with callers that may inspect it),
+    and group 2 is the captured value. ``_replace_pattern`` only reads
+    group 2.
+    """
+    return re.compile(
+        r"(?im)"
+        r"("                               # group 1: keyword (required by
+                                           # _replace_pattern's lastindex>=2
+                                           # contract)
+        rf"{_LABEL_PREFIX_EN}(?:{en_keywords})"
+        r"|"
+        rf"{_LABEL_PREFIX_JA}(?:{ja_keywords})"
+        r")"
+        r"\b"
+        rf"{_LABEL_SEP}"
+        rf"{_LABEL_VALUE}"
+    )
+
+
+# R-N: public-term allowlist applied as a post-match filter.
+#
+# Even after Fix A (no-bare-space separator) and Fix B (English keywords
+# anchored to line start), patterns can still match legitimate
+# ``LABEL: PUBLIC_SERVICE_NAME`` constructs where masking the value
+# destroys the technical meaning the LLM reviewer needs. For example,
+# in a phrase like ``連絡先: SMTP AUTH の設定`` the value ``SMTP AUTH``
+# is a public protocol name, not a contact identifier.
+#
+# This allowlist is consulted from ``_replace_pattern`` *only for label-
+# based categories* (company / project / ticket / person). Category-
+# specific patterns like ``email`` / ``ipv4`` / ``hostname`` deliberately
+# bypass the allowlist because their semantics are unambiguous.
+#
+# The list is conservative on purpose: only widely public AWS / cloud
+# service names, standard internet protocols, and a handful of generic
+# infrastructure abbreviations. Customer / project / person names of any
+# form will still be masked.
+def _build_public_term_allowlist() -> re.Pattern[str]:
+    parts = [
+        # AWS / Amazon prefixed service references (e.g. "Amazon SES",
+        # "AWS CloudWatch", "Amazon Data Firehose"). Allows trailing
+        # technical words like "メール", "エンドポイント", "VPC", "SMTP".
+        r"(?:Amazon|AWS)\s+[A-Za-z0-9][A-Za-z0-9 ./\-]{0,40}"
+        r"(?:\s+(?:[A-Za-z]{2,}|"
+        r"メール|エンドポイント|レコード|サービス|"
+        r"フロー(?:ログ)?|バケット|ゲートウェイ|プロトコル))?",
+        # Specific AWS / cloud service short names (alone or with a trailing
+        # technical noun). Match must be the entire captured value.
+        r"(?:SES|S3|EC2|VPC|VIF|VPN|SNS|SQS|IAM|RDS|EBS|ELB|ALB|NLB|"
+        r"KMS|ACM|WAF|CloudWatch|CloudFront|CloudTrail|CloudShell|"
+        r"Route\s*53|Lambda|EventBridge|GuardDuty|Config|Athena|"
+        r"Firehose|Backlog|AMS|Direct\s*Connect(?:\s+Gateway)?|"
+        r"(?:Private|Public)\s+VIF)"
+        r"(?:\s+(?:メール|エンドポイント|レコード|サービス|"
+        r"SMTP(?:\s+VPC\s+エンドポイント)?|VPC(?:\s+エンドポイント)?|"
+        r"フロー(?:ログ)?|バケット|ゲートウェイ))?",
+        # Standard internet / mail / network protocols. Allow a trailing
+        # technical noun (e.g. "MX レコード", "SMTP AUTH").
+        r"(?:SMTP(?:S)?|IMAP|POP3|HTTP|HTTPS|TLS|SSL|SSH|FTP|SFTP|"
+        r"NTP|DNS|DKIM|DMARC|SPF|MX|AUTH|"
+        r"BGP|OSPF|VRRP|HSRP|VLAN|NAT|ACL|CIDR|"
+        r"IPv4|IPv6|TCP|UDP|ICMP|IPSec|IPSEC|RADIUS|LDAP|"
+        r"OAuth2?|SAML|JWT|JSON|XML|YAML)"
+        r"(?:\s+(?:AUTH|レコード|エンドポイント|プロトコル|サービス))?",
+        # Short generic infrastructure abbreviations.
+        r"(?:VPC|DNS|DC|AZ|MFA|RBAC|ABAC|SLA|SLO|SLI|SOC|RPO|RTO|"
+        r"API|CLI|GUI|SDK|UI|UX|CSV|TSV|TIFF|JPEG|PNG|GIF|PDF|"
+        r"AWS|GCP|OCI|Azure|Amazon)",
+        # DMARC / SPF policy values (``p=none``, ``p=quarantine`` etc.).
+        r"[a-z]{1,3}=[A-Za-z][A-Za-z0-9_\-]*",
+        # Common Japanese generic technical terms that look identifier-ish
+        # but are not sensitive.
+        r"(?:パブリッククラウド(?:サービス)?|フルマネージドサービス|"
+        r"オンプレミス(?:環境)?|プライベートサブネット|"
+        r"パブリックサブネット|"
+        r"VPC\s*フローログ|フロー(?:ログ|ログ用バケット)?|"
+        r"デフォルト|フェーズ|用途|方法|"
+        r"フローログ用バケット標準\s*VPC\s*フローログ?)",
+        # Generic ASCII fragment that is clearly a section/heading remnant
+        # rather than an identifier (e.g. "8.2 災害"). Match must be a
+        # numeric section prefix followed by a short Japanese noun.
+        r"\d+(?:\.\d+){0,3}\s+[\u3040-\u30FF\u4E00-\u9FFF]{1,8}",
+        # Stray punctuation / table-cell artifacts from PDF extraction
+        # (e.g. ``| '`` / ``| ``).
+        r"[\|\u3000\s'`\"]+[A-Za-z0-9 ]{0,4}",
+    ]
+    combined = "|".join(rf"(?:{part})" for part in parts)
+    # Anchor the entire captured value, allow surrounding whitespace.
+    return re.compile(rf"^\s*(?:{combined})\s*$", re.IGNORECASE)
+
+
+_PUBLIC_TERM_ALLOWLIST: re.Pattern[str] = _build_public_term_allowlist()
+
+
+# Categories that consult the public-term allowlist before masking.
+# Category-specific patterns (email, ipv4, hostname, etc.) bypass the
+# allowlist on purpose: their semantics are unambiguous and the values
+# they capture are never legitimate "public" terms.
+_ALLOWLIST_GUARDED_CATEGORIES: frozenset[str] = frozenset(
+    {"company", "project", "ticket", "person"}
+)
+
+
 def _build_internal_hostname_pattern(keywords: tuple[str, ...]) -> re.Pattern[str]:
     """Compile the bare-hostname regex from a device-keyword vocabulary.
 
@@ -205,29 +355,44 @@ class SensitiveDataSanitizer:
             ),
             (
                 "company",
-                re.compile(
-                    r"(?im)(?:^|\b)(customer(?:-name)?|client|company(?:-name)?|organization|vendor|"
-                    r"顧客名|お客様名|会社名|企業名|ベンダ(?:名)?|委託先)\b\s*[:=: ]+\s*([^\r\n,;]{2,80})"
+                _build_label_pattern(
+                    en_keywords=(
+                        r"customer(?:-name)?|client|company(?:-name)?|"
+                        r"organization|vendor"
+                    ),
+                    ja_keywords=(
+                        r"顧客名|お客様名|会社名|企業名|"
+                        r"ベンダ(?:名)?|委託先"
+                    ),
                 ),
             ),
             (
                 "project",
-                re.compile(
-                    r"(?im)(?:^|\b)(project(?:-name)?|system(?:-name)?|service(?:-name)?|"
-                    r"案件名|プロジェクト名|システム名|サービス名)\b\s*[:=: ]+\s*([^\r\n,;]{2,80})"
+                _build_label_pattern(
+                    en_keywords=(
+                        r"project(?:-name)?|system(?:-name)?|service(?:-name)?"
+                    ),
+                    ja_keywords=(
+                        r"案件名|プロジェクト名|システム名|サービス名"
+                    ),
                 ),
             ),
             (
                 "ticket",
-                re.compile(
-                    r"(?im)(?:^|\b)(change-id|change no|ticket|incident|request-id|"
-                    r"変更番号|申請番号|案件番号|回線番号|契約番号)\b\s*[:=: ]+\s*([^\r\n,;]{2,80})"
+                _build_label_pattern(
+                    en_keywords=(
+                        r"change-id|change\s*no|ticket|incident|request-id"
+                    ),
+                    ja_keywords=(
+                        r"変更番号|申請番号|案件番号|回線番号|契約番号"
+                    ),
                 ),
             ),
             (
                 "person",
-                re.compile(
-                    r"(?im)(?:^|\b)(owner|contact|manager|担当者|連絡先|申請者|責任者)\b\s*[:=: ]+\s*([^\r\n,;]{2,80})"
+                _build_label_pattern(
+                    en_keywords=r"owner|contact|manager",
+                    ja_keywords=r"担当者|連絡先|申請者|責任者",
                 ),
             ),
             ("url", re.compile(r"\bhttps?://[^\s)]+")),
@@ -356,6 +521,21 @@ class SensitiveDataSanitizer:
                 # ``[PERSON_001]`` after ``email`` already turned the address into
                 # ``[EMAIL_001]``.
                 if _PLACEHOLDER_REUSE_PATTERN.fullmatch(value.strip()):
+                    return match.group(0)
+                # R-N: for label-based categories (company / project / ticket /
+                # person), skip the substitution when the captured value is a
+                # widely public technical term (AWS service name, standard
+                # protocol, generic infrastructure abbreviation, DMARC policy
+                # value, etc.). Masking these destroys the semantic context
+                # the LLM reviewer needs and produces nonsense like
+                # ``[COMPANY_001] のバウンス率`` instead of ``Amazon SES のバウンス率``.
+                # Category-specific patterns (email / ipv4 / hostname / ...)
+                # are intentionally NOT consulted against the allowlist —
+                # their semantics are unambiguous.
+                if (
+                    category in _ALLOWLIST_GUARDED_CATEGORIES
+                    and _PUBLIC_TERM_ALLOWLIST.fullmatch(value)
+                ):
                     return match.group(0)
                 placeholder = self._placeholder(category, value)
                 self._append_record(records, placeholder, value, category)

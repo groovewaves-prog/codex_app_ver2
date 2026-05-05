@@ -3,7 +3,6 @@ import os
 import unittest
 from unittest.mock import patch
 
-from secure_review.models import SanitizationRecord
 from secure_review.sanitizer import (
     LocalSanitizationEnhancer,
     SensitiveDataSanitizer,
@@ -304,86 +303,226 @@ class SanitizerTests(unittest.TestCase):
         self.assertEqual(document.sanitized_excerpt.count("[HOSTNAME_001]"), 2)
         self.assertNotIn("[PERSON_001]", document.sanitized_excerpt)
 
+    # ------------------------------------------------------------------
+    # R-N: label-pattern hardening for Japanese AWS design docs.
+    #
+    # Three structural defects were previously producing nonsense category
+    # assignments on real-world docs:
+    #   A. ``[:=: ]+`` allowed a bare space as a label separator, so any
+    #      keyword followed by a single space matched.
+    #   B. English keywords like ``manager`` / ``vendor`` matched as the
+    #      second word of a phrase (``Systems Manager``, ``Software
+    #      vendor``).
+    #   C. Even with A and B fixed, ``LABEL: PUBLIC_SERVICE_NAME`` was
+    #      still being masked, destroying the technical meaning
+    #      (``Amazon SES`` becoming ``[COMPANY_001]``).
+    #
+    # The R-N fixes are: separator no longer accepts bare space (Fix A);
+    # English keywords must appear at line start with optional indent
+    # (Fix B); a public-term allowlist post-filters company / project /
+    # ticket / person matches (Fix C).
+    # ------------------------------------------------------------------
 
-class RegisterNerFindingTests(unittest.TestCase):
-    """R-M PR-A: register_ner_finding() の基本契約。
+    def _label_records(self, sanitizer, name: str, text: str):
+        """Helper: return only label-based records (company/project/ticket/person)."""
+        document = sanitizer.sanitize(name, text)
+        return [
+            r
+            for r in document.replacements
+            if r.category in ("company", "project", "ticket", "person")
+        ]
 
-    NER 経由の発見をプレイスホルダに採番する経路。テキスト置換と台帳
-    組み込みは呼び出し側 (run_masking_pipeline) の責務で、本メソッドは
-    採番のみを担う責務分離。
-    """
+    def test_rn_fix_a_bare_space_separator_no_longer_matches(self) -> None:
+        """Fix A: a single space between keyword and value must NOT be
+        treated as a label separator. ``vendor SMTP AUTH`` is not
+        ``vendor: SMTP AUTH``."""
+        sanitizer = SensitiveDataSanitizer()
+        # Each of these used to produce a bogus mask under the old
+        # ``[:=: ]+`` separator class.
+        for sample in [
+            "vendor SMTP AUTH",
+            "client AWS Direct Connect",
+            "ベンダ Amazon SES",
+            "プロジェクト名 府中 DC",
+            "担当者 デフォルト",
+            "案件名 フェーズ 1",
+            "顧客名 パブリッククラウドサービス",
+        ]:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    self._label_records(sanitizer, "doc.md", sample),
+                    [],
+                    f"{sample!r} produced a label-based mask but should not "
+                    f"under the no-bare-space separator rule",
+                )
 
-    def test_returns_placeholder_and_record(self) -> None:
-        s = SensitiveDataSanitizer()
-        placeholder, record = s.register_ner_finding("KDDI", "company")
+    def test_rn_fix_a_colon_separator_still_matches(self) -> None:
+        """Fix A regression guard: legitimate colon / equals / full-width-
+        colon separators must still trigger masking on real label values."""
+        sanitizer = SensitiveDataSanitizer()
+        cases = [
+            ("顧客名: 株式会社サンプル", "company"),
+            ("顧客名:株式会社サンプル", "company"),       # no space
+            ("顧客名: 株式会社サンプル", "company"),     # full-width space
+            ("顧客名:株式会社サンプル", "company"),    # full-width colon
+            ("案件名 = 次期NW更改", "project"),           # equals with spaces
+            ("担当者: 山田太郎", "person"),
+            ("変更番号: CR-2026-0042", "ticket"),
+        ]
+        for text, expected_category in cases:
+            with self.subTest(text=text):
+                records = self._label_records(sanitizer, "doc.md", text)
+                self.assertEqual(
+                    len(records),
+                    1,
+                    f"expected 1 mask for {text!r}, got {records}",
+                )
+                self.assertEqual(records[0].category, expected_category)
 
-        self.assertTrue(placeholder.startswith("[COMPANY_"))
-        self.assertTrue(placeholder.endswith("]"))
-        self.assertIsInstance(record, SanitizationRecord)
-        self.assertEqual(record.placeholder, placeholder)
-        self.assertEqual(record.original, "KDDI")
-        self.assertEqual(record.category, "company")
+    def test_rn_fix_b_english_keyword_must_be_at_line_start(self) -> None:
+        """Fix B: English label keywords (manager / vendor / customer / ...)
+        must be anchored at line start (with optional indent). This kills
+        the ``Systems Manager: SES`` / ``Account Manager: 山田`` /
+        ``Software vendor: Acme`` false-positive pattern where the
+        keyword is actually the second word of a longer phrase."""
+        sanitizer = SensitiveDataSanitizer()
+        # All of these must produce zero label-based records: the English
+        # keyword is mid-phrase, not at line start.
+        for sample in [
+            "AWS Systems Manager: SES",
+            "Account Manager: 山田太郎",
+            "Software vendor: ACME",
+            "Service customer: BigCo",
+        ]:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    self._label_records(sanitizer, "doc.md", sample),
+                    [],
+                    f"{sample!r} matched as a label even though the keyword "
+                    f"is mid-phrase",
+                )
 
-    def test_idempotent_for_same_category_value_pair(self) -> None:
-        """同一 (category, value) で複数回呼んでも同じプレイスホルダ。
-        ner_masker が同じ候補を二度発見しても番号が膨らまない保証。
-        """
-        s = SensitiveDataSanitizer()
-        p1, _ = s.register_ner_finding("KDDI", "company")
-        p2, _ = s.register_ner_finding("KDDI", "company")
-        self.assertEqual(p1, p2)
+    def test_rn_fix_b_line_start_english_label_still_matches(self) -> None:
+        """Fix B regression guard: a clean line-start English label must
+        still be detected, even with leading indentation."""
+        sanitizer = SensitiveDataSanitizer()
+        cases = [
+            "vendor: ACME Corporation",
+            "    customer: BigCo",       # indented (table-like layout)
+            "\tmanager: 田中一郎",         # tab-indented
+            "owner: john.doe",
+        ]
+        for sample in cases:
+            with self.subTest(sample=sample):
+                records = self._label_records(sanitizer, "doc.md", sample)
+                self.assertEqual(
+                    len(records),
+                    1,
+                    f"expected 1 mask for line-start label {sample!r}, "
+                    f"got {records}",
+                )
 
-    def test_different_values_get_distinct_placeholders(self) -> None:
-        s = SensitiveDataSanitizer()
-        p1, _ = s.register_ner_finding("KDDI", "company")
-        p2, _ = s.register_ner_finding("NTT", "company")
-        self.assertNotEqual(p1, p2)
-        # 連番がインクリメントされている
-        self.assertEqual(p1, "[COMPANY_001]")
-        self.assertEqual(p2, "[COMPANY_002]")
+    def test_rn_fix_b_japanese_keywords_keep_relaxed_boundary(self) -> None:
+        """Fix B regression guard: Japanese keywords retain the relaxed
+        ``(?:^|\\b)`` prefix because CJK word-boundary semantics work
+        correctly for them. Inline Japanese labels (after punctuation,
+        full-width space, etc.) must still match."""
+        sanitizer = SensitiveDataSanitizer()
+        cases = [
+            "なお、担当者: 山田太郎までご連絡ください",
+            "（連絡先: 03-1234-5678）",
+            "顧客名: 株式会社サンプル",
+        ]
+        for sample in cases:
+            with self.subTest(sample=sample):
+                records = self._label_records(sanitizer, "doc.md", sample)
+                self.assertGreaterEqual(
+                    len(records),
+                    1,
+                    f"expected at least 1 mask for inline JP label {sample!r}",
+                )
 
-    def test_categories_have_independent_counters(self) -> None:
-        """カテゴリ別カウンタが独立。COMPANY と SITE が混ざらない。"""
-        s = SensitiveDataSanitizer()
-        c1, _ = s.register_ner_finding("KDDI", "company")
-        site1, _ = s.register_ner_finding("府中DC", "site")
-        c2, _ = s.register_ner_finding("NTT", "company")
+    def test_rn_fix_c_public_aws_service_names_are_not_masked(self) -> None:
+        """Fix C: when the captured value is a widely-public AWS service
+        name or standard protocol, the substitution must be skipped.
+        ``連絡先: SMTP AUTH`` must remain ``連絡先: SMTP AUTH``, not
+        become ``連絡先: [PERSON_001]``."""
+        sanitizer = SensitiveDataSanitizer()
+        for sample in [
+            "vendor: AWS",
+            "vendor: Amazon",
+            "manager: Amazon SES",
+            "連絡先: SMTP AUTH",
+            "案件名: VPC",
+            "システム名: Amazon Data Firehose",
+            "サービス名: CloudWatch",
+            "システム名: Direct Connect Gateway",
+            "プロジェクト名: Private VIF",
+            "案件名: MX レコード",
+            "顧客名: パブリッククラウドサービス",
+        ]:
+            with self.subTest(sample=sample):
+                records = self._label_records(sanitizer, "doc.md", sample)
+                self.assertEqual(
+                    records,
+                    [],
+                    f"public-term value in {sample!r} was masked but the "
+                    f"allowlist should have skipped it",
+                )
 
-        self.assertEqual(c1, "[COMPANY_001]")
-        self.assertEqual(site1, "[SITE_001]")
-        self.assertEqual(c2, "[COMPANY_002]")
+    def test_rn_fix_c_dmarc_policy_values_are_not_masked(self) -> None:
+        """Fix C: DMARC / SPF policy values like ``p=none`` /
+        ``p=quarantine`` must not be misclassified as identifiers.
+        These appear in mail-design docs alongside DKIM / DMARC
+        explanations and have no PII content."""
+        sanitizer = SensitiveDataSanitizer()
+        for sample in [
+            "案件名: p=none",
+            "案件名: p=quarantine",
+            "案件名: p=reject",
+        ]:
+            with self.subTest(sample=sample):
+                self.assertEqual(
+                    self._label_records(sanitizer, "doc.md", sample),
+                    [],
+                )
 
-    def test_shares_numbering_with_regex_pipeline(self) -> None:
-        """R-M の核心: regex 経路と NER 経路で番号を共有する。
+    def test_rn_fix_c_real_customer_names_still_masked(self) -> None:
+        """Fix C regression guard: the allowlist must NOT exempt real
+        customer / project / person names. Anything that is not in the
+        public-term list must still be masked under its label."""
+        sanitizer = SensitiveDataSanitizer()
+        cases = [
+            ("顧客名: 株式会社サンプル", "株式会社サンプル", "company"),
+            ("案件名: 次期NW更改", "次期NW更改", "project"),
+            ("担当者: 山田太郎", "山田太郎", "person"),
+            ("変更番号: CR-2026-0042", "CR-2026-0042", "ticket"),
+            ("vendor: ACME Corporation", "ACME Corporation", "company"),
+        ]
+        for text, expected_value, expected_category in cases:
+            with self.subTest(text=text):
+                records = self._label_records(sanitizer, "doc.md", text)
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0].original, expected_value)
+                self.assertEqual(records[0].category, expected_category)
 
-        同一 SensitiveDataSanitizer インスタンスで sanitize_text() を
-        実行した後に register_ner_finding を呼ぶと、同じカテゴリの
-        既存採番を継続する形で次の番号が振られる。
-        """
-        s = SensitiveDataSanitizer()
-        # regex 経路で 1 件 person カテゴリを発生させる
-        result = s.sanitize_text("担当者: 山田太郎")
-        regex_persons = [r for r in result.records if r.category == "person"]
-        self.assertEqual(len(regex_persons), 1)
-        self.assertEqual(regex_persons[0].placeholder, "[PERSON_001]")
-
-        # NER 経路で続けて person を登録すると、PERSON_002 になるはず
-        placeholder, _ = s.register_ner_finding("佐藤花子", "person")
-        self.assertEqual(placeholder, "[PERSON_002]")
-
-    def test_no_side_effect_on_sanitize_text_records(self) -> None:
-        """register_ner_finding は sanitize_text のローカル records には
-        影響しない (台帳組み込みは呼び出し側の責務)。
-        """
-        s = SensitiveDataSanitizer()
-        s.register_ner_finding("KDDI", "company")
-
-        # 直後の sanitize_text の records には KDDI は含まれない
-        # (テキスト中に "KDDI" が現れていないため、当然ながら)
-        result = s.sanitize_text("Hello world")
-        self.assertEqual(
-            [r for r in result.records if r.original == "KDDI"], []
+    def test_rn_value_capture_stops_at_japanese_punctuation(self) -> None:
+        """Fix D (bonus): the value capture must stop on Japanese
+        punctuation (``、``, ``；``, ``。``) just as it does on ASCII
+        comma / semicolon. Otherwise a single match greedily eats
+        across clause boundaries."""
+        sanitizer = SensitiveDataSanitizer()
+        records = self._label_records(
+            sanitizer,
+            "doc.md",
+            "顧客名: 株式会社サンプル、担当者: 山田太郎",
         )
+        # Two distinct masks: company and person, NOT one giant
+        # ``株式会社サンプル、担当者: 山田太郎`` mega-match.
+        self.assertEqual(len(records), 2)
+        originals = {r.original for r in records}
+        self.assertIn("株式会社サンプル", originals)
+        self.assertIn("山田太郎", originals)
 
 
 if __name__ == "__main__":

@@ -940,23 +940,48 @@ if review is not None:
             # New structured summary - render 4 sections with verdict badge.
             if ss.purpose:
                 st.markdown(f"**目的** — {ss.purpose}")
-            if ss.purpose_section_in_document or ss.purpose_divergence:
-                # Show divergence between AI-inferred purpose and the document's
-                # stated purpose, when available.
-                divergence_parts = []
-                if ss.purpose_section_in_document:
-                    divergence_parts.append(
-                        f"_文書記載箇所_: {ss.purpose_section_in_document}"
-                    )
-                if ss.purpose_divergence:
+
+            # PR-I: classify the four cases of purpose_section_in_document
+            # and purpose_divergence to give the user the right kind of
+            # feedback:
+            # - section present + no divergence: just show the section ref
+            # - section present + divergence: show both as warning
+            # - section missing + AI-derived purpose available: prompt the
+            #   author to add a purpose section, with the AI's purpose as
+            #   a starter draft
+            # - both empty: nothing to show
+            _has_section = bool(ss.purpose_section_in_document)
+            _has_divergence = bool(ss.purpose_divergence)
+            _has_purpose = bool(ss.purpose)
+
+            if _has_section:
+                # Document has a "目的" section — show its location and any
+                # divergence the LLM detected.
+                divergence_parts = [
+                    f"_文書記載箇所_: {ss.purpose_section_in_document}"
+                ]
+                if _has_divergence:
                     divergence_parts.append(f"_乖離_: {ss.purpose_divergence}")
-                if divergence_parts:
+                color = "#a04a00" if _has_divergence else "#5a5040"
+                st.markdown(
+                    f"<div style='margin-top:0.3rem;color:{color};font-size:0.9rem;'>"
+                    + " · ".join(divergence_parts)
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
+            elif _has_purpose:
+                # PR-I: no "目的" section in the document but the LLM did
+                # derive a purpose from the content. Recommend the author
+                # add one and offer the LLM's purpose as a starter draft.
+                with st.container(border=True):
                     st.markdown(
-                        "<div style='margin-top:0.3rem;color:#5a5040;font-size:0.9rem;'>"
-                        + " · ".join(divergence_parts)
-                        + "</div>",
-                        unsafe_allow_html=True,
+                        "⚠️ **ドキュメントに「目的」項目が見当たりません。**"
+                        "冒頭(第1章または「はじめに」直後)に目的セクションを追記する"
+                        "ことを推奨します。以下は本ドキュメントの内容から推定した目的の"
+                        "草案です。必要に応じて加筆・修正のうえ反映してください。"
                     )
+                    st.code(ss.purpose, language=None)
+
             if ss.content_outline:
                 st.markdown(f"**内容要約** — {ss.content_outline}")
             if ss.overall_evaluation:

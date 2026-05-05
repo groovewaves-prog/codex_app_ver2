@@ -744,66 +744,75 @@ if preview_docs:
             for warning in warnings:
                 st.markdown(f"- {warning}")
 
-    for doc in preview_docs:
-        card_class = _doc_card_class(doc.local_sensitivity_decision)
-        st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
+    # PR-J: 文書数が 4 件以上の場合、ステップ 2 の各文書カードを
+    # 高さ 600px のスクロール可能コンテナで包む。本文+別紙の構成で
+    # 11 ファイル前後を読み込んだ際に画面が縦に長く伸びすぎる問題への対処。
+    # 3 件以下の場合は従来通りスクロールなし (画面圧迫の心配がないため)。
+    _step2_use_scroll = len(preview_docs) >= 4
+    _step2_container = (
+        st.container(height=600) if _step2_use_scroll else st.container()
+    )
+    with _step2_container:
+        for doc in preview_docs:
+            card_class = _doc_card_class(doc.local_sensitivity_decision)
+            st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
 
-        header_left = (
-            f"<b>{doc.name}</b> "
-            f'<span class="doc-meta"> · {doc.estimated_input_tokens} トークン '
-            f"· 外部送信リスク: {doc.outbound_risk}</span>"
-        )
-        st.markdown(
-            f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-            f'<div>{header_left}</div>'
-            f"<div>{_decision_badge(doc.local_sensitivity_decision)}</div>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        if doc.local_sensitivity_reasons:
-            st.markdown("**判定理由**")
-            for reason in doc.local_sensitivity_reasons:
-                st.markdown(f"- {reason}")
-
-        if doc.findings:
-            with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
-                for finding in doc.findings:
-                    st.markdown(f"- {finding}")
-
-        # ----- R-M (PR-D2 + PR-F): 未確定候補カード (α 案: 各文書のカード内) -----
-        # PR-F: SanitizedDocument.original_excerpt を full_text として渡し、
-        # _render_uncertain_candidates_card がコンテキスト抜粋を表示できるように。
-        _masking_state = st.session_state.get("masking_states", {}).get(doc.name)
-        if _masking_state is not None:
-            _render_uncertain_candidates_card(
-                _masking_state,
-                full_text=doc.original_excerpt or "",
+            header_left = (
+                f"<b>{doc.name}</b> "
+                f'<span class="doc-meta"> · {doc.estimated_input_tokens} トークン '
+                f"· 外部送信リスク: {doc.outbound_risk}</span>"
+            )
+            st.markdown(
+                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
+                f'<div>{header_left}</div>'
+                f"<div>{_decision_badge(doc.local_sensitivity_decision)}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
             )
 
-        # PR-F: 「匿名化後の抜粋」「置換一覧」は長文化しがちなため
-        # エクスパンダーで折りたたむ。デフォルトは閉じておき、ユーザは
-        # マスク候補の検討に集中できる。
-        with st.expander("📄 匿名化後の抜粋・置換一覧", expanded=False):
-            tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
-            with tabs[0]:
-                st.markdown(
-                    f"<pre class='sanitized'>{doc.sanitized_excerpt or '(空)'}</pre>",
-                    unsafe_allow_html=True,
-                )
-            with tabs[1]:
-                if doc.replacements:
-                    rows = [
-                        {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
-                        for r in doc.replacements[:50]
-                    ]
-                    st.dataframe(rows, use_container_width=True, hide_index=True)
-                    if len(doc.replacements) > 50:
-                        st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
-                else:
-                    st.caption("置換は記録されませんでした。")
+            if doc.local_sensitivity_reasons:
+                st.markdown("**判定理由**")
+                for reason in doc.local_sensitivity_reasons:
+                    st.markdown(f"- {reason}")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+            if doc.findings:
+                with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
+                    for finding in doc.findings:
+                        st.markdown(f"- {finding}")
+
+            # ----- R-M (PR-D2 + PR-F): 未確定候補カード (α 案: 各文書のカード内) -----
+            # PR-F: SanitizedDocument.original_excerpt を full_text として渡し、
+            # _render_uncertain_candidates_card がコンテキスト抜粋を表示できるように。
+            _masking_state = st.session_state.get("masking_states", {}).get(doc.name)
+            if _masking_state is not None:
+                _render_uncertain_candidates_card(
+                    _masking_state,
+                    full_text=doc.original_excerpt or "",
+                )
+
+            # PR-F: 「匿名化後の抜粋」「置換一覧」は長文化しがちなため
+            # エクスパンダーで折りたたむ。デフォルトは閉じておき、ユーザは
+            # マスク候補の検討に集中できる。
+            with st.expander("📄 匿名化後の抜粋・置換一覧", expanded=False):
+                tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
+                with tabs[0]:
+                    st.markdown(
+                        f"<pre class='sanitized'>{doc.sanitized_excerpt or '(空)'}</pre>",
+                        unsafe_allow_html=True,
+                    )
+                with tabs[1]:
+                    if doc.replacements:
+                        rows = [
+                            {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
+                            for r in doc.replacements[:50]
+                        ]
+                        st.dataframe(rows, use_container_width=True, hide_index=True)
+                        if len(doc.replacements) > 50:
+                            st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
+                    else:
+                        st.caption("置換は記録されませんでした。")
+
+            st.markdown("</div>", unsafe_allow_html=True)
 
     # -- Step 3: Confirmation gate ----------------------------------------
 
@@ -849,21 +858,29 @@ if preview_docs:
             f"{len(mask_docs)} 件の文書は外部送信前に明示的な確認が必要です。"
             "上記の匿名化後の抜粋を確認し、各文書について承認してください。"
         )
-        for doc in mask_docs:
-            # PR-I-FIX: R-M uncertain がある場合は、文言で何を確認すべきかを補足
-            _is_rm_only = (
-                doc.local_sensitivity_decision != "mask_and_continue"
-                and _has_uncertain_candidates(doc.name)
-            )
-            _label_suffix = (
-                "(マスク候補の確認 + 匿名化結果の確認)"
-                if _is_rm_only
-                else "(匿名化後の抜粋の確認)"
-            )
-            confirmations[doc.name] = st.checkbox(
-                f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。 {_label_suffix}",
-                key=f"confirm_{doc.name}",
-            )
+        # PR-J: 4 件以上の場合、承認チェックボックス群を高さ 400px の
+        # スクロール可能コンテナで包む。11 ファイル前後を承認する際に
+        # 画面が縦に長く伸びすぎる問題への対処。
+        _step3_use_scroll = len(mask_docs) >= 4
+        _step3_container = (
+            st.container(height=400) if _step3_use_scroll else st.container()
+        )
+        with _step3_container:
+            for doc in mask_docs:
+                # PR-I-FIX: R-M uncertain がある場合は、文言で何を確認すべきかを補足
+                _is_rm_only = (
+                    doc.local_sensitivity_decision != "mask_and_continue"
+                    and _has_uncertain_candidates(doc.name)
+                )
+                _label_suffix = (
+                    "(マスク候補の確認 + 匿名化結果の確認)"
+                    if _is_rm_only
+                    else "(匿名化後の抜粋の確認)"
+                )
+                confirmations[doc.name] = st.checkbox(
+                    f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。 {_label_suffix}",
+                    key=f"confirm_{doc.name}",
+                )
 
     all_confirmed = (not mask_docs) or all(confirmations.get(doc.name) for doc in mask_docs)
     can_send = bool(preview_docs) and not blocked_docs and all_confirmed
@@ -1070,65 +1087,74 @@ if review is not None:
     severity_order = {"high": 0, "medium": 1, "low": 2, "info": 3}
     sorted_issues = sorted(review.issues, key=lambda i: severity_order.get(i.severity, 4))
 
-    for issue in sorted_issues:
-        severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
-        # B3: prefer structured display when issue has new fields (current_state,
-        # issue, impact, etc.); fall back to legacy details/recommendation only.
-        if issue.has_structured_fields():
-            # New structured display.
-            id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
-            section_suffix = (
-                f' · 章: {issue.section}' if issue.section else ''
-            )
-            timing_badge = _required_timing_badge(issue.required_timing)
-            re_review_badge = _re_review_badge(issue.re_review_required)
-            badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
-            badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
+    # PR-J: 4 件以上の指摘がある場合、ステップ 4 の指摘リストを高さ 800px の
+    # スクロール可能コンテナで包む。複数文書の総合レビューで指摘が 8-15 件
+    # 出る際に、画面が縦に長く伸びすぎる問題への対処。プロンプトプレビュー
+    # と生レスポンスはコンテナの外に置き、デバッグ時は通常通り展開できる。
+    _step4_use_scroll = len(sorted_issues) >= 4
+    _step4_container = (
+        st.container(height=800) if _step4_use_scroll else st.container()
+    )
+    with _step4_container:
+        for issue in sorted_issues:
+            severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
+            # B3: prefer structured display when issue has new fields (current_state,
+            # issue, impact, etc.); fall back to legacy details/recommendation only.
+            if issue.has_structured_fields():
+                # New structured display.
+                id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
+                section_suffix = (
+                    f' · 章: {issue.section}' if issue.section else ''
+                )
+                timing_badge = _required_timing_badge(issue.required_timing)
+                re_review_badge = _re_review_badge(issue.re_review_required)
+                badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
+                badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
 
-            body_parts = []
-            if issue.current_state:
-                body_parts.append(
-                    f"<div style='margin-top:0.3rem;'>"
-                    f"<b>現状:</b> {issue.current_state}</div>"
+                body_parts = []
+                if issue.current_state:
+                    body_parts.append(
+                        f"<div style='margin-top:0.3rem;'>"
+                        f"<b>現状:</b> {issue.current_state}</div>"
+                    )
+                if issue.issue:
+                    body_parts.append(
+                        f"<div style='margin-top:0.2rem;'>"
+                        f"<b>問題点:</b> {issue.issue}</div>"
+                    )
+                if issue.impact:
+                    body_parts.append(
+                        f"<div style='margin-top:0.2rem;'>"
+                        f"<b>影響:</b> {issue.impact}</div>"
+                    )
+                if issue.recommendation:
+                    body_parts.append(
+                        f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+                        f"<b>推奨対応:</b> {issue.recommendation}</div>"
+                    )
+
+                st.markdown(
+                    f"<div class='issue-row {issue.severity}'>"
+                    f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
+                    f'<span class="doc-meta"> · 出典: {issue.source_document}{section_suffix}</span>'
+                    + "".join(body_parts)
+                    + badges_html
+                    + "</div>",
+                    unsafe_allow_html=True,
                 )
-            if issue.issue:
-                body_parts.append(
-                    f"<div style='margin-top:0.2rem;'>"
-                    f"<b>問題点:</b> {issue.issue}</div>"
-                )
-            if issue.impact:
-                body_parts.append(
-                    f"<div style='margin-top:0.2rem;'>"
-                    f"<b>影響:</b> {issue.impact}</div>"
-                )
-            if issue.recommendation:
-                body_parts.append(
-                    f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+            else:
+                # Legacy display (pre-B2 LLM responses or providers that don't yet
+                # produce the new schema).
+                st.markdown(
+                    f"<div class='issue-row {issue.severity}'>"
+                    f"<b>[{severity_jp}]</b> {issue.title} "
+                    f'<span class="doc-meta"> · 出典: {issue.source_document}</span><br/>'
+                    f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
+                    f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
                     f"<b>推奨対応:</b> {issue.recommendation}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
                 )
-
-            st.markdown(
-                f"<div class='issue-row {issue.severity}'>"
-                f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
-                f'<span class="doc-meta"> · 出典: {issue.source_document}{section_suffix}</span>'
-                + "".join(body_parts)
-                + badges_html
-                + "</div>",
-                unsafe_allow_html=True,
-            )
-        else:
-            # Legacy display (pre-B2 LLM responses or providers that don't yet
-            # produce the new schema).
-            st.markdown(
-                f"<div class='issue-row {issue.severity}'>"
-                f"<b>[{severity_jp}]</b> {issue.title} "
-                f'<span class="doc-meta"> · 出典: {issue.source_document}</span><br/>'
-                f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
-                f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
-                f"<b>推奨対応:</b> {issue.recommendation}</div>"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
 
     with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
         st.code(review.prompt_preview or "(空)", language="text")

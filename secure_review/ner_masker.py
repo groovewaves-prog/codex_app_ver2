@@ -18,6 +18,7 @@
 """
 from __future__ import annotations
 
+import re
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,223 @@ SPACY_TO_MASK_CATEGORY: dict[str, str] = {
     "FAC": "site",
     "PERSON": "person",
 }
+
+
+# R-O (2026-05-05): pattern-based tech-term filter for spaCy mis-detections
+# that the YAML allowlist cannot reach.
+#
+# Background. PR-G's `_is_tech_term` did exact-match-only on a YAML list.
+# Real-world Japanese AWS design docs produced spaCy NER hits that the
+# YAML cannot enumerate practically:
+#
+#   1. Compound public-service references (``Amazon SES``, ``Amazon VPC``,
+#      ``Amazon Data Firehose``, ``Amazon SES SMTP VPC エンドポイント``) —
+#      enumerating every (Amazon, AWS) × (service-name) × (suffix) is
+#      hopeless and brittle.
+#   2. PDF extraction inserts stray spaces inside Japanese words
+#      (``デフォ ルト``, ``フェー ズ``, ``検 証する``, ``パブリック
+#      クラウドサー ビス``, ``府中 DC``). These never hit an exact-match
+#      list because the surface form is broken.
+#   3. Section-number headings the NER picks up as ORG/PERSON/SITE
+#      (``8.2 災害``, ``10.2 ログ管理方針 メール``, ``SLA 障害``).
+#   4. Mail-protocol vocabulary (``MX レコード``, ``DKIM``, ``DomainKeys
+#      Identified Mail``, ``DMARC``, ``SMTP AUTH``, ``p=none``,
+#      ``p=quarantine``, ``DMARC1; p``).
+#   5. PDF table-cell artefacts (``| '``, ``VPC VPC``, ``フローログ用
+#      バケット標準 VPC フローログ``).
+#
+# This regex layer is consulted *in addition to* `_tech_allowlist`. A
+# match here means the candidate is a public technical reference and
+# should not be masked. Seed-dictionary hits (`confirmed=True`) bypass
+# this filter because they were explicitly registered as something the
+# operator wants masked.
+# R-O: rejection list applied BEFORE the tech-term patterns. If a value
+# matches one of these "Amazon X" / "AWS X" forms where X is clearly NOT
+# an AWS service name (e.g. ``Amazon Japan`` is a real company, not a
+# service), the value is treated as a regular candidate instead of a
+# public technical term. This prevents the broad ``Amazon\s+\w+`` rule
+# from accidentally exempting legitimate corporate names.
+_TECH_TERM_REJECT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # Amazon X where X is a known non-AWS-service noun (corporate
+    # subsidiary, consumer product, region/locale name).
+    re.compile(
+        r"^\s*Amazon\s+"
+        r"(?:Japan|Japan\s+G\.?K\.?|Japan\s+合同会社|"
+        r"\.com|"
+        r"Web\s+Services?(?:\s+Japan(?:\s+G\.?K\.?)?)?|"
+        r"Prime|Music|Echo|Kindle|Alexa|Fresh|Pay|"
+        r"Pharmacy|Robotics|Studios|Books|"
+        r"Game\s+Studios|"
+        r"Marketplace|Mechanical\s+Turk|"
+        r"Logistics)\s*$",
+        re.IGNORECASE,
+    ),
+    # AWS X where X is a non-service noun (re:Invent / Summit etc.,
+    # plus partner / event / region naming forms).
+    re.compile(
+        r"^\s*AWS\s+(?:Japan|Japan\s+G\.?K\.?|"
+        r"Summit|re:Invent|Reinvent|Loft|Innovate|"
+        r"Partner(?:s|\s+Network)?|"
+        r"Tokyo|Osaka|Singapore|Sydney|"
+        r"User\s+Group|UG)\s*$",
+        re.IGNORECASE,
+    ),
+)
+
+
+_TECH_TERM_REGEX_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # AWS / Amazon prefixed service references with optional trailing
+    # technical noun. Catches ``Amazon SES``, ``Amazon Data Firehose``,
+    # ``Amazon S3``, ``AWS CloudWatch``, ``Amazon SES SMTP VPC エンドポイント``,
+    # ``Amazon VPC``, ``Amazon S`` (PDF truncation), etc.
+    re.compile(
+        r"^\s*(?:Amazon|AWS)\s+"
+        r"[A-Za-z0-9][A-Za-z0-9 ./\-]{0,60}"
+        r"(?:\s+(?:メール|エンドポイント|レコード|サービス|"
+        r"フロー(?:ログ)?|バケット|ゲートウェイ|プロトコル|"
+        r"SMTP(?:\s+VPC\s+エンドポイント)?|VPC(?:\s+エンドポイント)?))?"
+        r"\s*$",
+        re.IGNORECASE,
+    ),
+    # AWS short service names + standard internet protocols + common
+    # infrastructure abbreviations, alone or followed by a trailing
+    # technical noun. Catches ``SES``, ``VPC``, ``Direct Connect Gateway``,
+    # ``Private VIF``, ``MX レコード``, ``DKIM``, ``SMTP AUTH``, ``Route 53``,
+    # ``NLB``, ``EventBridge``, ``GuardDuty``, ``CloudWatch``, etc.
+    re.compile(
+        r"^\s*"
+        r"(?:SES|S3|EC2|VPC|VIF|VPN|SNS|SQS|IAM|RDS|EBS|ELB|ALB|NLB|"
+        r"KMS|ACM|WAF|CloudWatch|CloudFront|CloudTrail|CloudShell|"
+        r"Route\s*53|Lambda|EventBridge|GuardDuty|Config|Athena|"
+        r"Firehose|Backlog|AMS|"
+        r"Direct\s*Connect(?:\s+Gateway)?|"
+        r"(?:Private|Public)\s+VIF|"
+        r"(?:Private|Public)\s+Virtual\s+Interface|"
+        r"SMTP(?:S)?|IMAP|POP3|HTTP|HTTPS|TLS|SSL|SSH|FTP|SFTP|"
+        r"NTP|DNS|DKIM|DMARC|SPF|MX|AUTH|"
+        r"DomainKeys\s+Identified\s+Mail|"
+        r"BGP|OSPF|VRRP|HSRP|VLAN|NAT|ACL|CIDR)"
+        r"(?:\s+(?:AUTH|レコード|エンドポイント|プロトコル|サービス|"
+        r"VPC(?:\s+エンドポイント)?|SMTP(?:\s+VPC\s+エンドポイント)?))?"
+        r"\s*$",
+        re.IGNORECASE,
+    ),
+    # DMARC / SPF policy values. ``p=none``, ``p=quarantine``, ``p=reject``,
+    # also the mangled ``DMARC1; p`` from PDF text extraction.
+    re.compile(
+        r"^\s*(?:DMARC\d*\s*[;:]?\s*)?[a-z]{1,3}=[A-Za-z][A-Za-z0-9_\-]*\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^\s*DMARC\d*\s*[;:]?\s*[a-z]\s*$", re.IGNORECASE),
+    # Section-number headings: ``8.2 災害``, ``10.2 ログ管理方針 メール``.
+    # Numeric prefix (``N`` or ``N.M`` or ``N.M.K``) followed by a short
+    # Japanese phrase. Limit phrase to 30 chars to keep this conservative.
+    re.compile(
+        r"^\s*\d+(?:\.\d+){0,3}\s+"
+        r"[\u3040-\u30FF\u4E00-\u9FFFA-Za-z][\u3040-\u30FF\u4E00-\u9FFFA-Za-z0-9 ]{0,30}"
+        r"\s*$"
+    ),
+    # ``SLA 障害``, ``VPC VPC``, ``ライフサイクル管理`` and similar tech-noun
+    # phrases that spaCy mis-tags. Pattern: a recognised tech abbreviation
+    # or katakana noun followed by a short Japanese / English noun.
+    re.compile(
+        r"^\s*(?:SLA|SLO|SLI|SOC|RPO|RTO|MFA|VPC|DNS|DC|AZ|API|CLI|UI|UX|"
+        r"VPN|NAT|ACL|MX|TLS|SSL|DKIM|DMARC|SPF|TCP|UDP|SES|S3)"
+        r"\s+"
+        r"[\u3040-\u30FF\u4E00-\u9FFFA-Za-z][\u3040-\u30FF\u4E00-\u9FFFA-Za-z0-9 ]{0,30}"
+        r"\s*$",
+        re.IGNORECASE,
+    ),
+    # Self-repeating short tokens (``VPC VPC``, ``SES SES``) — typical of
+    # PDF column-header repetition. Two short identical alphanumeric tokens
+    # separated by whitespace.
+    re.compile(r"^\s*([A-Za-z][A-Za-z0-9]{1,5})\s+\1\s*$"),
+    # ``フローログ用バケット標準 VPC フローログ`` shape: long Japanese
+    # noun phrase containing a public technical abbreviation.
+    re.compile(
+        r"^\s*[\u3040-\u30FF\u4E00-\u9FFFA-Za-z][\u3040-\u30FF\u4E00-\u9FFFA-Za-z0-9 ]{2,80}"
+        r"\s+(?:VPC|DNS|VPN|VIF|SES|S3|SMTP|DKIM|DMARC|SPF|MX|TLS|TCP|UDP)"
+        r"\s+[\u3040-\u30FF\u4E00-\u9FFFA-Za-z][\u3040-\u30FF\u4E00-\u9FFFA-Za-z0-9 ]{0,40}\s*$",
+        re.IGNORECASE,
+    ),
+    # Stray punctuation / table-cell artefacts: ``| '``, ``| ``, etc.
+    # Requires at least one bar / quote character so pure whitespace
+    # does not match.
+    re.compile(r"^\s*[|｜][|｜\u3000\s'`\"]*[A-Za-z0-9 ]{0,4}\s*$"),
+    # Generic infrastructure / cloud-provider single tokens (extends the
+    # YAML list with case-insensitive coverage and a few common omissions).
+    re.compile(
+        r"^\s*(?:AWS|GCP|OCI|Azure|Amazon|Google|Microsoft|Oracle|"
+        r"VPC|DC|AZ|MFA|RBAC|ABAC|SLA|SLO|SLI|SOC|RPO|RTO|"
+        r"API|CLI|GUI|SDK|UI|UX|CSV|TSV|TIFF|JPEG|PNG|GIF|PDF|"
+        r"DKIM|DMARC|SPF|MX|SMTP|IMAP|POP3|TLS|SSL|HTTPS?|"
+        r"TCP|UDP|ICMP|IPSec|RADIUS|LDAP|JSON|XML|YAML|"
+        r"JWT|OAuth2?|SAML|OIDC|JOSE|JWE|JWS|JWK|"
+        r"Backlog|Slack|GitHub|GitLab|Jira|"
+        r"PagerDuty|Datadog|Splunk|"
+        r"Kubernetes|Docker|Terraform|Ansible|Chef|Puppet|"
+        r"Linux|Windows|macOS|Ubuntu|CentOS|RHEL|Debian|"
+        r"Python|Java|Ruby|Go|Rust|TypeScript|JavaScript|"
+        r"React|Vue|Angular|Next\.?js|Nuxt|Svelte)\s*$",
+        re.IGNORECASE,
+    ),
+    # Generic Japanese technical terms that look identifier-ish but are
+    # not sensitive: ``デフォルト``, ``フェーズ``, ``用途``, ``方法``,
+    # ``パブリッククラウドサービス``, ``フルマネージドサービス``,
+    # ``オンプレミス``, ``オンプレミス環境`` etc.
+    # Also tolerates the PDF-injected stray space (``デフォ ルト``,
+    # ``フェー ズ``, ``検 証する``, ``パブリッククラウドサー ビス``,
+    # ``府中 DC``) by allowing optional whitespace anywhere inside.
+    re.compile(
+        r"^\s*(?:"
+        r"パ\s*ブ\s*リ\s*ッ\s*ク\s*ク\s*ラ\s*ウ\s*ド(?:\s*サ\s*ー?\s*ビ\s*ス)?|"
+        r"フ\s*ル\s*マ\s*ネ\s*ー?\s*ジ\s*ド\s*サ\s*ー?\s*ビ\s*ス|"
+        r"オ\s*ン\s*プ\s*レ\s*ミ\s*ス(?:\s*環\s*境)?|"
+        r"プ\s*ラ\s*イ\s*ベ\s*ー?\s*ト\s*サ\s*ブ\s*ネ\s*ッ\s*ト|"
+        r"パ\s*ブ\s*リ\s*ッ\s*ク\s*サ\s*ブ\s*ネ\s*ッ\s*ト|"
+        r"デ\s*フ\s*ォ\s*ル\s*ト|"
+        r"フ\s*ェ\s*ー?\s*ズ|"
+        r"用\s*途|方\s*法|"
+        r"検\s*証(?:\s*す\s*る)?|"
+        r"ラ\s*イ\s*フ\s*サ\s*イ\s*ク\s*ル(?:\s*管\s*理)?|"
+        r"フ\s*ロ\s*ー?\s*ロ\s*グ(?:\s*用\s*バ\s*ケ\s*ッ\s*ト)?|"
+        r"\d+\s*日\s*間|"
+        r"府\s*中\s*D\s*C(?:\s*\(?)?"
+        r")\s*$"
+    ),
+)
+
+
+def _matches_tech_term_pattern(text: str) -> bool:
+    """Return True iff ``text`` matches any R-O regex pattern.
+
+    Used in addition to the YAML-based exact-match allowlist. The
+    intent is to catch families of public-technical-term shapes that
+    cannot be enumerated literally (``Amazon X``, section headings,
+    PDF-extraction artefacts, etc.). Seed-dictionary hits should
+    bypass this — the caller is responsible for that gate.
+
+    A small reject list (``_TECH_TERM_REJECT_PATTERNS``) is consulted
+    *first* to handle ``Amazon X`` / ``AWS X`` forms where ``X`` is
+    clearly NOT a service name (e.g. ``Amazon Japan`` is a real
+    corporate entity, not a service). Reject-list hits return False
+    immediately so the broader allow-pattern does not exempt them.
+    """
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped:
+        return False
+    # Reject list: things that look like ``Amazon X`` but are corporate
+    # entities, not AWS services. These must NOT be treated as public
+    # technical terms.
+    for pattern in _TECH_TERM_REJECT_PATTERNS:
+        if pattern.fullmatch(stripped):
+            return False
+    for pattern in _TECH_TERM_REGEX_PATTERNS:
+        if pattern.fullmatch(stripped):
+            return True
+    return False
 
 
 class NerMasker:
@@ -127,12 +345,22 @@ class NerMasker:
                     self._tech_allowlist.add(entry.strip().lower())
 
     def _is_tech_term(self, text: str) -> bool:
-        """text が技術用語 allowlist に含まれていれば True (PR-G)。
+        """text が技術用語 allowlist に含まれていれば True (PR-G + R-O)。
 
-        大文字小文字を区別しない比較。完全一致のみ判定し、部分一致は
-        しない (例: "VPC" は許容、"VPC設定" は別物として扱う)。
+        2 段構え:
+          1. PR-G の YAML allowlist (大文字小文字無視・完全一致)
+          2. R-O の regex パターン群 (``Amazon X`` / セクション見出し /
+             PDF 抽出由来のスペース混入語 / DMARC ポリシー値 等を網羅)
+
+        いずれかにヒットすれば True。シード辞書ヒットは呼び出し側で
+        除外されているので、本メソッドは confirmed=False の候補に
+        対してのみ意味を持つ。
         """
-        return text.strip().lower() in self._tech_allowlist
+        normalized = text.strip().lower()
+        if normalized in self._tech_allowlist:
+            return True
+        # R-O: pattern-based filter for unenumerable shapes.
+        return _matches_tech_term_pattern(text.strip())
 
     def add_phrase(self, text: str, label: str = "ORG") -> None:
         """セッション内ユーザ追加用 (永続化なし)。

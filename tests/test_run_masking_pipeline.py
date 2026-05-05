@@ -250,7 +250,12 @@ class RunMaskingPipelineTests(unittest.TestCase):
         confirmed_findings に昇格し uncertain_candidates から外れる。
 
         これは PR-F (R-M Phase 2 改善) で追加された挙動: gBizINFO 検索失敗時は
-        判断材料がないので、ユーザに尋ねず自動マスクに倒す (機密漏洩防止優先)。"""
+        判断材料がないので、ユーザに尋ねず自動マスクに倒す (機密漏洩防止優先)。
+
+        R-O (2026-05-05) でデフォルトは uncertain 据え置きに変更されたため、
+        本テストは ``auto_mask_on_lookup_error=True`` を明示する。デフォルト
+        挙動は ``test_lookup_error_stays_uncertain_by_default`` で検証する。
+        """
         sanitizer = SensitiveDataSanitizer()
         ner = FakeNerMasker(
             candidates=[_candidate("XYZ", confirmed=False)]
@@ -268,6 +273,7 @@ class RunMaskingPipelineTests(unittest.TestCase):
             sanitizer=sanitizer,
             ner_masker=ner,
             hojin_lookup=hojin,
+            auto_mask_on_lookup_error=True,
         )
         # uncertain からは外れて confirmed に昇格
         self.assertEqual(len(state.uncertain_candidates), 0)
@@ -279,7 +285,70 @@ class RunMaskingPipelineTests(unittest.TestCase):
         """HojinLookup.search が例外を投げてもパイプラインは継続。
 
         ハード例外時も LookupResult.error が設定されるので、PR-F の昇格
-        ロジックが適用される (uncertain から外れて confirmed に昇格)。"""
+        ロジックが適用される (uncertain から外れて confirmed に昇格)。
+
+        R-O 以降は ``auto_mask_on_lookup_error=True`` を明示しないと
+        昇格しないので、本テストは引数指定で旧挙動を保つ。
+        """
+        sanitizer = SensitiveDataSanitizer()
+        ner = FakeNerMasker(
+            candidates=[_candidate("XYZ", confirmed=False)]
+        )
+        state = run_masking_pipeline(
+            name="doc.txt",
+            text="...",
+            sanitizer=sanitizer,
+            ner_masker=ner,
+            hojin_lookup=RaisingHojinLookup(),
+            auto_mask_on_lookup_error=True,
+        )
+        # error 付き LookupResult が格納されている
+        self.assertEqual(len(state.lookups), 1)
+        self.assertIn("unexpected", state.lookups["XYZ"].error)
+        # PR-F: ハード例外候補も confirmed に昇格
+        self.assertEqual(len(state.uncertain_candidates), 0)
+        self.assertIn(("XYZ", "COMPANY"), state.confirmed_findings)
+
+    def test_lookup_error_stays_uncertain_by_default(self) -> None:
+        """R-O (2026-05-05): デフォルト ``auto_mask_on_lookup_error=False``
+        では gBizINFO 検索失敗候補も uncertain のまま据え置く。
+
+        実データで spaCy 統計 NER が AWS サービス名等を大量に誤検知し、
+        ``GBIZINFO_API_TOKEN`` 未設定で全件 error 扱い → 全件自動マスクと
+        なって ``[COMPANY_001] のバウンス率`` のような無意味な出力が
+        埋め尽くす事象 (R-O) への対策。デフォルトは uncertain 据え置きで
+        ユーザの明示判断を必須にする。
+        """
+        sanitizer = SensitiveDataSanitizer()
+        ner = FakeNerMasker(
+            candidates=[_candidate("XYZ", confirmed=False)]
+        )
+        hojin = FakeHojinLookup(
+            results={
+                "XYZ": LookupResult(
+                    candidate_text="XYZ", hits=0, error="HTTP 503"
+                ),
+            }
+        )
+        state = run_masking_pipeline(
+            name="doc.txt",
+            text="...",
+            sanitizer=sanitizer,
+            ner_masker=ner,
+            hojin_lookup=hojin,
+            # auto_mask_on_lookup_error は省略 (= False)
+        )
+        # error あり候補は uncertain のまま据え置き
+        self.assertEqual(len(state.uncertain_candidates), 1)
+        self.assertEqual(state.uncertain_candidates[0].text, "XYZ")
+        # confirmed には昇格しない
+        self.assertNotIn(("XYZ", "COMPANY"), state.confirmed_findings)
+        # lookups の error 情報自体は (UI 表示用に) 保持される
+        self.assertEqual(state.lookups["XYZ"].error, "HTTP 503")
+
+    def test_hard_exception_stays_uncertain_by_default(self) -> None:
+        """R-O: ``auto_mask_on_lookup_error=False`` (デフォルト) のとき
+        ハード例外由来の error も昇格させない。"""
         sanitizer = SensitiveDataSanitizer()
         ner = FakeNerMasker(
             candidates=[_candidate("XYZ", confirmed=False)]
@@ -291,12 +360,11 @@ class RunMaskingPipelineTests(unittest.TestCase):
             ner_masker=ner,
             hojin_lookup=RaisingHojinLookup(),
         )
-        # error 付き LookupResult が格納されている
+        # error は記録されるが昇格しない
         self.assertEqual(len(state.lookups), 1)
         self.assertIn("unexpected", state.lookups["XYZ"].error)
-        # PR-F: ハード例外候補も confirmed に昇格
-        self.assertEqual(len(state.uncertain_candidates), 0)
-        self.assertIn(("XYZ", "COMPANY"), state.confirmed_findings)
+        self.assertEqual(len(state.uncertain_candidates), 1)
+        self.assertNotIn(("XYZ", "COMPANY"), state.confirmed_findings)
 
     def test_zero_hits_without_error_stays_uncertain(self) -> None:
         """gBizINFO が 200 + 0 件 (実在しない法人) を返した候補は、
@@ -335,7 +403,10 @@ class RunMaskingPipelineTests(unittest.TestCase):
 
     def test_mixed_promotion_keeps_searchable_candidates_uncertain(self) -> None:
         """error あり/なしが混在する場合: error あり候補のみ昇格、
-        error なし候補は uncertain に残る (PR-F)。"""
+        error なし候補は uncertain に残る (PR-F)。
+
+        R-O 以降は ``auto_mask_on_lookup_error=True`` 明示で旧挙動を保つ。
+        """
         sanitizer = SensitiveDataSanitizer()
         ner = FakeNerMasker(
             candidates=[
@@ -361,6 +432,7 @@ class RunMaskingPipelineTests(unittest.TestCase):
             sanitizer=sanitizer,
             ner_masker=ner,
             hojin_lookup=hojin,
+            auto_mask_on_lookup_error=True,
         )
         # FAILED は confirmed に昇格、VALID は uncertain に残る
         self.assertIn(("FAILED_LOOKUP", "COMPANY"), state.confirmed_findings)

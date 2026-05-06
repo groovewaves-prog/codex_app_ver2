@@ -549,5 +549,72 @@ class IssueIdAssignmentTests(unittest.TestCase):
         self.assertEqual(issues[0].issue_id, "LLM-CUSTOM-42")
 
 
+class BuildPromptOrderingMetadataTests(unittest.TestCase):
+    """R-Q-1b (2026-05-06): build_prompt が複数文書に「文書 K/N」形式の
+    順序メタを付与することの確認。
+
+    Streamlit ``st.file_uploader`` の格納順は並列アップロード完了順
+    に依存し、番号付き設計書 (1, 2, ..., 12) を投入しても順序が乱れる。
+    streamlit_app.py 側で ``_natural_sort_key`` でソートするのに加え、
+    プロンプト側でも「全 N 文書中 K 番目」を明示することで、LLM が
+    「ファイルが欠落している」「順序がおかしい」と誤指摘するリスクを
+    減らす。
+    """
+
+    def test_single_document_keeps_legacy_format(self) -> None:
+        """単一文書のときは「文書: <name>」のまま (旧形式維持、回帰防止)。"""
+        from secure_review.reviewer import build_prompt
+        prompt = build_prompt([_doc(name="only.pdf", text="content")])
+        self.assertIn("--- 文書: only.pdf ---", prompt)
+        # 「文書 1/1」形式は出ないこと
+        self.assertNotIn("文書 1/1", prompt)
+        # 合計提示行も出ないこと
+        self.assertNotIn("合計", prompt)
+
+    def test_multiple_documents_get_position_metadata(self) -> None:
+        """複数文書のときは「文書 K/N: <name>」形式と、合計件数の前置き。"""
+        from secure_review.reviewer import build_prompt
+        docs = [
+            _doc(name="a.pdf", text="aaa"),
+            _doc(name="b.pdf", text="bbb"),
+            _doc(name="c.pdf", text="ccc"),
+        ]
+        prompt = build_prompt(docs)
+        # 合計件数の前置き
+        self.assertIn("合計 3 文書", prompt)
+        # 各文書に K/N
+        self.assertIn("--- 文書 1/3: a.pdf ---", prompt)
+        self.assertIn("--- 文書 2/3: b.pdf ---", prompt)
+        self.assertIn("--- 文書 3/3: c.pdf ---", prompt)
+
+    def test_document_order_in_prompt_matches_input_order(self) -> None:
+        """入力リストの順序がプロンプト内の出現順と一致する (LLM が順序を
+        誤解しないために重要)。"""
+        from secure_review.reviewer import build_prompt
+        docs = [
+            _doc(name="基本設計書 1.pdf", text="一"),
+            _doc(name="基本設計書 2.pdf", text="二"),
+            _doc(name="基本設計書 12.pdf", text="十二"),
+        ]
+        prompt = build_prompt(docs)
+        # 1.pdf の位置 < 2.pdf の位置 < 12.pdf の位置
+        pos_1 = prompt.index("基本設計書 1.pdf")
+        pos_2 = prompt.index("基本設計書 2.pdf")
+        pos_12 = prompt.index("基本設計書 12.pdf")
+        self.assertLess(pos_1, pos_2)
+        self.assertLess(pos_2, pos_12)
+
+    def test_document_body_text_preserved_after_metadata(self) -> None:
+        """順序メタ追加後も outbound_text 本体は失われない (回帰防止)。"""
+        from secure_review.reviewer import build_prompt
+        docs = [
+            _doc(name="a.pdf", text="ALPHA_BODY"),
+            _doc(name="b.pdf", text="BETA_BODY"),
+        ]
+        prompt = build_prompt(docs)
+        self.assertIn("ALPHA_BODY", prompt)
+        self.assertIn("BETA_BODY", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

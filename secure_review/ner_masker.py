@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -223,6 +224,59 @@ _TECH_TERM_REGEX_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 
+# R-P (2026-05-06): characters stripped from token boundaries before
+# tech-term matching. PDF table-cell extraction can leave bullets,
+# brackets, and stray quotation marks attached to a token. The default
+# ``str.strip()`` handles only whitespace, so we extend the set to
+# cover the symbols seen on real design docs:
+#   - ‧ (U+2027 HYPHENATION POINT) — leading bullet observed before "SES"
+#   - ・ (U+30FB KATAKANA MIDDLE DOT) — Japanese bullet
+#   - • (U+2022 BULLET) — generic bullet
+#   - ｟ ｠ ﹝ ﹞ etc. via NFKC reduction (handled elsewhere)
+#   - （ ） full-width brackets — observed trailing on "府中 DC （"
+#   - 「 」『 』 Japanese quotation brackets
+#   - 【 】 black lenticular brackets used for headings
+#   - U+3000 IDEOGRAPHIC SPACE
+_TRIM_CHARS = (
+    " \t\n\r"
+    "\u3000"          # IDEOGRAPHIC SPACE
+    "\u2027"          # HYPHENATION POINT
+    "\u00B7"          # MIDDLE DOT
+    "\u2022"          # BULLET
+    "\u30FB"          # KATAKANA MIDDLE DOT
+    "\uFF65"          # HALFWIDTH KATAKANA MIDDLE DOT
+    "()[]{}（）「」『』【】〈〉《》"
+    "\"'`"
+)
+
+
+def _normalize_for_match(text: str) -> str:
+    """Return ``text`` after NFKC + extended trim, for tech-term matching.
+
+    Two transformations:
+
+    1. NFKC normalisation. Collapses Kangxi Radicals (``⽇`` U+2F25,
+       ``⽤`` U+2F49, ``⽅`` U+2F46) into their CJK Unified counterparts
+       (``日`` U+65E5, ``用`` U+7528, ``方`` U+65B9), and reduces
+       ligatures (``ﬁ`` U+FB01 → ``fi``). PDF extractors emit these
+       compatibility code points whenever the embedded font's CMap
+       maps glyphs to compatibility ranges instead of unified ones.
+    2. Strip extended punctuation. Beyond whitespace, removes bullets
+       and brackets sometimes left attached to tokens by table-cell
+       extraction (``‧ SES``, ``府中 DC （``).
+
+    The original text is intentionally preserved by callers — only
+    the comparison key is normalised. This way, when a token IS to be
+    masked, the un-normalised surface form remains the search key and
+    the mask still lands on the actual character sequence in the
+    source document.
+    """
+    if not text:
+        return ""
+    nfkc = unicodedata.normalize("NFKC", text)
+    return nfkc.strip(_TRIM_CHARS)
+
+
 def _matches_tech_term_pattern(text: str) -> bool:
     """Return True iff ``text`` matches any R-O regex pattern.
 
@@ -237,10 +291,19 @@ def _matches_tech_term_pattern(text: str) -> bool:
     clearly NOT a service name (e.g. ``Amazon Japan`` is a real
     corporate entity, not a service). Reject-list hits return False
     immediately so the broader allow-pattern does not exempt them.
+
+    R-P (2026-05-06): input is NFKC-normalised and trimmed of
+    bullet/bracket symbols before matching. PDF extraction in the
+    wild produces Kangxi Radicals (``⽇`` U+2F25 instead of ``日``,
+    ``⽤``/``⽅`` similarly) and ligatures (``ﬁ`` instead of ``fi``)
+    because the underlying font's CMap points at compatibility code
+    points. NFKC collapses both. The trim list also drops bullet
+    points (``‧`` U+2027, ``・`` U+30FB) and stray brackets that
+    table-cell extraction can leave attached to a token.
     """
     if not text:
         return False
-    stripped = text.strip()
+    stripped = _normalize_for_match(text)
     if not stripped:
         return False
     # Reject list: things that look like ``Amazon X`` but are corporate
@@ -333,6 +396,10 @@ class NerMasker:
 
         比較は大文字小文字を区別しないので、ここで lowercase に正規化
         してから格納する。
+
+        R-P (2026-05-06): エントリも NFKC + 拡張 strip を通してから
+        格納する。YAML 編集者が誤って Kangxi Radical を貼り付けた
+        ような場合でも、入力側の NFKC 正規化と form を揃えるため。
         """
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
@@ -342,25 +409,32 @@ class NerMasker:
                 continue
             for entry in category_items:
                 if isinstance(entry, str) and entry.strip():
-                    self._tech_allowlist.add(entry.strip().lower())
+                    self._tech_allowlist.add(_normalize_for_match(entry).lower())
 
     def _is_tech_term(self, text: str) -> bool:
-        """text が技術用語 allowlist に含まれていれば True (PR-G + R-O)。
+        """text が技術用語 allowlist に含まれていれば True (PR-G + R-O + R-P)。
 
         2 段構え:
           1. PR-G の YAML allowlist (大文字小文字無視・完全一致)
           2. R-O の regex パターン群 (``Amazon X`` / セクション見出し /
              PDF 抽出由来のスペース混入語 / DMARC ポリシー値 等を網羅)
 
+        R-P (2026-05-06): 比較前に ``_normalize_for_match`` を通す。
+        PDF 抽出由来の Kangxi Radical (``⽇`` ``⽤`` ``⽅``) や ligature
+        (``ﬁ``) を NFKC で吸収し、bullet / 全角括弧などのトークン境界
+        ゴミも除去してから allowlist と比較する。``_matches_tech_term_pattern``
+        側でも同じ正規化が走るため二度手間に見えるが、YAML 一致の
+        早期 return パスのために必要。
+
         いずれかにヒットすれば True。シード辞書ヒットは呼び出し側で
         除外されているので、本メソッドは confirmed=False の候補に
         対してのみ意味を持つ。
         """
-        normalized = text.strip().lower()
+        normalized = _normalize_for_match(text).lower()
         if normalized in self._tech_allowlist:
             return True
-        # R-O: pattern-based filter for unenumerable shapes.
-        return _matches_tech_term_pattern(text.strip())
+        # R-O + R-P: pattern-based filter, also normalises internally.
+        return _matches_tech_term_pattern(text)
 
     def add_phrase(self, text: str, label: str = "ORG") -> None:
         """セッション内ユーザ追加用 (永続化なし)。

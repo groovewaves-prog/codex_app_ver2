@@ -129,13 +129,8 @@ pre.sanitized {
     padding: 0.8rem;
     font-size: 0.78rem;
     max-height: 280px;
-    min-height: 120px;
+    min-height: 60px;
     overflow-y: auto;
-    /* R-Q-2 (2026-05-06): allow user to resize this scrollable preview
-       vertically by dragging the bottom-right corner. The browser-native
-       resize handle appears automatically once `resize` is set on a
-       `overflow: auto` element. The min/max bounds keep the preview
-       practical (not collapsed to nothing, not taller than the viewport). */
     resize: vertical;
     white-space: pre-wrap;
 }
@@ -160,30 +155,6 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     color: var(--ink-soft);
 }
 
-/* R-Q-2 (2026-05-06): expander 内部のスクロール領域もリサイズ可能に。
-   Streamlit 標準では expander の内側に自動でスクロール領域が現れる
-   ことは無いが、長い表 (st.dataframe) や長いリストが入っている時、
-   ブラウザがネイティブにスクロールバーを出すことがある。これらに
-   対して `resize: vertical` が効くように、明示的にスクロール対象を
-   伸縮可能にする。Streamlit 自身のレイアウトには影響しない (resize は
-   ユーザがハンドルを掴んで初めて発火するプロパティのため)。
-
-   対象セレクタ:
-   - st.dataframe: データテーブル本体
-   - st.expander の details: 展開後のコンテンツ領域
-   どちらも data-testid 経由で Streamlit の内部マークアップを指している。
-   将来 Streamlit がこの testid を変更した場合、CSS は無効化されるが
-   何も壊れない (default の overflow:auto に戻るだけ)。 */
-[data-testid="stDataFrame"] {
-    resize: vertical;
-    overflow: auto;
-    min-height: 120px;
-}
-[data-testid="stExpanderDetails"] {
-    resize: vertical;
-    overflow: auto;
-    min-height: 60px;
-}
 </style>
 """
 st.markdown(STYLE, unsafe_allow_html=True)
@@ -383,7 +354,7 @@ with st.sidebar:
     document_profile_override = dict(profile_options)[profile_label]
 
     st.markdown("---")
-    if st.button("セッションをリセット", use_container_width=True):
+    if st.button("セッションをリセット", width='stretch'):
         _reset_state()
         st.session_state.pop("uploads", None)
         st.rerun()
@@ -425,7 +396,7 @@ with col1:
         "匿名化してプレビュー",
         type="primary",
         disabled=not st.session_state.get("uploads"),
-        use_container_width=True,
+        width='stretch',
     )
 with col2:
     if st.session_state.get("uploads"):
@@ -513,7 +484,7 @@ if preview_docs:
                     {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
                     for r in doc.replacements[:50]
                 ]
-                st.dataframe(rows, use_container_width=True, hide_index=True)
+                st.dataframe(rows, width='stretch', hide_index=True)
                 if len(doc.replacements) > 50:
                     st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
             else:
@@ -560,7 +531,7 @@ if preview_docs:
             "レビューに送信",
             type="primary",
             disabled=not can_send,
-            use_container_width=True,
+            width='stretch',
         )
     with status_col:
         if blocked_docs:

@@ -217,8 +217,7 @@ _TECH_TERM_REGEX_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"検\s*証(?:\s*す\s*る)?|"
         r"ラ\s*イ\s*フ\s*サ\s*イ\s*ク\s*ル(?:\s*管\s*理)?|"
         r"フ\s*ロ\s*ー?\s*ロ\s*グ(?:\s*用\s*バ\s*ケ\s*ッ\s*ト)?|"
-        r"\d+\s*日\s*間|"
-        r"府\s*中\s*D\s*C(?:\s*\(?)?"
+        r"\d+\s*日\s*間"
         r")\s*$"
     ),
 )
@@ -366,15 +365,23 @@ class NerMasker:
         patterns: list[dict[str, Any]] = []
 
         # phrases: 完全一致 string pattern (spaCy が内部でトークン化してマッチ)
+        # R-S (2026-05-07): 各エントリに任意の ``confirm: false`` フラグを
+        # 付けることで「強制検出するが auto-mask せず uncertain candidate に
+        # まわす」watchlist 動作になる。確定機密 (顧客名など、ID 接頭辞
+        # ``seed:``) と区別するため、watchlist エントリは ID 接頭辞 ``watch:``
+        # を付ける。下流の ``extract_candidates`` で接頭辞を見て confirmed
+        # フラグを切り替える。
         for entry in data.get("phrases", []) or []:
             text = entry["text"]
             label = entry["label"]
             canonical = entry.get("canonical") or text
+            confirm_flag = entry.get("confirm", True)
+            id_prefix = "seed" if confirm_flag else "watch"
             patterns.append(
                 {
                     "label": label,
                     "pattern": text,
-                    "id": f"seed:phrase:{canonical}",
+                    "id": f"{id_prefix}:phrase:{canonical}",
                 }
             )
             if canonical != text:
@@ -482,9 +489,13 @@ class NerMasker:
                 # シード辞書側で同じ用語を意図的に登録した場合は
                 # confirmed=True として通したいので、ent_id_ で seed/user
                 # 由来を確認してからフィルタする。
+                # R-S (2026-05-07): watchlist (confirm: false) 由来も dict_match
+                # として tech-term filter を素通りさせる。confirmed フラグだけが
+                # 後段で異なる扱いになる。
                 is_dict_match = bool(ent.ent_id_) and (
                     ent.ent_id_.startswith("seed:")
                     or ent.ent_id_.startswith("user:")
+                    or ent.ent_id_.startswith("watch:")
                 )
                 if not is_dict_match and self._is_tech_term(ent.text):
                     continue  # 技術用語として誤検知された候補は除外
@@ -498,16 +509,21 @@ class NerMasker:
                     continue
                 seen_keys.add(key)
 
-                # confirmed 判定: ent_id が "seed:" or "user:" で始まれば辞書由来
-                source = (
-                    "seed_dict"
-                    if ent.ent_id_ and (
-                        ent.ent_id_.startswith("seed:")
-                        or ent.ent_id_.startswith("user:")
-                    )
-                    else "spacy_ner"
-                )
-                confirmed = source == "seed_dict"
+                # confirmed 判定: ent_id の接頭辞で判別。
+                # R-S (2026-05-07): "watch:" 接頭辞は強制検出専用 (auto-mask
+                # しないが uncertain candidate として表示)。
+                if ent.ent_id_ and (
+                    ent.ent_id_.startswith("seed:")
+                    or ent.ent_id_.startswith("user:")
+                ):
+                    source = "seed_dict"
+                    confirmed = True
+                elif ent.ent_id_ and ent.ent_id_.startswith("watch:"):
+                    source = "watchlist"
+                    confirmed = False
+                else:
+                    source = "spacy_ner"
+                    confirmed = False
 
                 candidates.append(
                     NerCandidate(

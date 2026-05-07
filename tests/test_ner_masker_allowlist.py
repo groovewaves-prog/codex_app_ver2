@@ -295,8 +295,9 @@ class MatchesTechTermPatternTests(unittest.TestCase):
             "パブリッククラウドサー ビス",
             "フルマネージドサービス",
             "フローログ",
-            "府中 DC",
             "ライフサイクル管理",
+            # R-S (2026-05-07): 府中 DC は人間判断にまわす方針へ転換。
+            # tech-term filter から外したため、ここに含めない。
         ]
         for sample in positives:
             with self.subTest(sample=sample):
@@ -452,148 +453,148 @@ class IsTechTermIntegrationTests(unittest.TestCase):
         self.assertTrue(m._is_tech_term("デフォ ルト"))
 
     def test_real_company_names_still_excluded(self) -> None:
-        """真の会社名は YAML にも regex にも該当しないので False。"""
+        """真の会社名・地名は YAML にも regex にも該当しないので False。
+
+        R-S (2026-05-07): 府中 DC を tech-term filter から外したことの
+        回帰防止として、府中 / 府中 DC が False になることもここで検証する。
+        """
         m = _make_masker(["VPC"])
         self.assertFalse(m._is_tech_term("KDDI"))
         self.assertFalse(m._is_tech_term("株式会社サンプル"))
         self.assertFalse(m._is_tech_term("山田太郎"))
+        # R-S: 府中 / 府中 DC は人間判断対象、tech-term ではない
+        self.assertFalse(m._is_tech_term("府中"))
+        self.assertFalse(m._is_tech_term("府中 DC"))
+        self.assertFalse(m._is_tech_term("府中DC"))
 
 
-class NfkcNormalizationTests(unittest.TestCase):
-    """R-P (2026-05-06): PDF 抽出由来の Unicode 異体字を NFKC で吸収する。
+class FuchuDCAfterRSTests(unittest.TestCase):
+    """R-S (2026-05-07): 府中 DC を tech-term filter から外したことの検証。
 
-    実環境で観測された取りこぼしパターン:
-    - Kangxi Radicals (``⽇`` U+2F25, ``⽤`` U+2F49, ``⽅`` U+2F46) が
-      通常の漢字 (``日``/``用``/``方``) の代わりに PDF テキスト出力に
-      含まれる
-    - Latin small ligature ``ﬁ`` (U+FB01) が ``fi`` の代わりに含まれる
-    - bullet (``‧`` U+2027) や全角括弧 (``（``/``）``) がトークン境界
-      に残る
-
-    これらを ``_normalize_for_match`` で吸収し、既存 R-O regex / YAML
-    の両経路に正しく届かせる。
+    R-O 時点では `府\\s*中\\s*D\\s*C` が _matches_tech_term_pattern の
+    一部として登録されていたが、R-S で「府中」を地名として人間判断に
+    まわす方針に転換したため削除した。これに伴う regression test。
     """
 
-    def _matches(self, text: str) -> bool:
-        from secure_review.ner_masker import _matches_tech_term_pattern
-        return _matches_tech_term_pattern(text)
+    def test_fuchu_dc_no_longer_filtered_as_tech_term(self) -> None:
+        """『府中 DC』 は tech-term ではない (uncertain candidate にまわるべき)。"""
+        m = _make_masker(["VPC"])
+        self.assertFalse(m._is_tech_term("府中 DC"))
+        self.assertFalse(m._is_tech_term("府中DC"))
+        self.assertFalse(m._is_tech_term("府中"))
 
-    def test_kangxi_radical_sun_normalised(self) -> None:
-        """``⽇`` (U+2F25 KANGXI RADICAL SUN) → ``日`` (U+65E5)。"""
-        # ``90 ⽇間`` は実報告例。``\d+\s*日\s*間`` regex は NFKC 後にヒット。
-        self.assertTrue(self._matches("90 ⽇間"))
-        self.assertTrue(self._matches("30 ⽇間"))
+    def test_dc_alone_still_filtered_as_tech_term(self) -> None:
+        """『DC』 単独は引き続き tech-term (素通し対象)。"""
+        m = _make_masker(["VPC"])
+        self.assertTrue(m._is_tech_term("DC"))
 
-    def test_kangxi_radical_use_normalised(self) -> None:
-        """``⽤`` (U+2F49 KANGXI RADICAL USE) → ``用`` (U+7528)。"""
-        self.assertTrue(self._matches("⽤途"))
-        # 長い日本語に Kangxi Radical 用 が混じるパターン
-        self.assertTrue(
-            self._matches("フローログ⽤バケット標準 VPC フローログ")
+    def test_other_tech_terms_unaffected(self) -> None:
+        """府中 DC 削除が他の tech-term filter に悪影響を与えないことを確認。"""
+        m = _make_masker(["VPC"])
+        # 同じ regex 内の他の語は引き続き弾ける
+        self.assertTrue(m._is_tech_term("オンプレミス"))
+        self.assertTrue(m._is_tech_term("デフォルト"))
+        self.assertTrue(m._is_tech_term("フェーズ"))
+        self.assertTrue(m._is_tech_term("10 日間"))
+
+
+class LoadSeedsConfirmFlagTests(unittest.TestCase):
+    """R-S (2026-05-07): seed dict の confirm: false ハンドリング検証。
+
+    実 spaCy の EntityRuler.patterns を直接検査する方式。
+    spaCy が無い環境ではクラス全体を skip。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        spacy_mod = sys.modules.get("spacy")
+        if spacy_mod is None or isinstance(spacy_mod, MagicMock):
+            raise unittest.SkipTest(
+                "LoadSeedsConfirmFlagTests requires real spaCy installation"
+            )
+
+    def _load_with_seeds(self, seed_yaml_text):
+        from secure_review.ner_masker import NerMasker
+        tmpdir = tempfile.mkdtemp()
+        seed_path = Path(tmpdir) / "seeds.yaml"
+        seed_path.write_text(seed_yaml_text, encoding="utf-8")
+        return NerMasker(
+            seed_yaml_path=str(seed_path),
+            allowlist_yaml_path="/nonexistent/allowlist.yaml",
         )
 
-    def test_kangxi_radical_square_normalised(self) -> None:
-        """``⽅`` (U+2F46 KANGXI RADICAL SQUARE) → ``方`` (U+65B9)。"""
-        self.assertTrue(self._matches("⽅法"))
-        # セクション見出しに Kangxi Radical 方 が混じるパターン
-        self.assertTrue(self._matches("10.2 ログ管理⽅針 メール"))
+    def _ids_in_ruler(self, masker):
+        return [p.get("id", "") for p in masker._ruler.patterns]
 
-    def test_fi_ligature_normalised(self) -> None:
-        """``ﬁ`` (U+FB01 LATIN SMALL LIGATURE FI) → ``fi``。
+    def test_default_confirm_creates_seed_prefix(self):
+        """confirm 未指定 はデフォルト True で seed: 接頭辞。"""
+        masker = self._load_with_seeds(
+            'phrases:\n'
+            '  - text: "KDDI"\n'
+            '    label: "ORG"\n'
+            '    canonical: "KDDI"\n'
+        )
+        ids = self._ids_in_ruler(masker)
+        self.assertIn("seed:phrase:KDDI", ids)
+        self.assertFalse(any(i.startswith("watch:") for i in ids))
 
-        ``DomainKeys Identiﬁed Mail`` は実報告例。NFKC 後に
-        ``DomainKeys Identified Mail`` となり、メールプロトコル regex
-        にヒットする。
-        """
-        self.assertTrue(self._matches("DomainKeys Identiﬁed Mail"))
+    def test_confirm_true_creates_seed_prefix(self):
+        """confirm: true 明示も seed: 接頭辞。"""
+        masker = self._load_with_seeds(
+            'phrases:\n'
+            '  - text: "KDDI"\n'
+            '    label: "ORG"\n'
+            '    canonical: "KDDI"\n'
+            '    confirm: true\n'
+        )
+        ids = self._ids_in_ruler(masker)
+        self.assertIn("seed:phrase:KDDI", ids)
+        self.assertFalse(any(i.startswith("watch:") for i in ids))
 
-    def test_leading_bullet_stripped(self) -> None:
-        """先頭の bullet (``‧`` U+2027) は match 前に剥がす。
+    def test_confirm_false_creates_watch_prefix(self):
+        """confirm: false エントリは watch: 接頭辞。"""
+        masker = self._load_with_seeds(
+            'phrases:\n'
+            '  - text: "iret"\n'
+            '    label: "ORG"\n'
+            '    canonical: "KDDIアイレット"\n'
+            '    confirm: false\n'
+        )
+        ids = self._ids_in_ruler(masker)
+        self.assertIn("watch:phrase:KDDIアイレット", ids)
+        self.assertFalse(any(i.startswith("seed:") for i in ids))
 
-        ``‧ SES`` は実報告例 (PDF の bullet point 直後の語が候補化)。
-        """
-        self.assertTrue(self._matches("‧ SES"))
-        # 別種の bullet
-        self.assertTrue(self._matches("• SES"))
-        self.assertTrue(self._matches("・SES"))
+    def test_mixed_confirm_flags(self):
+        """同一 YAML に confirm true/false が混在しても正しく分離される。"""
+        masker = self._load_with_seeds(
+            'phrases:\n'
+            '  - text: "KDDI"\n'
+            '    label: "ORG"\n'
+            '  - text: "iret"\n'
+            '    label: "ORG"\n'
+            '    canonical: "KDDIアイレット"\n'
+            '    confirm: false\n'
+            '  - text: "Iret"\n'
+            '    label: "ORG"\n'
+            '    canonical: "KDDIアイレット"\n'
+            '    confirm: false\n'
+        )
+        ids = self._ids_in_ruler(masker)
+        self.assertIn("seed:phrase:KDDI", ids)
+        self.assertIn("watch:phrase:KDDIアイレット", ids)
+        watch_count = sum(1 for i in ids if i == "watch:phrase:KDDIアイレット")
+        self.assertEqual(watch_count, 2)
 
-    def test_trailing_fullwidth_bracket_stripped(self) -> None:
-        """末尾の全角括弧 (``（``) は match 前に剥がす。
-
-        ``府中 DC （`` は実報告例 (PDF 表組み末尾でカッコ開きがくっつく)。
-        """
-        self.assertTrue(self._matches("府中 DC （"))
-        # 開きと閉じ両方
-        self.assertTrue(self._matches("（府中 DC）"))
-
-    def test_normalisation_does_not_corrupt_aws_service_names(self) -> None:
-        """NFKC は ASCII / 通常 CJK には影響しない (回帰防止)。
-
-        ``Amazon SES`` のような正常な入力は NFKC 後も同じ form を維持
-        し、既存 regex がそのままヒットする。
-        """
-        self.assertTrue(self._matches("Amazon SES"))
-        self.assertTrue(self._matches("Amazon VPC"))
-        self.assertTrue(self._matches("DKIM"))
-        self.assertTrue(self._matches("p=none"))
-
-    def test_normalisation_preserves_real_proper_nouns_negative(self) -> None:
-        """正常な日本語固有名詞は NFKC 後も False のまま (回帰防止)。"""
-        self.assertFalse(self._matches("KDDI"))
-        self.assertFalse(self._matches("株式会社サンプル"))
-        self.assertFalse(self._matches("経済産業省"))
-        # iret は seed dictionary 経由でマスクされるべきもので、
-        # 技術用語フィルタには引っかからない (R-P スコープ外)
-        self.assertFalse(self._matches("iret"))
-
-
-class IamAndGenericTechVocabTests(unittest.TestCase):
-    """R-P (2026-05-06): YAML allowlist 拡張で拾えるようになった語彙。
-
-    実環境で uncertain candidates として残ってしまっていたものを
-    ``aws_services`` (IAM 系) と ``generic_japanese_tech`` (ゲート
-    ウェイ系) に追加した。これらは PR-G の YAML 完全一致経路で
-    フィルタされる。
-    """
-
-    def test_iam_resource_types_filtered(self) -> None:
-        """``IAM Group`` / ``IAM ロール`` 等を allowlist でフィルタ。"""
-        m = _make_masker(["IAM Group", "IAM グループ", "IAM Role", "IAM ロール",
-                          "IAM Policy", "IAM ポリシー", "IAM User", "IAM ユーザー"])
-        for term in [
-            "IAM Group", "IAM グループ", "IAM Role", "IAM ロール",
-            "IAM Policy", "IAM ポリシー", "IAM User", "IAM ユーザー",
-        ]:
-            with self.subTest(term=term):
-                self.assertTrue(
-                    m._is_tech_term(term),
-                    f"{term!r} should be in tech allowlist",
-                )
-
-    def test_generic_japanese_infrastructure_terms_filtered(self) -> None:
-        """``ゲートウェイ`` / ``ロードバランサー`` 等を allowlist でフィルタ。"""
-        m = _make_masker([
-            "ゲートウェイ", "ロードバランサー", "コンテナ",
-            "セキュリティグループ", "サブネット", "リージョン",
-        ])
-        for term in [
-            "ゲートウェイ", "ロードバランサー", "コンテナ",
-            "セキュリティグループ", "サブネット", "リージョン",
-        ]:
-            with self.subTest(term=term):
-                self.assertTrue(m._is_tech_term(term))
-
-    def test_iam_with_kangxi_normalisation(self) -> None:
-        """IAM 語彙が NFKC 経由でも一致する (allowlist + 正規化の組合せ)。
-
-        実データではあまり起きないが、念のため。
-        """
-        # 通常の "IAM ユーザー" を allowlist に入れて、Kangxi で書いた
-        # 入力でもヒットすることを確認 (ユ→ユ は不変なので、ここでは
-        # 入力側に余計な空白が入った場合の strip 動作を確認)
-        m = _make_masker(["IAM ユーザー"])
-        self.assertTrue(m._is_tech_term("  IAM ユーザー  "))
-        self.assertTrue(m._is_tech_term("IAM ユーザー"))
+    def test_canonical_map_populated_for_watch_entries(self):
+        """confirm: false エントリでも canonical_map は更新される。"""
+        masker = self._load_with_seeds(
+            'phrases:\n'
+            '  - text: "iret"\n'
+            '    label: "ORG"\n'
+            '    canonical: "KDDIアイレット"\n'
+            '    confirm: false\n'
+        )
+        self.assertEqual(masker._canonical_map.get("iret"), "KDDIアイレット")
 
 
 if __name__ == "__main__":

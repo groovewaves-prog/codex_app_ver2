@@ -22,3 +22,7 @@ tests/ui-smoke.png
 apply_all.py
 fix_test.py
 
+
+apply_fix3.py
+*.bak2
+

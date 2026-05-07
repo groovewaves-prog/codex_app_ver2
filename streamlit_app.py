@@ -44,6 +44,7 @@ from streamlit_audit_ui import (
     ensure_session_state,
     render_customer_selector,
     render_session_summary,
+    render_log_export_button,
     render_history_panel,
 )
 
@@ -748,6 +749,8 @@ if preview_clicked:
                                 hojin_lookup=hojin_lookup,
                             )
                             masking_states[sdoc.name] = state
+                            # R-W-export (2026-05-08): ログダウンロード用に session_state に保存
+                            st.session_state.masking_states = dict(masking_states)
                         except Exception as exc:  # noqa: BLE001
                             # 1 文書の R-M 失敗が他文書を巻き込まないよう個別に防御
                             st.warning(
@@ -1015,6 +1018,9 @@ if preview_docs:
 
                 # R-W-2 (2026-05-08): 本セッションのマスク判断サマリを表示
                 render_session_summary()
+
+                # R-W-export (2026-05-08): 結果ログのダウンロードボタン
+                render_log_export_button()
 
             provider_impl = choose_provider()
             _enforce_outbound_guard(provider_impl.name, preview_docs)

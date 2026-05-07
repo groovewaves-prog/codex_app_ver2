@@ -1,0 +1,57 @@
+# 顧客 PJ: kddi_mail_relay (KDDI メールリレーシステム基本設計レビュー)
+#
+# このファイルは KDDI メールリレー PJ 固有の手動キュレーションです。
+# 共通の data/ner_seeds.yaml (公知日本企業) に加えて、本ファイルが
+# NerMasker 起動時に自動ロードされます (R-V)。
+#
+# R-W-3 で「永続化」ボタンを押した結果は ner_seeds_user.yaml に記録され、
+# こちらは手動編集禁止 (機械が管理) です。本ファイルは手動キュレーション用。
+#
+# label は spaCy 語彙のみ許可: ORG / GPE / FAC / PERSON
+# confirm: 省略時 true (auto-mask)、false で uncertain candidate にまわる
+
+phrases:
+  # ========== R-T (2026-05-08): KDDI 運用関連の地名・拠点名 ==========
+  # 強制検出 + 人間判断 (confirm: false)。
+  # 機械では「公知 AWS リージョン名」と「顧客の運用拠点情報」を文脈判別
+  # できないため、ここに列挙して uncertain candidate UI への surfacing
+  # を保証する。R-W-4 推奨エンジンの判断履歴蓄積後、必要なら confirm:true
+  # に昇格させる (基本は人間判断のまま運用される想定)。
+
+  # 物理拠点 (KDDI のデータセンター所在地)
+  - text: "府中"
+    label: GPE
+    canonical: "府中"
+    confirm: false
+
+  # AWS リージョンと重複する地名 (KDDI のメイン/DR リージョン)
+  - text: "東京"
+    label: GPE
+    canonical: "東京"
+    confirm: false
+  - text: "大阪"
+    label: GPE
+    canonical: "大阪"
+    confirm: false
+
+  # AWS リージョン (Route 53 ログ保管先など)
+  - text: "バージニア"
+    label: GPE
+    canonical: "バージニア"
+    confirm: false
+
+  # ========== R-S (2026-05-07): KDDIアイレット (発注先) ==========
+  # spaCy が小文字 4 文字英字社名を ORG として検出しない可能性があるため、
+  # シード辞書に登録して強制検出する。confirm: false で人間判断。
+  - text: "iret"
+    label: ORG
+    canonical: "KDDIアイレット"
+    confirm: false
+  - text: "Iret"
+    label: ORG
+    canonical: "KDDIアイレット"
+    confirm: false
+  - text: "IRET"
+    label: ORG
+    canonical: "KDDIアイレット"
+    confirm: false

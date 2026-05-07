@@ -330,7 +330,21 @@ class NerMasker:
         seed_yaml_path: str | Path = "data/ner_seeds.yaml",
         model_name: str = "ja_core_news_md",
         allowlist_yaml_path: str | Path = "data/tech_allowlist.yaml",
+        customer_id: str | None = "kddi_mail_relay",
+        data_root: str | Path = "data",
     ) -> None:
+        """spaCy NER + EntityRuler + シード辞書を統合した抽出器を初期化。
+
+        R-V (2026-05-08): multi-customer 対応。``customer_id`` を指定すると、
+        共通の ``ner_seeds.yaml`` / ``tech_allowlist.yaml`` に加えて
+        ``data/customers/<customer_id>/`` 配下の以下を自動ロード:
+            - ner_seeds.yaml         : 顧客 PJ 固有の手動キュレーション
+            - ner_seeds_user.yaml    : R-W-3 で自動追加されたエントリ
+            - tech_allowlist.yaml    : 顧客 PJ 固有の手動素通しリスト
+            - tech_allowlist_user.yaml : R-W-3 で自動追加された素通しリスト
+
+        ``customer_id=None`` の場合は共通辞書のみ使用 (R-V 以前の挙動互換)。
+        """
         self._nlp = spacy.load(model_name)
         # tok2vec の中間 tensor をクリアしてメモリ抑制 (handoff 判断 5)
         if "doc_cleaner" not in self._nlp.pipe_names:
@@ -344,18 +358,41 @@ class NerMasker:
         else:
             self._ruler = self._nlp.add_pipe("entity_ruler")
 
-        # シード YAML をロードして EntityRuler に投入
         self._canonical_map: dict[str, str] = {}  # text -> canonical name
+
+        # 1. 共通シード YAML (公知日本企業など、全 PJ 共通)
         seed_path = Path(seed_yaml_path)
         if seed_path.exists():
             self._load_seeds(seed_path)
 
-        # PR-G: 技術用語 allowlist (AWS / Azure / GCP のサービス名・概念用語)
-        # を読み込む。ここに含まれる用語は spaCy が誤検知しても候補から除外する。
+        # 2. R-V: 顧客 PJ 固有のシード (手動キュレーション)
+        # 3. R-V: 顧客 PJ 固有のシード (R-W-3 自動蓄積)
+        if customer_id:
+            data_root_path = Path(data_root)
+            customer_seed = data_root_path / "customers" / customer_id / "ner_seeds.yaml"
+            if customer_seed.exists():
+                self._load_seeds(customer_seed)
+            customer_user_seed = data_root_path / "customers" / customer_id / "ner_seeds_user.yaml"
+            if customer_user_seed.exists():
+                self._load_seeds(customer_user_seed)
+
+        # 4. PR-G: 共通の技術用語 allowlist
         self._tech_allowlist: set[str] = set()
         allowlist_path = Path(allowlist_yaml_path)
         if allowlist_path.exists():
             self._load_tech_allowlist(allowlist_path)
+
+        # 5. R-V: 顧客 PJ 固有の allowlist (手動 + 自動)
+        if customer_id:
+            data_root_path = Path(data_root)
+            customer_allow = data_root_path / "customers" / customer_id / "tech_allowlist.yaml"
+            if customer_allow.exists():
+                self._load_tech_allowlist(customer_allow)
+            customer_user_allow = data_root_path / "customers" / customer_id / "tech_allowlist_user.yaml"
+            if customer_user_allow.exists():
+                self._load_user_allowlist(customer_user_allow)
+
+        self._customer_id = customer_id  # for diagnostics
 
     def _load_seeds(self, path: Path) -> None:
         """シード YAML をロードし EntityRuler パターンに変換する。"""
@@ -393,6 +430,20 @@ class NerMasker:
 
         if patterns:
             self._ruler.add_patterns(patterns)
+
+    def _load_user_allowlist(self, path: Path) -> None:
+        """R-V/R-W-3: ``tech_allowlist_user.yaml`` (フラット list 形式) をロード。
+
+        共通 allowlist が ``{category: [item, ...]}`` の dict 形式なのに対し、
+        user 版は ``user_allowlist: [item, ...]`` のフラット list で
+        構造を簡単に保つ。両者を flatten して同じ self._tech_allowlist に追加。
+        """
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        items = data.get("user_allowlist", []) or []
+        for item in items:
+            if isinstance(item, str) and item.strip():
+                self._tech_allowlist.add(item.strip().lower())
 
     def _load_tech_allowlist(self, path: Path) -> None:
         """技術用語 allowlist YAML をロードして set に保持する (PR-G)。

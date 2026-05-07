@@ -1,0 +1,57 @@
+[fde3d540] Request failed
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\secure_review\app.py", line 62, in do_POST
+    self._handle_review(request_id)
+  File "C:\Users\groov\Documents\codex_app\secure_review\app.py", line 128, in _handle_review
+    sanitized_documents, extraction_warnings = _run_sanitization_pipeline(documents)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1114, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1118, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1179, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "C:\Users\groov\Documents\codex_app\tests\test_app.py", line 150, in boom
+    raise RuntimeError("internal detail with sensitive prompt echo")
+RuntimeError: internal detail with sensitive prompt echo
+............................................gBizINFO v2 failed (<urlopen error unreachable>), falling back to v1
+.....gBizINFO v2 failed (<urlopen error network unreachable>), falling back to v1
+............................................FFF.....................test HTTP 500 from http://127.0.0.1:11434/v1/responses: sensitive prompt echo: 'customer Acme Corp password123'
+.test returned invalid JSON from http://127.0.0.1:11434/v1/responses (first 200 chars): 'not json at all'
+..test transport error to http://127.0.0.1:11434/v1/responses: conn timed out
+...............................................................................HojinLookup.search('XYZ') raised: boom
+.HojinLookup.search('XYZ') raised: boom
+.....NerMasker.extract_candidates failed: spaCy boom
+.................Local sanitizer URL rejected: LOCAL_SANITIZER_API_URL URL host 'example.com' is not a loopback literal. Use 127.0.0.1, ::1, or localhost.
+..................Local sensitivity URL rejected: LOCAL_SENSITIVITY_API_URL URL host 'evil.example.com' is not a loopback literal. Use 127.0.0.1, ::1, or localhost.
+..
+======================================================================
+FAIL: test_confirm_true_creates_seed_prefix (test_ner_masker_allowlist.LoadSeedsConfirmFlagTests)
+confirm: true 明示も seed: 接頭辞。
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\tests\test_ner_masker_allowlist.py", line 552, in test_confirm_true_creates_seed_prefix
+    self.assertFalse(any(i.startswith("watch:") for i in ids))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_default_confirm_creates_seed_prefix (test_ner_masker_allowlist.LoadSeedsConfirmFlagTests)
+confirm 未指定 はデフォルト True で seed: 接頭辞。
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\tests\test_ner_masker_allowlist.py", line 539, in test_default_confirm_creates_seed_prefix
+    self.assertFalse(any(i.startswith("watch:") for i in ids))
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_mixed_confirm_flags (test_ner_masker_allowlist.LoadSeedsConfirmFlagTests)
+同一 YAML に confirm true/false が混在しても正しく分離される。
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\tests\test_ner_masker_allowlist.py", line 586, in test_mixed_confirm_flags
+    self.assertEqual(watch_count, 2)
+AssertionError: 5 != 2
+
+----------------------------------------------------------------------
+Ran 242 tests in 17.297s
+
+FAILED (failures=3)

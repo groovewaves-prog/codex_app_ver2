@@ -1,0 +1,380 @@
+"""R-W-2 / R-W-3 / R-W-4 の Streamlit UI 実装。
+
+責務:
+- セッション内のマスク判断サマリ表示 (R-W-2)
+- 「永続化する」ボタン → user_seeds.yaml / user_allowlist.yaml 追記 (R-W-3)
+- 全期間の判断履歴と推奨エンジン表示 (R-W-4)
+- 顧客 PJ セレクタ (R-V)
+
+streamlit_app.py からの呼び出しは:
+    from streamlit_audit_ui import (
+        ensure_session_state, render_customer_selector,
+        render_session_summary, render_history_panel,
+    )
+    ensure_session_state()
+    render_customer_selector()
+    # ... 既存パイプライン後 ...
+    render_session_summary()
+    # ... ページ最下部 ...
+    render_history_panel()
+
+設計原則:
+- Streamlit の rerun サイクルに対応して、各 render_* は idempotent
+- ボタン操作は即座に効果を反映 (ファイル書き込みを完了 → メッセージ表示)
+- 失敗時は例外を握りつぶさず st.error で表示 (silent failure を避ける)
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any, Mapping
+
+import streamlit as st
+
+from secure_review.audit_log import (
+    DEFAULT_CUSTOMER_ID,
+    aggregate_decisions,
+    append_to_user_allowlist,
+    append_to_user_seeds,
+    generate_session_id,
+    recommend_action,
+)
+
+CUSTOMERS_DIR = Path("data/customers")
+
+
+# ============================================================
+# セッション状態管理
+# ============================================================
+
+def ensure_session_state() -> None:
+    """st.session_state に R-W 関連のキーを初期化する。
+
+    streamlit_app.py の最上位で 1 度呼ぶ。冪等。
+    """
+    if "audit_session_id" not in st.session_state:
+        st.session_state.audit_session_id = generate_session_id()
+    if "customer_id" not in st.session_state:
+        st.session_state.customer_id = DEFAULT_CUSTOMER_ID
+
+
+def get_session_id() -> str:
+    ensure_session_state()
+    return st.session_state.audit_session_id
+
+
+def get_customer_id() -> str:
+    ensure_session_state()
+    return st.session_state.customer_id
+
+
+# ============================================================
+# 顧客 PJ セレクタ (R-V)
+# ============================================================
+
+def _list_customers() -> list[str]:
+    """data/customers/ 配下のディレクトリを列挙して候補リストを返す。"""
+    if not CUSTOMERS_DIR.exists():
+        return [DEFAULT_CUSTOMER_ID]
+    candidates = sorted(
+        p.name for p in CUSTOMERS_DIR.iterdir() if p.is_dir()
+    )
+    if DEFAULT_CUSTOMER_ID not in candidates:
+        candidates.insert(0, DEFAULT_CUSTOMER_ID)
+    return candidates
+
+
+def render_customer_selector(*, sidebar: bool = True) -> str:
+    """顧客 PJ セレクタを描画する (サイドバー or 本文)。
+
+    Returns:
+        選択された customer_id (st.session_state.customer_id にも反映)。
+    """
+    ensure_session_state()
+    container = st.sidebar if sidebar else st
+    candidates = _list_customers()
+    current = st.session_state.customer_id
+    try:
+        default_idx = candidates.index(current)
+    except ValueError:
+        default_idx = 0
+
+    selected = container.selectbox(
+        "👤 顧客 PJ",
+        options=candidates,
+        index=default_idx,
+        key="customer_id_selector",
+        help=(
+            "顧客 PJ ごとに seed dict / allowlist / audit log を分離します。"
+            " 新規 PJ は data/customers/<id>/ ディレクトリを作成すれば追加されます。"
+        ),
+    )
+    if selected != st.session_state.customer_id:
+        # R-W-ε (2026-05-08): 切り替え警告。マスク判断中だった場合は確認を求める。
+        # ファイル添付があり、かつ confirmation 対象になった (preview_docs に
+        # uncertain_candidates がある) 場合に警告を表示。
+        has_pending = bool(st.session_state.get("preview_docs"))
+        if has_pending:
+            container.warning(
+                f"⚠️ 顧客 PJ を **{st.session_state.customer_id}** から "
+                f"**{selected}** に切り替えると、"
+                "現在のセッションの判断履歴が新セッションに分離されます。"
+                " 進行中の判断は失われませんが、サマリ画面で別セッションとして集計されます。"
+            )
+            if not container.button(
+                f"🔄 {selected} に切り替える", key="confirm_customer_switch",
+            ):
+                # 確認ボタンが押されるまで切り替えない
+                return st.session_state.customer_id
+
+        st.session_state.customer_id = selected
+        # customer_id 切り替え時はセッション ID も新規発行 (混合を避ける)
+        st.session_state.audit_session_id = generate_session_id()
+        st.rerun()
+    return selected
+
+
+# ============================================================
+# R-W-2: セッション内サマリ
+# ============================================================
+
+def _format_examples(examples: list[Mapping[str, Any]]) -> str:
+    """文脈例を 1 行ずつフォーマット。"""
+    lines = []
+    for ex in examples[:3]:
+        doc = ex.get("doc", "")
+        ctx = (ex.get("context", "") or "").strip().replace("\n", " ")[:80]
+        decision = ex.get("decision", "")
+        marker = "🛡️" if decision == "mask" else "🟢"
+        lines.append(f"  {marker} `{doc}`: ...{ctx}...")
+    return "\n".join(lines)
+
+
+def render_session_summary() -> None:
+    """R-W-2: 本セッションのマスク判断サマリ expander を描画。
+
+    apply_user_decisions が customer_id/session_id 付きで呼ばれた直後に
+    audit log に追記された内容を集計表示。
+    各エントリに R-W-3 の永続化ボタンを表示。
+    """
+    ensure_session_state()
+    customer_id = get_customer_id()
+    session_id = get_session_id()
+
+    agg = aggregate_decisions(
+        customer_id=customer_id,
+        session_id=session_id,
+    )
+    if not agg:
+        return  # まだ判断なし → expander 非表示
+
+    total_decisions = sum(e["total"] for e in agg.values())
+    mask_count = sum(e["mask_count"] for e in agg.values())
+    skip_count = sum(e["skip_count"] for e in agg.values())
+
+    with st.expander(
+        f"📊 本セッションのマスク判断サマリ "
+        f"(語 {len(agg)} 種類、判断 {total_decisions} 件: マスク {mask_count} / 素通し {skip_count})",
+        expanded=False,
+    ):
+        st.caption(
+            "このセッションで `uncertain candidates` UI で判断された結果です。"
+            " 同じ語を将来も同じ判断にしたい場合は永続化ボタンで反映できます (次回セッションから有効)。"
+        )
+        # 判断回数の多い順にソート
+        sorted_terms = sorted(agg.items(), key=lambda kv: -kv[1]["total"])
+        for term, e in sorted_terms:
+            _render_term_card(term, e, customer_id, key_prefix="session")
+
+
+def _render_term_card(
+    term: str,
+    agg_entry: Mapping[str, Any],
+    customer_id: str,
+    *,
+    key_prefix: str,
+) -> None:
+    """1 つの語に対するサマリカードと永続化ボタンを描画。
+
+    R-W-3 のボタンロジックは _persist_term() に委譲。
+    """
+    label = agg_entry.get("label", "")
+    mask_count = agg_entry.get("mask_count", 0)
+    skip_count = agg_entry.get("skip_count", 0)
+    ratio_pct = agg_entry.get("mask_ratio", 0.0) * 100
+    rec = recommend_action(agg_entry)
+
+    rec_badge = {
+        "promote_seed_mask": "⚡ **マスク確定推奨** (90%+ 一貫)",
+        "promote_seed_skip": "⚡ **素通し確定推奨** (90%+ 一貫)",
+        "context_dependent": "🤔 文脈依存 (現状維持推奨)",
+        "insufficient_data": "📉 データ不足 (5 件未満)",
+    }.get(rec, "")
+
+    cols = st.columns([2.5, 1, 1, 1, 3])
+    cols[0].markdown(f"**`{term}`** ({label})")
+    cols[1].metric("マスク", mask_count)
+    cols[2].metric("素通し", skip_count)
+    cols[3].metric("一貫性", f"{ratio_pct:.0f}%")
+    cols[4].markdown(rec_badge)
+
+    # 文脈例 (折りたたみ)
+    examples = agg_entry.get("examples", [])
+    if examples:
+        with st.expander(f"文脈例 ({len(examples)} 件)", expanded=False):
+            st.markdown(_format_examples(examples))
+
+    # R-W-3: 永続化ボタン (3 種類)
+    btn_cols = st.columns([1, 1, 1, 2])
+    base_key = f"{key_prefix}_{term}"
+
+    if btn_cols[0].button(
+        "📥 マスク確定 (auto-mask)", key=f"{base_key}_mask",
+        help="ner_seeds_user.yaml に confirm:true で追記。次回セッションから自動マスク。",
+    ):
+        _persist_term(term, label, customer_id, action="seed_mask")
+
+    if btn_cols[1].button(
+        "👁️ watchlist (人間判断)", key=f"{base_key}_watch",
+        help="ner_seeds_user.yaml に confirm:false で追記。検出は確実、判断は都度。",
+    ):
+        _persist_term(term, label, customer_id, action="seed_watch")
+
+    if btn_cols[2].button(
+        "🟢 素通し確定", key=f"{base_key}_allow",
+        help="tech_allowlist_user.yaml に追記。次回セッションから候補にも出ない。",
+    ):
+        _persist_term(term, label, customer_id, action="allowlist")
+
+    btn_cols[3].markdown(" ")  # spacer
+    st.divider()
+
+
+def _persist_term(
+    term: str,
+    label: str,
+    customer_id: str,
+    *,
+    action: str,
+) -> None:
+    """R-W-3: 永続化ボタンの実処理。
+
+    action:
+      - "seed_mask"  : ner_seeds_user.yaml に confirm:true で追記
+      - "seed_watch" : ner_seeds_user.yaml に confirm:false で追記
+      - "allowlist"  : tech_allowlist_user.yaml に追記
+    """
+    try:
+        if action in ("seed_mask", "seed_watch"):
+            confirm = (action == "seed_mask")
+            # canonical はとりあえず term と同じ。複雑な統合は手動編集で。
+            path, added = append_to_user_seeds(
+                text=term,
+                label=label or "ORG",
+                canonical=term,
+                confirm=confirm,
+                customer_id=customer_id,
+            )
+            if added:
+                st.success(
+                    f"✅ `{term}` を `{path}` に追加しました "
+                    f"({'auto-mask' if confirm else 'watchlist'})。"
+                    " 次回セッションから反映されます。"
+                )
+            else:
+                st.info(f"ℹ️ `{term}` は既に `{path}` に登録済みです。")
+        elif action == "allowlist":
+            path, added = append_to_user_allowlist(
+                text=term,
+                customer_id=customer_id,
+            )
+            if added:
+                st.success(
+                    f"✅ `{term}` を `{path}` に追加しました (素通し確定)。"
+                    " 次回セッションから候補にも出なくなります。"
+                )
+            else:
+                st.info(f"ℹ️ `{term}` は既に `{path}` に登録済みです。")
+        else:
+            st.error(f"未知の action: {action}")
+    except Exception as exc:  # noqa: BLE001
+        st.error(f"⚠️ 永続化に失敗しました: {exc}")
+
+
+# ============================================================
+# R-W-4: 全期間履歴と推奨
+# ============================================================
+
+def render_history_panel() -> None:
+    """R-W-4: 全期間のマスク判断履歴と推奨エンジン出力。
+
+    現在の customer_id 配下の全 audit log を集計して表示。
+    sidebar に「過去 7 日 / 30 日 / 全期間」フィルタを置くことも可能だが、
+    MVP では全期間集計 (12 PDFs × N セッション程度ならパフォーマンス上問題なし)。
+    """
+    ensure_session_state()
+    customer_id = get_customer_id()
+
+    agg = aggregate_decisions(customer_id=customer_id)
+
+    with st.expander(
+        f"📈 全期間のマスク判断履歴と推奨 (顧客: {customer_id}, 語 {len(agg)} 種類)",
+        expanded=False,
+    ):
+        if not agg:
+            st.info(
+                "まだ判断履歴がありません。"
+                " 文書をレビューに送信すると、ここに過去の判断パターンと"
+                " seed dict / allowlist 昇格推奨が蓄積されていきます。"
+            )
+            return
+
+        # 推奨カテゴリ別サマリ
+        promote_mask = []
+        promote_skip = []
+        context_dep = []
+        insufficient = []
+        for term, e in agg.items():
+            rec = recommend_action(e)
+            if rec == "promote_seed_mask":
+                promote_mask.append((term, e))
+            elif rec == "promote_seed_skip":
+                promote_skip.append((term, e))
+            elif rec == "context_dependent":
+                context_dep.append((term, e))
+            else:
+                insufficient.append((term, e))
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("⚡ マスク確定推奨", len(promote_mask))
+        c2.metric("⚡ 素通し確定推奨", len(promote_skip))
+        c3.metric("🤔 文脈依存", len(context_dep))
+        c4.metric("📉 データ不足", len(insufficient))
+
+        st.divider()
+
+        # 強い推奨 (⚡) を優先表示
+        if promote_mask:
+            st.markdown("### ⚡ マスク確定推奨 (90%+ がマスク判断)")
+            for term, e in sorted(promote_mask, key=lambda kv: -kv[1]["total"]):
+                _render_term_card(term, e, customer_id, key_prefix="hist_pm")
+
+        if promote_skip:
+            st.markdown("### ⚡ 素通し確定推奨 (90%+ が素通し判断)")
+            for term, e in sorted(promote_skip, key=lambda kv: -kv[1]["total"]):
+                _render_term_card(term, e, customer_id, key_prefix="hist_ps")
+
+        if context_dep:
+            with st.expander(
+                f"🤔 文脈依存 ({len(context_dep)} 種類) - 表示するには展開",
+                expanded=False,
+            ):
+                for term, e in sorted(context_dep, key=lambda kv: -kv[1]["total"]):
+                    _render_term_card(term, e, customer_id, key_prefix="hist_cd")
+
+        if insufficient:
+            with st.expander(
+                f"📉 データ不足 ({len(insufficient)} 種類、5 件未満) - 表示するには展開",
+                expanded=False,
+            ):
+                for term, e in sorted(insufficient, key=lambda kv: -kv[1]["total"]):
+                    _render_term_card(term, e, customer_id, key_prefix="hist_id")

@@ -303,6 +303,8 @@ def _reset_state() -> None:
         # R-Y (2026-05-08): 深堀結果。リセット時にクリアしないと、
         # 次のレビュー実行時に同名文書の旧深堀結果が表示されてしまう。
         "deep_dive_results",
+        # Q12 (2026-05-08): 文書チェック完了フラグ
+        "docs_checked",
     ):
         st.session_state.pop(key, None)
 
@@ -671,6 +673,71 @@ with st.sidebar:
         "本セッション中のメモリ上のみで処理されます。"
     )
 
+    # ----------------------------------------------------------------
+    # 開発者モード (2026-05-08 追加)
+    # 実務ユーザの画面をすっきり保つため、デバッグ・実験 UI を分離する。
+    # OFF (デフォルト): 実務機能のみ表示
+    # ON: プロンプトプレビュー / LLM 生レスポンス / NER Diagnostics /
+    #     gBizINFO Diagnostics などの実験・診断 UI が追加表示される
+    # 環境変数 DEVELOPER_MODE_DEFAULT=true で初期値を ON にできる。
+    # ----------------------------------------------------------------
+    st.markdown("---")
+    _developer_mode_default = (
+        os.getenv("DEVELOPER_MODE_DEFAULT", "false").strip().lower() == "true"
+    )
+    if "developer_mode" not in st.session_state:
+        st.session_state.developer_mode = _developer_mode_default
+
+    st.session_state.developer_mode = st.toggle(
+        "⚙️ 開発者モード",
+        value=st.session_state.developer_mode,
+        help=(
+            "OFF (デフォルト): 実務機能のみ表示。"
+            "ON: プロンプトプレビュー、LLM 生レスポンス、NER Diagnostics、"
+            "gBizINFO Diagnostics などの実装検証用 UI が追加表示されます。"
+            " 環境変数 DEVELOPER_MODE_DEFAULT=true で初期値を ON にできます。"
+        ),
+    )
+
+    # ----------------------------------------------------------------
+    # 採用規格セクション (2026-05-08 追加)
+    # 本ツールのレビュー基準が依拠する業界標準を明示する。
+    # ユーザの「文書構造については、参照した業界標準についてツールのどこ
+    # かに記載してもらえますか?」というご要望への対応。
+    # 詳細は文書「設計書 構造定義書 v0.2」を参照。
+    # ----------------------------------------------------------------
+    st.markdown("---")
+    with st.expander("📚 採用規格 (レビュー基準の根拠)", expanded=False):
+        st.markdown(
+            "本ツールのレビュー基準は、以下の業界標準・公的ガイドラインに"
+            "基づいて構築されています。"
+        )
+        st.markdown(
+            "**🇯🇵 IPA「機能要件の合意形成ガイド」**  \n"
+            "(独) 情報処理推進機構が公開する設計実務向けガイド。"
+            "日本の SI 業界で広く参照される。  \n"
+            "→ 本ツールでは **章立てのベース構造** に採用。"
+        )
+        st.markdown(
+            "**☁️ AWS Well-Architected Framework**  \n"
+            "AWS が公開するクラウドベストプラクティス集。"
+            "クラウド設計の事実上の業界標準。  \n"
+            "5 つの柱: 運用 (OE) / セキュリティ (SEC) / 信頼性 (REL) "
+            "/ パフォーマンス (PERF) / コスト (COST)  \n"
+            "→ 本ツールでは **非機能要件と各章のチェック項目** に採用。"
+        )
+        st.markdown(
+            "**🌐 ISO/IEC 25010 (旧 JIS X 0129)**  \n"
+            "ソフトウェア・システム品質モデルの国際標準。"
+            "8 つの品質特性を定義。  \n"
+            "機能適合性 / 性能効率性 / 互換性 / 使用性 / 信頼性 / "
+            "セキュリティ / 保守性 / 移植性  \n"
+            "→ 本ツールでは **品質特性のチェック観点** に採用。"
+        )
+        st.caption(
+            "詳細は社内ドキュメント「設計書 構造定義書」を参照してください。"
+        )
+
 
 # --------------------------------------------------------------------- main
 
@@ -757,6 +824,11 @@ with col2:
 
 
 if preview_clicked:
+    # Q12 (2026-05-08): 新しい preview の度に文書チェック状態をリセット
+    st.session_state.docs_checked = False
+    # 古い deep_dive_results も新 preview には不適合なのでクリア
+    st.session_state.pop("deep_dive_results", None)
+
     # R-X-2 (2026-05-08): SHA256 で重複アップロードを検出し、あれば中断
     duplicates = _detect_duplicate_uploads()
     if duplicates:
@@ -1010,13 +1082,40 @@ if preview_docs:
     all_confirmed = (not mask_docs) or all(confirmations.get(doc.name) for doc in mask_docs)
     can_send = bool(preview_docs) and not blocked_docs and all_confirmed
 
-    send_col, status_col = st.columns([1, 5])
+    # Q12 (2026-05-08): 「文書チェック」ボタン新設で 2 段階フロー化
+    # 1. 「📋 文書チェック」(secondary) — ローカル処理: ユーザ判断反映 + サマリ表示
+    # 2. 「レビューに送信」(primary) — LLM 送信のみ (文書チェック後のみ有効)
+    #
+    # これにより、LLM 送信前に永続化操作・ログ DL が落ち着いて行えるようになる
+    # (旧フローでは LLM 送信中に永続化ボタン等が表示されて違和感があった)。
+    can_check = bool(preview_docs) and not blocked_docs and all_confirmed
+    can_send = st.session_state.get("docs_checked", False) and bool(preview_docs) and not blocked_docs and all_confirmed
+
+    check_col, send_col, status_col = st.columns([1.5, 1.5, 4])
+    with check_col:
+        check_clicked = st.button(
+            "📋 文書チェック",
+            type="secondary",
+            disabled=not can_check,
+            width='stretch',
+            help=(
+                "マスク判断を反映し、LLM 送信前のサマリを確認します。"
+                "このステップでは LLM には何も送信されません。"
+                " 匿名化結果に問題ないことを確認してから「レビューに送信」を押してください。"
+            ),
+            key="doc_check_button",
+        )
     with send_col:
         send_clicked = st.button(
             "レビューに送信",
             type="primary",
             disabled=not can_send,
             width='stretch',
+            help=(
+                "LLM プロバイダに匿名化済みテキストを送信し、レビュー結果を取得します。"
+                " 「📋 文書チェック」を実行してから押せるようになります。"
+            ),
+            key="send_review_button",
         )
     with status_col:
         if blocked_docs:
@@ -1029,19 +1128,28 @@ if preview_docs:
                 '<div class="muted">送信ボタンを有効にするには、上記の各文書を確認・承認してください。</div>',
                 unsafe_allow_html=True,
             )
+        elif not st.session_state.get("docs_checked", False):
+            st.markdown(
+                '<div class="muted">まず <b>「📋 文書チェック」</b> を実行して、'
+                'マスク判断サマリを確認してください。'
+                '問題なければ「レビューに送信」を押せるようになります。</div>',
+                unsafe_allow_html=True,
+            )
         else:
             st.markdown(
-                '<div class="muted">送信準備完了。設定された LLM プロバイダには'
+                '<div class="muted">✅ 送信準備完了。設定された LLM プロバイダには'
                 '匿名化済みのテキストのみが送信されます。</div>',
                 unsafe_allow_html=True,
             )
 
-    if send_clicked:
+    # Q12 (2026-05-08): 「📋 文書チェック」押下時の処理
+    # ローカル処理のみ (LLM 送信なし):
+    #   - ユーザ判断を反映して preview_docs を再生成
+    #   - session_state.preview_docs を更新
+    #   - docs_checked = True にして「レビューに送信」を有効化
+    # 完了後、render_session_summary と render_log_export_button が表示される。
+    if check_clicked:
         try:
-            # ----- R-M (PR-D2): ユーザ判断を反映して outbound テキストを再生成 -----
-            # masking_states があれば、各文書について
-            # apply_user_decisions を呼んで preview_docs を上書き。
-            # その後 _enforce_outbound_guard と provider.review に渡す。
             _states = st.session_state.get("masking_states", {})
             _decisions_all = st.session_state.get("user_decisions", {})
             if _states:
@@ -1051,11 +1159,9 @@ if preview_docs:
                     if state is None:
                         rebuilt.append(doc)
                         continue
-                    # この文書に紐づくユーザ判断だけを抽出
                     doc_decisions: dict[str, bool] = {}
                     for cand in state.uncertain_candidates:
                         key = _decision_key(doc.name, cand.text)
-                        # 未選択の場合はデフォルト True (マスク、安全側)
                         doc_decisions[cand.text] = _decisions_all.get(key, True)
                     sanitizer = _build_sanitizer()
                     try:
@@ -1063,13 +1169,9 @@ if preview_docs:
                             state=state,
                             user_decisions=doc_decisions,
                             sanitizer=sanitizer,
-                            # R-W-1: 判断履歴を audit log に記録
                             customer_id=st.session_state.get("customer_id"),
                             session_id=st.session_state.get("audit_session_id"),
                         )
-                        # 既存 doc の sensitivity 判定情報を保持
-                        # (apply_user_decisions は state.sanitized から構築するので、
-                        #  ローカル機密度判定は state 側にすでに反映済み)
                         rebuilt.append(new_doc)
                     except Exception as exc:  # noqa: BLE001
                         st.warning(
@@ -1078,15 +1180,36 @@ if preview_docs:
                         )
                         rebuilt.append(doc)
                 preview_docs = rebuilt
-                # session_state も新しい preview_docs に更新しておく
                 st.session_state.preview_docs = preview_docs
 
-                # R-W-2 (2026-05-08): 本セッションのマスク判断サマリを表示
-                render_session_summary()
+            # 文書チェック完了をマーク
+            st.session_state.docs_checked = True
+            # 古いレビュー結果が残っていればクリア (新しい判断には合わないため)
+            st.session_state.pop("review_result", None)
+            st.session_state.pop("deep_dive_results", None)
+            st.success(
+                "✅ 文書チェック完了。下記サマリで匿名化結果を確認してください。"
+                " 問題なければ「レビューに送信」ボタンで LLM レビューを実行できます。"
+            )
+        except Exception as exc:  # noqa: BLE001
+            _request_id = uuid.uuid4().hex[:8]
+            st.error(f"文書チェックに失敗しました ({_request_id})。")
+            with st.expander("詳細トレース"):
+                st.code(traceback.format_exc())
 
-                # R-W-export (2026-05-08): 結果ログのダウンロードボタン
-                render_log_export_button()
+    # Q12 (2026-05-08): 文書チェック完了後の表示 (常時、check_clicked 直後に依存しない)
+    # docs_checked が True なら、preview_docs に紐づくサマリと DL ボタンを表示。
+    if st.session_state.get("docs_checked", False):
+        # R-W-2 (2026-05-08): 本セッションのマスク判断サマリ
+        render_session_summary()
+        # R-W-export (2026-05-08): 結果ログのダウンロードボタン
+        render_log_export_button()
 
+    # Q12 (2026-05-08): 「レビューに送信」押下時の処理
+    # LLM 送信のみ (文書チェック後の preview_docs を使用)。
+    if send_clicked:
+        try:
+            preview_docs = st.session_state.get("preview_docs") or preview_docs
             provider_impl = choose_provider()
             _enforce_outbound_guard(provider_impl.name, preview_docs)
             with st.spinner(f"{provider_impl.name} でレビュー実行中..."):
@@ -1229,11 +1352,13 @@ if review is not None:
         _key = getattr(_issue, "source_document", "") or "(出典不明)"
         issues_by_doc.setdefault(_key, []).append(_issue)
 
-    # 文書順序: preview_docs の自然順 (R-Q-1b) を尊重
+    # Q4 修正 (2026-05-08): preview_docs にある全文書を表示する。
+    # LLM が指摘を出さなかった文書は issues_by_doc に入らないため、
+    # 旧実装ではその文書のヘッダも深堀ボタンも表示されなかった。
+    # 全文書のレビュー状況を一覧する + 指摘なしの文書も深堀対象にできるよう、
+    # preview_docs ベースで順序リストを構築する。
     _preview_docs_for_order = st.session_state.get("preview_docs") or []
-    _ordered_doc_names = [
-        d.name for d in _preview_docs_for_order if d.name in issues_by_doc
-    ]
+    _ordered_doc_names = [d.name for d in _preview_docs_for_order]
     # preview_docs にない出典 (例: "(出典不明)") は最後に追加
     for _n in issues_by_doc:
         if _n not in _ordered_doc_names:
@@ -1253,8 +1378,9 @@ if review is not None:
 
     with _step4_container:
         for _doc_name in _ordered_doc_names:
+            # Q4 修正: issues_by_doc に存在しない文書 (= LLM 指摘なし) は空リスト
             _doc_issues = sorted(
-                issues_by_doc[_doc_name],
+                issues_by_doc.get(_doc_name, []),
                 key=lambda i: severity_order.get(i.severity, 4),
             )
 
@@ -1326,6 +1452,16 @@ if review is not None:
                         st.error(f"深堀レビューに失敗しました ({_request_id})。")
                         with st.expander("詳細トレース"):
                             st.code(traceback.format_exc())
+
+            # Q4 修正 (2026-05-08): 指摘なしの場合の表示
+            if not _doc_issues:
+                st.markdown(
+                    "<div class='issue-row info' style='color:#4a5549;font-size:0.92rem;'>"
+                    "✅ <b>この文書に対する LLM 指摘はありません。</b> "
+                    "より詳細な分析が必要なら「🔬 この文書を深堀」をご利用ください。"
+                    "</div>",
+                    unsafe_allow_html=True,
+                )
 
             # 既存指摘の表示 (severity 順)
             for issue in _doc_issues:
@@ -1459,24 +1595,33 @@ if review is not None:
 
             st.markdown("")  # 文書間の余白
 
-    with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
-        st.code(review.prompt_preview or "(空)", language="text")
+    # 開発者モード ON 時のみ表示 (2026-05-08): プロンプト・LLM 生レスポンスの確認用
+    if st.session_state.get("developer_mode", False):
+        st.markdown("---")
+        st.markdown(
+            "<div style='color:#888;font-size:0.85rem;'>"
+            "⚙️ 以下は <b>開発者モード ON 時のみ表示</b>される実装検証用 UI です。"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
+            st.code(review.prompt_preview or "(空)", language="text")
 
-    with st.expander("LLM の生レスポンス (デバッグ用)"):
-        raw = getattr(review, "raw_response", "") or ""
-        if raw.strip():
-            st.caption(
-                "LLM プロバイダから返ってきた未加工のレスポンスです。"
-                "指摘表示が空の場合や形式が崩れている場合の原因調査に使用します。"
-            )
-            st.code(raw[:8000], language="json")
-            if len(raw) > 8000:
-                st.caption(f"全 {len(raw)} 文字中、先頭 8000 文字のみ表示しています。")
-        else:
-            st.caption(
-                "生レスポンスは記録されていません (mock プロバイダ使用時、または "
-                "プロバイダ実装が raw_response を保持していない場合)。"
-            )
+        with st.expander("LLM の生レスポンス (デバッグ用)"):
+            raw = getattr(review, "raw_response", "") or ""
+            if raw.strip():
+                st.caption(
+                    "LLM プロバイダから返ってきた未加工のレスポンスです。"
+                    "指摘表示が空の場合や形式が崩れている場合の原因調査に使用します。"
+                )
+                st.code(raw[:8000], language="json")
+                if len(raw) > 8000:
+                    st.caption(f"全 {len(raw)} 文字中、先頭 8000 文字のみ表示しています。")
+            else:
+                st.caption(
+                    "生レスポンスは記録されていません (mock プロバイダ使用時、または "
+                    "プロバイダ実装が raw_response を保持していない場合)。"
+                )
 
     # R-Y (2026-05-08): 深堀レビューは Step 4 の文書ごとグループ表示に統合済み。
     # 各文書ヘッダの「🔬 この文書を深堀」ボタンから実行する。
@@ -1559,279 +1704,289 @@ _SPACY_JA_DIAG_DEFAULT_TEXT = (
 )
 
 
-with st.expander("🔍 日本語 NER Diagnostics (R-M 実験)", expanded=False):
-    st.caption(
-        "R-M (カスタムマスク辞書) 実装に向けた予備調査。spaCy 公式の日本語パイプライン "
-        "(ja_core_news_md) で固有表現抽出 (NER) を試し、Streamlit Cloud Free Tier 上で"
-        "動くかを確認します。既存のレビュー機能には影響しません。"
+# 開発者モード ON 時のみ表示 (2026-05-08): NER 検出と gBizINFO 検索の実装検証用
+if st.session_state.get("developer_mode", False):
+    st.markdown("---")
+    st.markdown(
+        "<div style='color:#888;font-size:0.85rem;'>"
+        "🧪 以下は開発者モード時のみ表示される実装検証・実験用 UI です。"
+        "</div>",
+        unsafe_allow_html=True,
     )
-    diag_text = st.text_area(
-        "解析対象テキスト",
-        value=_SPACY_JA_DIAG_DEFAULT_TEXT,
-        height=120,
-        key="spacy_ja_diag_text",
-        help="ここに入れたテキストに対して、spaCy で日本語固有表現抽出を行います。",
-    )
-    if st.button("解析実行", key="spacy_ja_diag_run"):
-        import time
-        try:
-            mem_before = _format_memory_usage()
-            t_load_start = time.perf_counter()
-            nlp = _load_spacy_ja_model()
-            t_load_end = time.perf_counter()
 
-            t_parse_start = time.perf_counter()
-            doc = nlp(diag_text)
-            t_parse_end = time.perf_counter()
-
-            mem_after = _format_memory_usage()
-
-            st.success("解析完了")
-
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("モデルロード時間", f"{t_load_end - t_load_start:.2f} s")
-            with col2:
-                st.metric("解析時間", f"{(t_parse_end - t_parse_start) * 1000:.0f} ms")
-            with col3:
-                st.metric("メモリ (RSS)", mem_after)
-
-            if doc.ents:
-                st.markdown("**検出されたエンティティ**")
-                ent_rows = [
-                    {
-                        "テキスト": ent.text,
-                        "ラベル": ent.label_,
-                        "開始位置": ent.start_char,
-                        "終了位置": ent.end_char,
-                    }
-                    for ent in doc.ents
-                ]
-                st.dataframe(ent_rows, width="stretch")
-            else:
-                st.info("エンティティは検出されませんでした。")
-
-            with st.expander("形態素解析の詳細 (debug)", expanded=False):
-                token_rows = [
-                    {
-                        "表層形": tok.text,
-                        "品詞": tok.pos_,
-                        "詳細品詞": tok.tag_,
-                        "原形": tok.lemma_,
-                    }
-                    for tok in doc
-                ][:50]  # cap at first 50 tokens to keep UI light
-                st.dataframe(token_rows, width="stretch")
-                if len(doc) > 50:
-                    st.caption(f"先頭 50 トークンのみ表示 (全 {len(doc)} トークン中)")
-
-        except ImportError as e:
-            st.error(
-                "spaCy または ja_core_news_md モデルが import できません。"
-                f"requirements.txt の設定を確認してください。詳細: {e}"
-            )
-        except Exception as e:
-            st.error(
-                "日本語 NER の実行中にエラーが発生しました。"
-                f"Streamlit Cloud のログも確認してください。詳細: {type(e).__name__}: {e}"
-            )
-
-
-# ----------------------------------------------------------------------
-# R-M experiment: gBizINFO API Diagnostics expander.
-#
-# Step 5 of the R-M (custom mask dictionary) feasibility check.
-# Goal: confirm that the spacy NER + EntityRuler combo can be augmented
-# with a dynamic lookup against gBizINFO's REST API to detect company
-# names that are not in the seed dictionary (e.g. "iret").
-#
-# Strategy: when the user types a candidate string, hit gBizINFO's
-# /hojin endpoint with name= as the query. If any results come back,
-# the candidate is highly likely a real company name. The free-tier API
-# requires a token (GBIZINFO_API_TOKEN in Streamlit Secrets) that is
-# obtained by submitting an application at
-# https://info.gbiz.go.jp/hojin/various_registration/form
-#
-# This block is intentionally isolated:
-# - Located outside any review_result conditional.
-# - All HTTP I/O wrapped in try/except so a network outage or invalid
-#   token surfaces a clear st.error inside the expander only - the rest
-#   of the UI keeps working as long as Gemini reviews are still possible.
-# - When GBIZINFO_API_TOKEN is missing, the expander shows a friendly
-#   notice rather than crashing.
-# ----------------------------------------------------------------------
-
-
-_GBIZINFO_API_BASE_V2 = "https://api.info.gbiz.go.jp/hojin/v2"
-_GBIZINFO_API_BASE_V1 = "https://info.gbiz.go.jp/hojin/v1"
-_GBIZINFO_DIAG_DEFAULT_NAME = "iret"
-
-
-def _get_gbizinfo_token() -> str | None:
-    """Fetch GBIZINFO_API_TOKEN from Streamlit Secrets, or None if absent."""
-    try:
-        return st.secrets.get("GBIZINFO_API_TOKEN")
-    except Exception:
-        return None
-
-
-def _gbizinfo_search_by_name(
-    name: str,
-    token: str,
-    api_base: str = _GBIZINFO_API_BASE_V2,
-    timeout: float = 10.0,
-) -> tuple[int, dict | None, str | None]:
-    """Call gBizINFO /hojin?name={name} and return (status_code, json_or_none,
-    error_message_or_none).
-
-    Errors are returned as a string in the third tuple element rather than
-    raised, so the caller can show them inline without aborting the page.
-    """
-    import urllib.parse
-    import urllib.request
-    import json as _json
-
-    encoded_name = urllib.parse.quote(name)
-    url = f"{api_base}/hojin?name={encoded_name}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "X-hojinInfo-api-token": token,
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            body = resp.read().decode("utf-8")
+    with st.expander("🔍 日本語 NER Diagnostics (R-M 実験)", expanded=False):
+        st.caption(
+            "R-M (カスタムマスク辞書) 実装に向けた予備調査。spaCy 公式の日本語パイプライン "
+            "(ja_core_news_md) で固有表現抽出 (NER) を試し、Streamlit Cloud Free Tier 上で"
+            "動くかを確認します。既存のレビュー機能には影響しません。"
+        )
+        diag_text = st.text_area(
+            "解析対象テキスト",
+            value=_SPACY_JA_DIAG_DEFAULT_TEXT,
+            height=120,
+            key="spacy_ja_diag_text",
+            help="ここに入れたテキストに対して、spaCy で日本語固有表現抽出を行います。",
+        )
+        if st.button("解析実行", key="spacy_ja_diag_run"):
+            import time
             try:
-                payload = _json.loads(body)
-            except _json.JSONDecodeError as e:
-                return resp.status, None, f"JSON 解析エラー: {e}"
-            return resp.status, payload, None
-    except urllib.error.HTTPError as e:
-        return e.code, None, f"HTTP エラー {e.code}: {e.reason}"
-    except urllib.error.URLError as e:
-        return 0, None, f"通信エラー: {e.reason}"
-    except Exception as e:  # noqa: BLE001
-        return 0, None, f"想定外のエラー: {type(e).__name__}: {e}"
+                mem_before = _format_memory_usage()
+                t_load_start = time.perf_counter()
+                nlp = _load_spacy_ja_model()
+                t_load_end = time.perf_counter()
+
+                t_parse_start = time.perf_counter()
+                doc = nlp(diag_text)
+                t_parse_end = time.perf_counter()
+
+                mem_after = _format_memory_usage()
+
+                st.success("解析完了")
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("モデルロード時間", f"{t_load_end - t_load_start:.2f} s")
+                with col2:
+                    st.metric("解析時間", f"{(t_parse_end - t_parse_start) * 1000:.0f} ms")
+                with col3:
+                    st.metric("メモリ (RSS)", mem_after)
+
+                if doc.ents:
+                    st.markdown("**検出されたエンティティ**")
+                    ent_rows = [
+                        {
+                            "テキスト": ent.text,
+                            "ラベル": ent.label_,
+                            "開始位置": ent.start_char,
+                            "終了位置": ent.end_char,
+                        }
+                        for ent in doc.ents
+                    ]
+                    st.dataframe(ent_rows, width="stretch")
+                else:
+                    st.info("エンティティは検出されませんでした。")
+
+                with st.expander("形態素解析の詳細 (debug)", expanded=False):
+                    token_rows = [
+                        {
+                            "表層形": tok.text,
+                            "品詞": tok.pos_,
+                            "詳細品詞": tok.tag_,
+                            "原形": tok.lemma_,
+                        }
+                        for tok in doc
+                    ][:50]  # cap at first 50 tokens to keep UI light
+                    st.dataframe(token_rows, width="stretch")
+                    if len(doc) > 50:
+                        st.caption(f"先頭 50 トークンのみ表示 (全 {len(doc)} トークン中)")
+
+            except ImportError as e:
+                st.error(
+                    "spaCy または ja_core_news_md モデルが import できません。"
+                    f"requirements.txt の設定を確認してください。詳細: {e}"
+                )
+            except Exception as e:
+                st.error(
+                    "日本語 NER の実行中にエラーが発生しました。"
+                    f"Streamlit Cloud のログも確認してください。詳細: {type(e).__name__}: {e}"
+                )
 
 
-with st.expander("🏢 gBizINFO 検索 Diagnostics (R-M Phase 2 実験)", expanded=False):
-    st.caption(
-        "R-M Phase 2 の予備調査。gBizINFO REST API に法人名を問い合わせ、"
-        "未知の固有名詞が「企業名らしさ」を持つかを動的に判定できるかを確認します。"
-        "出典: 経済産業省 gBizINFO。"
-    )
+    # ----------------------------------------------------------------------
+    # R-M experiment: gBizINFO API Diagnostics expander.
+    #
+    # Step 5 of the R-M (custom mask dictionary) feasibility check.
+    # Goal: confirm that the spacy NER + EntityRuler combo can be augmented
+    # with a dynamic lookup against gBizINFO's REST API to detect company
+    # names that are not in the seed dictionary (e.g. "iret").
+    #
+    # Strategy: when the user types a candidate string, hit gBizINFO's
+    # /hojin endpoint with name= as the query. If any results come back,
+    # the candidate is highly likely a real company name. The free-tier API
+    # requires a token (GBIZINFO_API_TOKEN in Streamlit Secrets) that is
+    # obtained by submitting an application at
+    # https://info.gbiz.go.jp/hojin/various_registration/form
+    #
+    # This block is intentionally isolated:
+    # - Located outside any review_result conditional.
+    # - All HTTP I/O wrapped in try/except so a network outage or invalid
+    #   token surfaces a clear st.error inside the expander only - the rest
+    #   of the UI keeps working as long as Gemini reviews are still possible.
+    # - When GBIZINFO_API_TOKEN is missing, the expander shows a friendly
+    #   notice rather than crashing.
+    # ----------------------------------------------------------------------
 
-    _gbizinfo_token = _get_gbizinfo_token()
-    if not _gbizinfo_token:
-        st.warning(
-            "GBIZINFO_API_TOKEN が Streamlit Secrets に設定されていません。"
-            "https://info.gbiz.go.jp/hojin/various_registration/form で利用申請を行い、"
-            "メールで届いた API トークンを Streamlit Secrets に "
-            "`GBIZINFO_API_TOKEN = \"...\"` の形式で追加してください。"
+
+    _GBIZINFO_API_BASE_V2 = "https://api.info.gbiz.go.jp/hojin/v2"
+    _GBIZINFO_API_BASE_V1 = "https://info.gbiz.go.jp/hojin/v1"
+    _GBIZINFO_DIAG_DEFAULT_NAME = "iret"
+
+
+    def _get_gbizinfo_token() -> str | None:
+        """Fetch GBIZINFO_API_TOKEN from Streamlit Secrets, or None if absent."""
+        try:
+            return st.secrets.get("GBIZINFO_API_TOKEN")
+        except Exception:
+            return None
+
+
+    def _gbizinfo_search_by_name(
+        name: str,
+        token: str,
+        api_base: str = _GBIZINFO_API_BASE_V2,
+        timeout: float = 10.0,
+    ) -> tuple[int, dict | None, str | None]:
+        """Call gBizINFO /hojin?name={name} and return (status_code, json_or_none,
+        error_message_or_none).
+
+        Errors are returned as a string in the third tuple element rather than
+        raised, so the caller can show them inline without aborting the page.
+        """
+        import urllib.parse
+        import urllib.request
+        import json as _json
+
+        encoded_name = urllib.parse.quote(name)
+        url = f"{api_base}/hojin?name={encoded_name}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/json",
+                "X-hojinInfo-api-token": token,
+            },
         )
-    else:
-        st.caption("✅ GBIZINFO_API_TOKEN は設定済みです。")
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                body = resp.read().decode("utf-8")
+                try:
+                    payload = _json.loads(body)
+                except _json.JSONDecodeError as e:
+                    return resp.status, None, f"JSON 解析エラー: {e}"
+                return resp.status, payload, None
+        except urllib.error.HTTPError as e:
+            return e.code, None, f"HTTP エラー {e.code}: {e.reason}"
+        except urllib.error.URLError as e:
+            return 0, None, f"通信エラー: {e.reason}"
+        except Exception as e:  # noqa: BLE001
+            return 0, None, f"想定外のエラー: {type(e).__name__}: {e}"
 
-    gbiz_query = st.text_input(
-        "検索する法人名",
-        value=_GBIZINFO_DIAG_DEFAULT_NAME,
-        key="gbizinfo_diag_query",
-        help="部分一致検索。例: 'iret' → 'アイレット株式会社' がヒットするかを確認",
-    )
 
-    gbiz_api_version = st.radio(
-        "API バージョン",
-        options=["v2", "v1"],
-        index=0,
-        horizontal=True,
-        key="gbizinfo_diag_version",
-        help="v2 が推奨。v1 はフォールバック確認用",
-    )
-
-    if st.button(
-        "gBizINFO 検索実行",
-        key="gbizinfo_diag_run",
-        disabled=not _gbizinfo_token,
-    ):
-        import time
-
-        api_base = (
-            _GBIZINFO_API_BASE_V2 if gbiz_api_version == "v2" else _GBIZINFO_API_BASE_V1
+    with st.expander("🏢 gBizINFO 検索 Diagnostics (R-M Phase 2 実験)", expanded=False):
+        st.caption(
+            "R-M Phase 2 の予備調査。gBizINFO REST API に法人名を問い合わせ、"
+            "未知の固有名詞が「企業名らしさ」を持つかを動的に判定できるかを確認します。"
+            "出典: 経済産業省 gBizINFO。"
         )
-        with st.spinner(f"gBizINFO ({gbiz_api_version}) を検索中..."):
-            t0 = time.perf_counter()
-            status, payload, err = _gbizinfo_search_by_name(
-                gbiz_query, _gbizinfo_token, api_base=api_base
-            )
-            elapsed = time.perf_counter() - t0
 
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("レスポンスコード", str(status))
-        with col2:
-            st.metric("検索時間", f"{elapsed * 1000:.0f} ms")
-
-        if err:
-            st.error(f"検索失敗: {err}")
-            st.caption(
-                "考えられる原因: トークンが無効 / API バージョン不一致 / "
-                "ネットワーク制限 / レート制限超過 / API ダウン"
-            )
-        elif payload is None:
+        _gbizinfo_token = _get_gbizinfo_token()
+        if not _gbizinfo_token:
             st.warning(
-                "レスポンスは正常 (HTTP "
-                f"{status}) ですが、内容が空です。レート制限や検索結果ゼロの"
-                "可能性があります。"
+                "GBIZINFO_API_TOKEN が Streamlit Secrets に設定されていません。"
+                "https://info.gbiz.go.jp/hojin/various_registration/form で利用申請を行い、"
+                "メールで届いた API トークンを Streamlit Secrets に "
+                "`GBIZINFO_API_TOKEN = \"...\"` の形式で追加してください。"
             )
         else:
-            # Try common keys: "hojin-infos" (v1) and similar in v2.
-            hojin_list = (
-                payload.get("hojin-infos")
-                or payload.get("hojinInfos")
-                or payload.get("hojinInfo")
-                or []
+            st.caption("✅ GBIZINFO_API_TOKEN は設定済みです。")
+
+        gbiz_query = st.text_input(
+            "検索する法人名",
+            value=_GBIZINFO_DIAG_DEFAULT_NAME,
+            key="gbizinfo_diag_query",
+            help="部分一致検索。例: 'iret' → 'アイレット株式会社' がヒットするかを確認",
+        )
+
+        gbiz_api_version = st.radio(
+            "API バージョン",
+            options=["v2", "v1"],
+            index=0,
+            horizontal=True,
+            key="gbizinfo_diag_version",
+            help="v2 が推奨。v1 はフォールバック確認用",
+        )
+
+        if st.button(
+            "gBizINFO 検索実行",
+            key="gbizinfo_diag_run",
+            disabled=not _gbizinfo_token,
+        ):
+            import time
+
+            api_base = (
+                _GBIZINFO_API_BASE_V2 if gbiz_api_version == "v2" else _GBIZINFO_API_BASE_V1
             )
-            if not isinstance(hojin_list, list):
-                hojin_list = [hojin_list] if hojin_list else []
-
-            st.success(f"ヒット件数: {len(hojin_list)} 件")
-
-            if hojin_list:
-                # Show up to 10 rows for inspection.
-                rows = []
-                for h in hojin_list[:10]:
-                    if not isinstance(h, dict):
-                        continue
-                    rows.append(
-                        {
-                            "法人名": h.get("name") or h.get("hojin_name") or "",
-                            "法人番号": h.get("corporate_number")
-                            or h.get("corporateNumber")
-                            or "",
-                            "所在地": h.get("location")
-                            or h.get("address")
-                            or "",
-                            "法人種別": h.get("kind") or "",
-                        }
-                    )
-                if rows:
-                    st.dataframe(rows, width="stretch")
-                if len(hojin_list) > 10:
-                    st.caption(
-                        f"先頭 10 件のみ表示 (全 {len(hojin_list)} 件)"
-                    )
-
-            with st.expander("生のレスポンス JSON (debug)", expanded=False):
-                import json as _json
-
-                st.code(
-                    _json.dumps(payload, ensure_ascii=False, indent=2)[:5000],
-                    language="json",
+            with st.spinner(f"gBizINFO ({gbiz_api_version}) を検索中..."):
+                t0 = time.perf_counter()
+                status, payload, err = _gbizinfo_search_by_name(
+                    gbiz_query, _gbizinfo_token, api_base=api_base
                 )
-                if len(_json.dumps(payload, ensure_ascii=False)) > 5000:
-                    st.caption("先頭 5000 文字のみ表示")
+                elapsed = time.perf_counter() - t0
+
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("レスポンスコード", str(status))
+            with col2:
+                st.metric("検索時間", f"{elapsed * 1000:.0f} ms")
+
+            if err:
+                st.error(f"検索失敗: {err}")
+                st.caption(
+                    "考えられる原因: トークンが無効 / API バージョン不一致 / "
+                    "ネットワーク制限 / レート制限超過 / API ダウン"
+                )
+            elif payload is None:
+                st.warning(
+                    "レスポンスは正常 (HTTP "
+                    f"{status}) ですが、内容が空です。レート制限や検索結果ゼロの"
+                    "可能性があります。"
+                )
+            else:
+                # Try common keys: "hojin-infos" (v1) and similar in v2.
+                hojin_list = (
+                    payload.get("hojin-infos")
+                    or payload.get("hojinInfos")
+                    or payload.get("hojinInfo")
+                    or []
+                )
+                if not isinstance(hojin_list, list):
+                    hojin_list = [hojin_list] if hojin_list else []
+
+                st.success(f"ヒット件数: {len(hojin_list)} 件")
+
+                if hojin_list:
+                    # Show up to 10 rows for inspection.
+                    rows = []
+                    for h in hojin_list[:10]:
+                        if not isinstance(h, dict):
+                            continue
+                        rows.append(
+                            {
+                                "法人名": h.get("name") or h.get("hojin_name") or "",
+                                "法人番号": h.get("corporate_number")
+                                or h.get("corporateNumber")
+                                or "",
+                                "所在地": h.get("location")
+                                or h.get("address")
+                                or "",
+                                "法人種別": h.get("kind") or "",
+                            }
+                        )
+                    if rows:
+                        st.dataframe(rows, width="stretch")
+                    if len(hojin_list) > 10:
+                        st.caption(
+                            f"先頭 10 件のみ表示 (全 {len(hojin_list)} 件)"
+                        )
+
+                with st.expander("生のレスポンス JSON (debug)", expanded=False):
+                    import json as _json
+
+                    st.code(
+                        _json.dumps(payload, ensure_ascii=False, indent=2)[:5000],
+                        language="json",
+                    )
+                    if len(_json.dumps(payload, ensure_ascii=False)) > 5000:
+                        st.caption("先頭 5000 文字のみ表示")
 
 
 # R-W-4 (2026-05-08): 全期間のマスク判断履歴と推奨エンジン (ページ最下部)

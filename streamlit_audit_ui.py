@@ -332,6 +332,11 @@ def render_log_export_button() -> None:
               ...
             }
           ],
+          "deep_dive_results": {            # R-Y (B4 で追加)
+            "<doc_name>": [
+              {"summary": "...", "issues": [...], "provider": "...", "model": "..."}
+            ]
+          },
           "review_result": {...} (LLM レビュー結果、ある場合)
         }
     """
@@ -395,6 +400,37 @@ def render_log_export_button() -> None:
         "customer_id": customer_id,
         "documents": docs_data,
     }
+
+    # B4 (2026-05-08): 深堀レビュー結果 (R-Y) も log に含める
+    # session_state.deep_dive_results は {doc_name: [ReviewResult, ...]} の dict
+    deep_dive_results = st.session_state.get("deep_dive_results") or {}
+    if deep_dive_results:
+        serialized_dd: dict = {}
+        for dd_doc_name, dd_review_list in deep_dive_results.items():
+            entries: list = []
+            for dd_review in dd_review_list:
+                dd_issues_data: list = []
+                for dd_i in (getattr(dd_review, "issues", []) or []):
+                    dd_issues_data.append({
+                        "issue_id": getattr(dd_i, "issue_id", "") or "",
+                        "severity": getattr(dd_i, "severity", "") or "",
+                        "title": getattr(dd_i, "title", "") or "",
+                        "current_state": getattr(dd_i, "current_state", "") or "",
+                        "issue": getattr(dd_i, "issue", "") or "",
+                        "impact": getattr(dd_i, "impact", "") or "",
+                        "recommendation": getattr(dd_i, "recommendation", "") or "",
+                        "details": getattr(dd_i, "details", "") or "",
+                        "section": getattr(dd_i, "section", "") or "",
+                        "source_document": getattr(dd_i, "source_document", "") or "",
+                    })
+                entries.append({
+                    "summary": getattr(dd_review, "summary", "") or "",
+                    "provider": getattr(dd_review, "provider", "") or "",
+                    "model": getattr(dd_review, "model", "") or "",
+                    "issues": dd_issues_data,
+                })
+            serialized_dd[dd_doc_name] = entries
+        log_data["deep_dive_results"] = serialized_dd
 
     # LLM レビュー結果が available なら含める
     review = st.session_state.get("review_result")

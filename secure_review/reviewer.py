@@ -210,7 +210,25 @@ class ReviewProvider:
         self,
         documents: list[SanitizedDocument],
         document_profile_override: str | None = None,
+        *,
+        deep_dive_target: str | None = None,
+        existing_issues: "list[ReviewIssue] | None" = None,
     ) -> ReviewResult:
+        """文書群をレビューする。
+
+        Args:
+            documents: 匿名化済み文書のリスト
+            document_profile_override: ルーブリック上書き (省略可)
+            deep_dive_target: R-Y (2026-05-08) 深堀対象の文書名。指定時は
+                通常レビューではなく、対象文書 + 既存指摘を入力として
+                追加の詳細分析を LLM に依頼する。None なら通常レビュー。
+            existing_issues: deep_dive_target 指定時に渡す既存指摘の集合。
+                通常レビュー時は無視される。
+
+        Returns:
+            ReviewResult。deep_dive_target 指定時は、target 文書に対する
+            追加指摘のみを含む。
+        """
         raise NotImplementedError
 
 
@@ -221,7 +239,12 @@ class MockReviewProvider(ReviewProvider):
         self,
         documents: list[SanitizedDocument],
         document_profile_override: str | None = None,
+        *,
+        deep_dive_target: str | None = None,
+        existing_issues: "list[ReviewIssue] | None" = None,
     ) -> ReviewResult:
+        # R-Y (2026-05-08): Mock は深堀をサポートしない (ヒューリスティクス).
+        # 引数だけ受け取って無視する。
         issues: list[ReviewIssue] = []
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
@@ -458,13 +481,21 @@ class HttpLlmReviewProvider(ReviewProvider):
         self,
         documents: list[SanitizedDocument],
         document_profile_override: str | None = None,
+        *,
+        deep_dive_target: str | None = None,
+        existing_issues: "list[ReviewIssue] | None" = None,
     ) -> ReviewResult:
         if not self.api_url or not self.model:
             raise ValueError("LLM_API_URL and LLM_MODEL must be configured.")
 
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
-        prompt = build_prompt(documents, rubric)
+        # R-Y (2026-05-08): deep_dive_target 指定時は深堀プロンプトを生成。
+        prompt = build_prompt(
+            documents, rubric,
+            deep_dive_target=deep_dive_target,
+            existing_issues=existing_issues,
+        )
         payload = {
             "model": self.model,
             "input": [
@@ -537,6 +568,9 @@ class GeminiApiReviewProvider(ReviewProvider):
         self,
         documents: list[SanitizedDocument],
         document_profile_override: str | None = None,
+        *,
+        deep_dive_target: str | None = None,
+        existing_issues: "list[ReviewIssue] | None" = None,
     ) -> ReviewResult:
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY must be configured.")
@@ -545,7 +579,12 @@ class GeminiApiReviewProvider(ReviewProvider):
 
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
-        prompt = build_prompt(documents, rubric)
+        # R-Y (2026-05-08): deep_dive_target 指定時は深堀プロンプトを生成。
+        prompt = build_prompt(
+            documents, rubric,
+            deep_dive_target=deep_dive_target,
+            existing_issues=existing_issues,
+        )
         # Force JSON output so the model cannot return literal placeholder
         # strings ("severity", "title", ...) the way it did with the older
         # pipe-delimited template. The schema is enforced on the server side
@@ -640,9 +679,103 @@ class GeminiFreeTierProvider(GeminiApiReviewProvider):
     default_model = "gemini-2.0-flash"
 
 
-def build_prompt(documents: list[SanitizedDocument], rubric: ReviewRubric | None = None) -> str:
+def _build_deep_dive_prompt(
+    documents: list[SanitizedDocument],
+    rubric: ReviewRubric,
+    target_doc_name: str,
+    existing_issues: list,
+) -> str:
+    """R-Y (2026-05-08): 深堀レビュー用プロンプトを構築する。
+
+    対象文書 (1 件) + その文書由来の既存指摘群 を入力に、LLM に
+    「これらをより詳細に掘り下げ、追加の懸念点や具体的な推奨対応を
+    挙げてください」と依頼する。出力 schema は通常レビューと同じ
+    (REVIEW_RESPONSE_SCHEMA)。
+
+    周辺文書 (target 以外) はプロンプトから除外する。理由:
+    - 既存の総合レビューで既に分析済みのため
+    - LLM の入力 token を target 文書の深掘りに集中させたい
+    - 文脈が混在すると深堀の焦点がぼやける
+    """
+    target_doc = next((d for d in documents if d.name == target_doc_name), None)
+    if target_doc is None:
+        # フォールバック: target が見つからない時は通常プロンプトと同じ動作
+        return build_prompt(documents, rubric)
+
+    related_issues = [
+        i for i in existing_issues
+        if getattr(i, "source_document", "") == target_doc_name
+    ]
+
+    sections = [
+        "以下は **深堀レビュー** のリクエストです。",
+        f"対象文書: **{target_doc_name}**",
+        "",
+        "この文書には既に以下のレビュー指摘がされています。これらをさらに掘り下げ、",
+        "より具体的な対応手順、関連する追加の懸念点、考慮すべきエッジケースなど、",
+        "**新しい視点での詳細な分析** を追加してください。",
+        "",
+        "なお、既存指摘と完全に同じ内容を再掲する必要はなく、新たな観点 (運用・",
+        "セキュリティ・性能・障害復旧・関係者間の合意プロセスなど) からの追加指摘",
+        "や、既存指摘の具体化 (代替案・実装手順・前提条件) を中心に提示してください。",
+        "",
+        render_rubric_for_prompt(rubric),
+        "",
+        "出力は必ず JSON オブジェクトのみで返してください。",
+        "JSON の構造はシステムプロンプトで指定した形式に従ってください。",
+        "",
+        "## 既存のレビュー指摘",
+        "",
+    ]
+
+    if not related_issues:
+        sections.append("(この文書に対する既存指摘はありません。文書本文から新規指摘のみ提示してください。)")
+    else:
+        for idx, issue in enumerate(related_issues, 1):
+            iid = getattr(issue, "issue_id", "") or f"#{idx}"
+            sev = getattr(issue, "severity", "")
+            title = getattr(issue, "title", "")
+            sections.append(f"### {iid} [{sev.upper()}] {title}")
+            for field, label in [
+                ("current_state", "現状"),
+                ("issue", "問題点"),
+                ("impact", "影響"),
+                ("recommendation", "推奨対応"),
+                ("details", "詳細"),
+            ]:
+                val = getattr(issue, field, "") or ""
+                if val:
+                    sections.append(f"- {label}: {val}")
+            sections.append("")
+
+    sections.append("## 対象文書の本文")
+    sections.append("")
+    sections.append(f"--- 文書: {target_doc.name} ---")
+    sections.append(target_doc.outbound_text)
+
+    return "\n".join(sections)
+
+
+def build_prompt(
+    documents: list[SanitizedDocument],
+    rubric: ReviewRubric | None = None,
+    *,
+    deep_dive_target: str | None = None,
+    existing_issues: "list[ReviewIssue] | None" = None,
+) -> str:
+    """LLM 入力プロンプトを構築する。
+
+    R-Y (2026-05-08): ``deep_dive_target`` が指定された場合は、対象文書 +
+    既存指摘 + 深堀指示の特殊プロンプトを返す。それ以外は従来通り全文書の
+    総合レビュー用プロンプトを返す。
+    """
     if rubric is None:
         rubric = choose_rubric(documents)
+
+    if deep_dive_target:
+        return _build_deep_dive_prompt(
+            documents, rubric, deep_dive_target, existing_issues or []
+        )
 
     sections = [
         "以下の成果物は匿名化済みです。",

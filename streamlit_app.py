@@ -15,6 +15,7 @@ Run with:
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import os
 import re
@@ -50,6 +51,12 @@ from streamlit_audit_ui import (
 
 # R-W (2026-05-08): セッション状態 (customer_id, audit_session_id) を初期化
 ensure_session_state()
+
+# R-X-1 (2026-05-08): file_uploader の動的 key を初期化。
+# セッションリセット時にこの key を新規発行することで、widget 自身を
+# 新規描画させ、視覚的にもファイル一覧をクリアする。
+if "uploader_key" not in st.session_state:
+    st.session_state.uploader_key = f"uploads_{uuid.uuid4().hex[:8]}"
 
 
 # Load .env once per session so settings survive reruns.
@@ -293,6 +300,9 @@ def _reset_state() -> None:
         "masking_states",
         "user_decisions",
         "last_uploaded_filenames",
+        # R-Y (2026-05-08): 深堀結果。リセット時にクリアしないと、
+        # 次のレビュー実行時に同名文書の旧深堀結果が表示されてしまう。
+        "deep_dive_results",
     ):
         st.session_state.pop(key, None)
 
@@ -322,6 +332,39 @@ def _natural_sort_key(name: str) -> tuple:
     return tuple(int(p) if p.isdigit() else p.lower() for p in parts)
 
 
+def _get_uploads() -> list:
+    """R-X-1 (2026-05-08): 動的 uploader_key からファイル一覧を取得。
+
+    file_uploader の key を ``st.session_state.uploader_key`` から取得することで、
+    リセット時の key 再発行による widget 再描画に対応する。
+    """
+    key = st.session_state.get("uploader_key", "uploads")
+    return st.session_state.get(key, []) or []
+
+
+def _detect_duplicate_uploads() -> list[tuple[str, str]]:
+    """R-X-2 (2026-05-08): SHA256 ハッシュでアップロードの重複を検出する。
+
+    Returns:
+        ``[(重複ファイル名, 先に検出された同一内容ファイル名), ...]`` のリスト。
+        空 list なら重複なし。判定はファイル名ではなくバイト内容で行うため、
+        同名でも内容が違えば重複扱いしない (逆も同様)。
+    """
+    seen: dict[str, str] = {}  # hash -> 最初に登録された filename
+    duplicates: list[tuple[str, str]] = []
+    for upload in _get_uploads():
+        try:
+            content = upload.getvalue()
+        except Exception:  # noqa: BLE001
+            continue
+        h = hashlib.sha256(content).hexdigest()
+        if h in seen:
+            duplicates.append((upload.name, seen[h]))
+        else:
+            seen[h] = upload.name
+    return duplicates
+
+
 def _uploaded_to_documents() -> list[UploadedDocument]:
     """アップロードファイルを UploadedDocument のリストに変換する。
 
@@ -330,7 +373,7 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
     も「番号付きファイル名 → 番号順」で組み立てられる。
     """
     items: list[UploadedDocument] = []
-    uploads = st.session_state.get("uploads", []) or []
+    uploads = _get_uploads()  # R-X-1: 動的 uploader_key 経由
     # R-Q-1b: stabilise ordering by natural-sort filename
     uploads_sorted = sorted(uploads, key=lambda u: _natural_sort_key(u.name))
     for upload in uploads_sorted:
@@ -615,7 +658,12 @@ with st.sidebar:
     st.markdown("---")
     if st.button("セッションをリセット", width='stretch'):
         _reset_state()
-        st.session_state.pop("uploads", None)
+        # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、
+        # 新しい key を発行することで、file_uploader を視覚的にも空にする。
+        old_key = st.session_state.get("uploader_key")
+        if old_key:
+            st.session_state.pop(old_key, None)
+        st.session_state.uploader_key = f"uploads_{uuid.uuid4().hex[:8]}"
         st.rerun()
 
     st.caption(
@@ -684,11 +732,12 @@ st.markdown('<div class="step-header">ステップ 1 — 文書アップロー�
 st.file_uploader(
     "ファイルを選択",
     accept_multiple_files=True,
-    key="uploads",
+    key=st.session_state.uploader_key,  # R-X-1: 動的 key (リセット時に再発行)
     label_visibility="collapsed",
     help=(
         "対応形式: txt, md, docx, xlsx, pptx, pdf, csv, json, yaml/yml, xml, "
         "html, スクリプト (py, ps1, sh, vbs, sql など), 画像。"
+        " 同一内容のファイルは重複検出されアップロードできません。"
     ),
 )
 
@@ -697,16 +746,32 @@ with col1:
     preview_clicked = st.button(
         "匿名化してプレビュー",
         type="primary",
-        disabled=not st.session_state.get("uploads"),
+        disabled=not _get_uploads(),  # R-X-1: 動的 uploader_key 経由
         width='stretch',
     )
 with col2:
-    if st.session_state.get("uploads"):
-        names = ", ".join(u.name for u in st.session_state.uploads)
+    _uploads_now = _get_uploads()
+    if _uploads_now:
+        names = ", ".join(u.name for u in _uploads_now)
         st.markdown(f'<div class="muted">処理待ち: {names}</div>', unsafe_allow_html=True)
 
 
 if preview_clicked:
+    # R-X-2 (2026-05-08): SHA256 で重複アップロードを検出し、あれば中断
+    duplicates = _detect_duplicate_uploads()
+    if duplicates:
+        dup_lines = "\n".join(
+            f"- **{name}** は **{seen}** と内容が同一です"
+            for name, seen in duplicates
+        )
+        st.error(
+            f"⚠️ **重複アップロード検出 ({len(duplicates)} 件)**\n\n"
+            f"{dup_lines}\n\n"
+            "重複ファイルを × で削除してから再度「匿名化してプレビュー」を押してください。"
+            " (「セッションをリセット」で全ファイル一括クリアも可能)"
+        )
+        st.stop()  # 以降の preview 処理を中断
+
     documents = _uploaded_to_documents()
     try:
         with st.spinner("ローカルで匿名化中..."):
@@ -1154,76 +1219,245 @@ if review is not None:
     st.markdown("---")
 
     severity_order = {"high": 0, "medium": 1, "low": 2, "info": 3}
-    sorted_issues = sorted(review.issues, key=lambda i: severity_order.get(i.severity, 4))
+
+    # R-Y (2026-05-08): 文書ごとにグループ化して表示する。
+    # 各文書のヘッダ近くに「🔬 この文書を深堀」ボタンを配置し、押下時に
+    # その文書専用の深堀レビューを LLM に依頼する。深堀結果は同じ文書
+    # グループ内の指摘の下に追加表示する (蓄積式)。
+    issues_by_doc: dict[str, list] = {}
+    for _issue in review.issues:
+        _key = getattr(_issue, "source_document", "") or "(出典不明)"
+        issues_by_doc.setdefault(_key, []).append(_issue)
+
+    # 文書順序: preview_docs の自然順 (R-Q-1b) を尊重
+    _preview_docs_for_order = st.session_state.get("preview_docs") or []
+    _ordered_doc_names = [
+        d.name for d in _preview_docs_for_order if d.name in issues_by_doc
+    ]
+    # preview_docs にない出典 (例: "(出典不明)") は最後に追加
+    for _n in issues_by_doc:
+        if _n not in _ordered_doc_names:
+            _ordered_doc_names.append(_n)
 
     # PR-J: 4 件以上の指摘がある場合、ステップ 4 の指摘リストを高さ 800px の
     # スクロール可能コンテナで包む。複数文書の総合レビューで指摘が 8-15 件
     # 出る際に、画面が縦に長く伸びすぎる問題への対処。プロンプトプレビュー
     # と生レスポンスはコンテナの外に置き、デバッグ時は通常通り展開できる。
-    _step4_use_scroll = len(sorted_issues) >= 4
+    _step4_use_scroll = len(review.issues) >= 4
     _step4_container = (
         st.container(height=800) if _step4_use_scroll else st.container()
     )
+
+    # 深堀結果 (文書名 -> [ReviewResult, ...]) を session_state から取得
+    _deep_results_all = st.session_state.get("deep_dive_results") or {}
+
     with _step4_container:
-        for issue in sorted_issues:
-            severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
-            # B3: prefer structured display when issue has new fields (current_state,
-            # issue, impact, etc.); fall back to legacy details/recommendation only.
-            if issue.has_structured_fields():
-                # New structured display.
-                id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
-                section_suffix = (
-                    f' · 章: {issue.section}' if issue.section else ''
-                )
-                timing_badge = _required_timing_badge(issue.required_timing)
-                re_review_badge = _re_review_badge(issue.re_review_required)
-                badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
-                badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
+        for _doc_name in _ordered_doc_names:
+            _doc_issues = sorted(
+                issues_by_doc[_doc_name],
+                key=lambda i: severity_order.get(i.severity, 4),
+            )
 
-                body_parts = []
-                if issue.current_state:
-                    body_parts.append(
-                        f"<div style='margin-top:0.3rem;'>"
-                        f"<b>現状:</b> {issue.current_state}</div>"
+            # 文書ヘッダ + 深堀ボタン (横並び)
+            _hcol1, _hcol2 = st.columns([5, 2])
+            with _hcol1:
+                st.markdown(f"### 📄 {_doc_name}")
+            with _hcol2:
+                _btn_key = (
+                    "deepdive_btn_"
+                    + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:12]
+                )
+                _deepdive_clicked = st.button(
+                    "🔬 この文書を深堀",
+                    key=_btn_key,
+                    help=(
+                        f"{_doc_name} に対して、既存指摘を踏まえた追加分析を "
+                        "LLM に依頼します。結果はこの文書の指摘の下に追加表示されます。"
+                    ),
+                    width='stretch',
+                )
+
+            # R-Y: 深堀ボタン押下時の処理
+            if _deepdive_clicked:
+                _preview_docs = st.session_state.get("preview_docs") or []
+                if not _preview_docs:
+                    st.error(
+                        "preview_docs が見つかりません。ステップ 1〜3 を再実行してください。"
                     )
-                if issue.issue:
-                    body_parts.append(
-                        f"<div style='margin-top:0.2rem;'>"
-                        f"<b>問題点:</b> {issue.issue}</div>"
+                else:
+                    try:
+                        _provider_impl = choose_provider()
+                        # B2 (2026-05-08): mock プロバイダは深堀をサポートしない
+                        # (静的ヒューリスティクスのみ)。ユーザが「深堀した」と
+                        # 思っているのに実質通常レビューが返る誤解を防ぐため警告。
+                        if _provider_impl.name == "mock":
+                            st.warning(
+                                "⚠️ **mock プロバイダ使用中** — 深堀レビューは"
+                                "実質的に通常レビューと同じ結果になります。"
+                                "mock は静的ヒューリスティクスのみで、LLM ベースの"
+                                "深堀分析は行われません。本番の深堀には Gemini API "
+                                "などの LLM プロバイダ (REVIEW_PROVIDER 環境変数) を"
+                                "お使いください。"
+                            )
+                        _enforce_outbound_guard(_provider_impl.name, _preview_docs)
+                        with st.spinner(
+                            f"{_provider_impl.name} で「{_doc_name}」を深堀レビュー中..."
+                        ):
+                            _deep_review = _provider_impl.review(
+                                _preview_docs,
+                                document_profile_override,
+                                deep_dive_target=_doc_name,
+                                existing_issues=review.issues,
+                            )
+                        if "deep_dive_results" not in st.session_state:
+                            st.session_state.deep_dive_results = {}
+                        st.session_state.deep_dive_results.setdefault(
+                            _doc_name, []
+                        ).append(_deep_review)
+                        st.rerun()
+                    except LocalUrlError as exc:
+                        st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
+                    except ValueError as exc:
+                        st.error(str(exc))
+                    except RuntimeError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # noqa: BLE001
+                        _request_id = uuid.uuid4().hex[:8]
+                        st.error(f"深堀レビューに失敗しました ({_request_id})。")
+                        with st.expander("詳細トレース"):
+                            st.code(traceback.format_exc())
+
+            # 既存指摘の表示 (severity 順)
+            for issue in _doc_issues:
+                severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
+                # B3: prefer structured display when issue has new fields (current_state,
+                # issue, impact, etc.); fall back to legacy details/recommendation only.
+                if issue.has_structured_fields():
+                    # New structured display.
+                    id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
+                    section_suffix = (
+                        f' · 章: {issue.section}' if issue.section else ''
                     )
-                if issue.impact:
-                    body_parts.append(
-                        f"<div style='margin-top:0.2rem;'>"
-                        f"<b>影響:</b> {issue.impact}</div>"
+                    timing_badge = _required_timing_badge(issue.required_timing)
+                    re_review_badge = _re_review_badge(issue.re_review_required)
+                    badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
+                    badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
+
+                    body_parts = []
+                    if issue.current_state:
+                        body_parts.append(
+                            f"<div style='margin-top:0.3rem;'>"
+                            f"<b>現状:</b> {issue.current_state}</div>"
+                        )
+                    if issue.issue:
+                        body_parts.append(
+                            f"<div style='margin-top:0.2rem;'>"
+                            f"<b>問題点:</b> {issue.issue}</div>"
+                        )
+                    if issue.impact:
+                        body_parts.append(
+                            f"<div style='margin-top:0.2rem;'>"
+                            f"<b>影響:</b> {issue.impact}</div>"
+                        )
+                    if issue.recommendation:
+                        body_parts.append(
+                            f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+                            f"<b>推奨対応:</b> {issue.recommendation}</div>"
+                        )
+
+                    st.markdown(
+                        f"<div class='issue-row {issue.severity}'>"
+                        f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
+                        f'<span class="doc-meta">{section_suffix}</span>'
+                        + "".join(body_parts)
+                        + badges_html
+                        + "</div>",
+                        unsafe_allow_html=True,
                     )
-                if issue.recommendation:
-                    body_parts.append(
-                        f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+                else:
+                    # Legacy display.
+                    st.markdown(
+                        f"<div class='issue-row {issue.severity}'>"
+                        f"<b>[{severity_jp}]</b> {issue.title}<br/>"
+                        f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
+                        f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
                         f"<b>推奨対応:</b> {issue.recommendation}</div>"
+                        f"</div>",
+                        unsafe_allow_html=True,
                     )
 
-                st.markdown(
-                    f"<div class='issue-row {issue.severity}'>"
-                    f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
-                    f'<span class="doc-meta"> · 出典: {issue.source_document}{section_suffix}</span>'
-                    + "".join(body_parts)
-                    + badges_html
-                    + "</div>",
-                    unsafe_allow_html=True,
+            # R-Y: 深堀結果の表示 (この文書のもの、蓄積式)
+            _deep_for_this = _deep_results_all.get(_doc_name, [])
+            for _idx, _deep_review in enumerate(_deep_for_this, 1):
+                _label = (
+                    f"📌 深堀結果 (#{_idx})" if len(_deep_for_this) > 1
+                    else "📌 深堀結果"
                 )
-            else:
-                # Legacy display (pre-B2 LLM responses or providers that don't yet
-                # produce the new schema).
-                st.markdown(
-                    f"<div class='issue-row {issue.severity}'>"
-                    f"<b>[{severity_jp}]</b> {issue.title} "
-                    f'<span class="doc-meta"> · 出典: {issue.source_document}</span><br/>'
-                    f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
-                    f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
-                    f"<b>推奨対応:</b> {issue.recommendation}</div>"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
+                with st.expander(_label, expanded=True):
+                    if _deep_review.summary:
+                        st.markdown(f"**深堀サマリ** — {_deep_review.summary}")
+                    _sorted_dd = sorted(
+                        _deep_review.issues,
+                        key=lambda i: severity_order.get(i.severity, 4),
+                    )
+                    if not _sorted_dd:
+                        st.info(
+                            "(深堀指摘なし。LLM が新規指摘を生成しませんでした。)"
+                        )
+                    for _ddissue in _sorted_dd:
+                        _sev_jp = SEVERITY_LABELS.get(
+                            _ddissue.severity, _ddissue.severity
+                        )
+                        if _ddissue.has_structured_fields():
+                            _idp = (
+                                f"<b>{_ddissue.issue_id}</b> · "
+                                if _ddissue.issue_id else ""
+                            )
+                            _ssfx = (
+                                f' · 章: {_ddissue.section}'
+                                if _ddissue.section else ''
+                            )
+                            _bp = []
+                            if _ddissue.current_state:
+                                _bp.append(
+                                    f"<div style='margin-top:0.3rem;'>"
+                                    f"<b>現状:</b> {_ddissue.current_state}</div>"
+                                )
+                            if _ddissue.issue:
+                                _bp.append(
+                                    f"<div style='margin-top:0.2rem;'>"
+                                    f"<b>問題点:</b> {_ddissue.issue}</div>"
+                                )
+                            if _ddissue.impact:
+                                _bp.append(
+                                    f"<div style='margin-top:0.2rem;'>"
+                                    f"<b>影響:</b> {_ddissue.impact}</div>"
+                                )
+                            if _ddissue.recommendation:
+                                _bp.append(
+                                    f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+                                    f"<b>推奨対応:</b> {_ddissue.recommendation}</div>"
+                                )
+                            st.markdown(
+                                f"<div class='issue-row {_ddissue.severity}'>"
+                                f"{_idp}<b>[{_sev_jp}]</b> {_ddissue.title}"
+                                f'<span class="doc-meta">{_ssfx}</span>'
+                                + "".join(_bp)
+                                + "</div>",
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                f"<div class='issue-row {_ddissue.severity}'>"
+                                f"<b>[{_sev_jp}]</b> {_ddissue.title}<br/>"
+                                f"<div style='margin-top:0.3rem;'>{_ddissue.details}</div>"
+                                f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
+                                f"<b>推奨対応:</b> {_ddissue.recommendation}</div>"
+                                f"</div>",
+                                unsafe_allow_html=True,
+                            )
+
+            st.markdown("")  # 文書間の余白
 
     with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
         st.code(review.prompt_preview or "(空)", language="text")
@@ -1243,6 +1477,9 @@ if review is not None:
                 "生レスポンスは記録されていません (mock プロバイダ使用時、または "
                 "プロバイダ実装が raw_response を保持していない場合)。"
             )
+
+    # R-Y (2026-05-08): 深堀レビューは Step 4 の文書ごとグループ表示に統合済み。
+    # 各文書ヘッダの「🔬 この文書を深堀」ボタンから実行する。
 
 
 # ----------------------------------------------------------------------

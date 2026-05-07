@@ -301,6 +301,129 @@ def _persist_term(
 
 
 # ============================================================
+# R-W-export: 結果ログのダウンロード (チャットでの貼り付け負担軽減)
+# ============================================================
+
+def render_log_export_button() -> None:
+    """ステップ 3 直後に「📥 結果ログをダウンロード」ボタンを表示。
+
+    現在の preview_docs (匿名化済み文書) と review_result (LLM レビュー結果)
+    を JSON にシリアライズして download_button で配布。
+
+    Streamlit Cloud で動作する想定。ユーザはダウンロードした JSON を
+    アシスタントに送付することで、結果を手動で貼り付ける負担が減る。
+
+    出力 JSON 構造 (代表的な内容):
+        {
+          "schema_version": "1",
+          "exported_at": "2026-05-08T12:34:56",
+          "session_id": "...",
+          "customer_id": "kddi_mail_relay",
+          "documents": [
+            {
+              "name": "基本設計書 4.pdf",
+              "sanitized_excerpt": "...",
+              "outbound_text": "...",
+              "findings": [...],
+              "confirmed_findings": [{"text": "...", "label": "..."}, ...],
+              "uncertain_candidates": [{"text": "...", "label": "...", "spacy_label": "...", "source": "..."}, ...],
+              "outbound_risk": "low",
+              "local_sensitivity_decision": "...",
+              ...
+            }
+          ],
+          "review_result": {...} (LLM レビュー結果、ある場合)
+        }
+    """
+    import json
+    from datetime import datetime
+
+    preview_docs = st.session_state.get("preview_docs")
+    if not preview_docs:
+        return
+
+    customer_id = get_customer_id()
+    session_id = get_session_id()
+    masking_states = st.session_state.get("masking_states") or {}
+
+    docs_data = []
+    for doc in preview_docs:
+        doc_data = {
+            "name": getattr(doc, "name", ""),
+            "sanitized_excerpt": getattr(doc, "sanitized_excerpt", ""),
+            "outbound_text": getattr(doc, "outbound_text", ""),
+            "findings": list(getattr(doc, "findings", [])),
+            "replacements_count": len(getattr(doc, "replacements", [])),
+            "outbound_risk": getattr(doc, "outbound_risk", ""),
+            "local_sensitivity_decision": getattr(doc, "local_sensitivity_decision", ""),
+            "local_sensitivity_reasons": list(getattr(doc, "local_sensitivity_reasons", [])),
+            "estimated_input_tokens": getattr(doc, "estimated_input_tokens", 0),
+        }
+
+        # masking_states があれば、確定/未確定候補も含める
+        state = masking_states.get(getattr(doc, "name", ""))
+        if state is not None:
+            confirmed = []
+            for item in getattr(state, "confirmed_findings", []) or []:
+                # tuple (text, label) または NerCandidate
+                if isinstance(item, tuple) and len(item) == 2:
+                    confirmed.append({"text": item[0], "label": item[1]})
+                else:
+                    confirmed.append({
+                        "text": getattr(item, "text", str(item)),
+                        "label": getattr(item, "label", ""),
+                    })
+            doc_data["confirmed_findings"] = confirmed
+
+            uncertain = []
+            for cand in getattr(state, "uncertain_candidates", []) or []:
+                uncertain.append({
+                    "text": getattr(cand, "text", ""),
+                    "label": getattr(cand, "label", ""),
+                    "spacy_label": getattr(cand, "spacy_label", ""),
+                    "source": getattr(cand, "source", ""),
+                    "confirmed": getattr(cand, "confirmed", False),
+                })
+            doc_data["uncertain_candidates"] = uncertain
+
+        docs_data.append(doc_data)
+
+    log_data = {
+        "schema_version": "1",  # R-W-export schema (B2 修正で追加)
+        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "session_id": session_id,
+        "customer_id": customer_id,
+        "documents": docs_data,
+    }
+
+    # LLM レビュー結果が available なら含める
+    review = st.session_state.get("review_result")
+    if review is not None:
+        if hasattr(review, "to_dict"):
+            try:
+                log_data["review_result"] = review.to_dict()
+            except Exception:
+                log_data["review_result"] = repr(review)
+        else:
+            log_data["review_result"] = repr(review)
+
+    # JSON シリアライズ (default=str で datetime や Path を str 化)
+    json_str = json.dumps(log_data, ensure_ascii=False, indent=2, default=str)
+
+    st.download_button(
+        label="📥 結果ログをダウンロード (JSON)",
+        data=json_str,
+        file_name=f"review_log_{session_id}.json",
+        mime="application/json",
+        help=(
+            "現在のレビュー結果 (匿名化済み文書、マスク候補、LLM レビュー結果) を "
+            "JSON ファイルとして保存します。アシスタントに送付する際の貼り付け負担を軽減できます。"
+        ),
+        key="log_export_button",
+    )
+
+
+# ============================================================
 # R-W-4: 全期間履歴と推奨
 # ============================================================
 

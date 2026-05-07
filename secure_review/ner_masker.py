@@ -516,6 +516,11 @@ class NerMasker:
             PRODUCT 等のマッピング外ラベルは除外される。
             重複 (同一 text + label) は最初の出現位置のみ残す。
         """
+        # R-T-fix (2026-05-08): PDF 抽出で「大」が「⼤」(U+2F24, 康熙部首) など
+        # 異字体になっている場合があり、seed dict の通常文字とマッチしない。
+        # NFKC 正規化で部首形 → 標準漢字に変換し、検出精度を上げる。
+        text = unicodedata.normalize("NFKC", text)
+
         candidates: list[NerCandidate] = []
         seen_keys: set[tuple[str, str]] = set()  # (text, label) で重複排除
 

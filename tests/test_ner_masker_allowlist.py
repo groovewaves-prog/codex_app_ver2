@@ -74,6 +74,7 @@ def _make_masker(allowlist_terms: list[str] | None = None):
         return NerMasker(
             seed_yaml_path="/nonexistent/seeds.yaml",
             allowlist_yaml_path="/nonexistent/allowlist.yaml",
+            customer_id=None,  # R-V: テスト隔離 (顧客 PJ ファイルをロードしない)
         )
 
     tmpdir = tempfile.mkdtemp()
@@ -86,6 +87,7 @@ def _make_masker(allowlist_terms: list[str] | None = None):
     return NerMasker(
         seed_yaml_path="/nonexistent/seeds.yaml",
         allowlist_yaml_path=str(yaml_path),
+        customer_id=None,  # R-V: テスト隔離 (顧客 PJ ファイルをロードしない)
     )
 
 
@@ -156,6 +158,7 @@ class LoadTechAllowlistTests(unittest.TestCase):
         return NerMasker(
             seed_yaml_path="/nonexistent/seeds.yaml",
             allowlist_yaml_path=str(yaml_path),
+            customer_id=None,  # R-V: テスト隔離 (顧客 PJ ファイルをロードしない)
         )
 
     def test_multiple_categories_flattened(self) -> None:
@@ -521,6 +524,7 @@ class LoadSeedsConfirmFlagTests(unittest.TestCase):
         return NerMasker(
             seed_yaml_path=str(seed_path),
             allowlist_yaml_path="/nonexistent/allowlist.yaml",
+            customer_id=None,  # R-V: テスト隔離 (顧客 PJ ファイルをロードしない)
         )
 
     def _ids_in_ruler(self, masker):

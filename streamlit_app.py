@@ -39,6 +39,17 @@ from secure_review.run_masking_pipeline import (
     run_masking_pipeline,
 )
 
+# R-W-2/3/4 (2026-05-08): マスク判断履歴 UI モジュール
+from streamlit_audit_ui import (
+    ensure_session_state,
+    render_customer_selector,
+    render_session_summary,
+    render_history_panel,
+)
+
+# R-W (2026-05-08): セッション状態 (customer_id, audit_session_id) を初期化
+ensure_session_state()
+
 
 # Load .env once per session so settings survive reruns.
 # On Streamlit Community Cloud, values live in st.secrets instead of a .env
@@ -374,7 +385,11 @@ def _get_ner_masker():
     try:
         from secure_review.ner_masker import NerMasker
 
-        return NerMasker(seed_yaml_path="data/ner_seeds.yaml")
+        # R-V (2026-05-08): customer_id を渡して顧客 PJ 固有 seed dict もロード
+        return NerMasker(
+            seed_yaml_path="data/ner_seeds.yaml",
+            customer_id=st.session_state.get("customer_id", "kddi_mail_relay"),
+        )
     except Exception as exc:  # noqa: BLE001
         st.warning(
             f"NER モデルの初期化に失敗しました。R-M 機能はオフで動作します。"
@@ -590,6 +605,11 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     document_profile_override = dict(profile_options)[profile_label]
+
+    st.markdown("---")
+
+    # R-V (2026-05-08): 顧客 PJ セレクタ
+    render_customer_selector(sidebar=False)
 
     st.markdown("---")
     if st.button("セッションをリセット", width='stretch'):
@@ -975,6 +995,9 @@ if preview_docs:
                             state=state,
                             user_decisions=doc_decisions,
                             sanitizer=sanitizer,
+                            # R-W-1: 判断履歴を audit log に記録
+                            customer_id=st.session_state.get("customer_id"),
+                            session_id=st.session_state.get("audit_session_id"),
                         )
                         # 既存 doc の sensitivity 判定情報を保持
                         # (apply_user_decisions は state.sanitized から構築するので、
@@ -989,6 +1012,9 @@ if preview_docs:
                 preview_docs = rebuilt
                 # session_state も新しい preview_docs に更新しておく
                 st.session_state.preview_docs = preview_docs
+
+                # R-W-2 (2026-05-08): 本セッションのマスク判断サマリを表示
+                render_session_summary()
 
             provider_impl = choose_provider()
             _enforce_outbound_guard(provider_impl.name, preview_docs)
@@ -1563,3 +1589,7 @@ with st.expander("🏢 gBizINFO 検索 Diagnostics (R-M Phase 2 実験)", expand
                 )
                 if len(_json.dumps(payload, ensure_ascii=False)) > 5000:
                     st.caption("先頭 5000 文字のみ表示")
+
+
+# R-W-4 (2026-05-08): 全期間のマスク判断履歴と推奨エンジン (ページ最下部)
+render_history_panel()

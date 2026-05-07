@@ -16,3 +16,9 @@ venv/
 
 output/
 tests/ui-smoke.png
+
+# v2 apply_all backup files (R-T+R-V+R-W)
+*.bak
+apply_all.py
+fix_test.py
+

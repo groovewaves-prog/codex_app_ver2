@@ -151,25 +151,9 @@ phrases:
   - text: "国税庁"
     label: ORG
 
-  # ----- R-S (2026-05-07): KDDIアイレット (英字表記) -----
-  # spaCy が小文字 4 文字英字社名を ORG として検出しない可能性があるため、
-  # シード辞書に登録して強制検出する。ただし「iret 製品の cloudpack を
-  # 議論したい」など文脈次第でマスクしたくない場合があるので、
-  # confirm: false で uncertain candidate にまわし、人間判断に委ねる。
-  # canonical を "KDDIアイレット" にすることで、表面形に関係なく一貫した
-  # 候補として扱える (UI 表示も "KDDIアイレット" に統一される)。
-  - text: "iret"
-    label: "ORG"
-    canonical: "KDDIアイレット"
-    confirm: false
-  - text: "Iret"
-    label: "ORG"
-    canonical: "KDDIアイレット"
-    confirm: false
-  - text: "IRET"
-    label: "ORG"
-    canonical: "KDDIアイレット"
-    confirm: false
+  # ----- R-V (2026-05-08): 顧客 PJ 固有エントリ (iret, 府中, 東京 等) は -----
+  # data/customers/<customer_id>/ner_seeds.yaml に移動。
+  # 本ファイルには公知日本企業 (全 PJ 共通でマスク対象) のみを残す。
 
 # Phase 1 では空。複数トークンや POS フィルタが必要なパターンを後付け
 # する場合の脱出ハッチ。

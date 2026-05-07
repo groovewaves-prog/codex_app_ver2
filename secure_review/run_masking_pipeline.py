@@ -172,11 +172,20 @@ def apply_user_decisions(
     state: MaskingPipelineState,
     user_decisions: dict[str, bool],
     sanitizer: SensitiveDataSanitizer,
+    *,
+    customer_id: str | None = None,
+    session_id: str | None = None,
+    audit_root: "Optional[object]" = None,  # Path | None, 文字列回避
 ) -> SanitizedDocument:
     """ユーザ判断を反映し、最終的な匿名化済み文書を生成する。
 
     確定済み候補 (シード辞書ヒット) は user_decisions と無関係に常にマスク。
     未確定候補は ``user_decisions[candidate.text] is True`` のもののみマスク。
+
+    R-W-1 (2026-05-08): ユーザ判断結果を audit log に記録する。
+    ``customer_id`` を指定すると、``data/audit/<customer_id>/<date>.jsonl``
+    に追記される。``customer_id=None`` (default) なら audit log は記録しない
+    (R-W 機能を使わない既存呼び出し元との後方互換性)。
 
     Args:
         state: run_masking_pipeline の戻り値。本関数は ``state`` を変更しない。
@@ -185,6 +194,10 @@ def apply_user_decisions(
         sanitizer: state.sanitized 生成時と **同一の** SensitiveDataSanitizer
             インスタンス。register_ner_finding() の counter / _seen 共有のため
             必須。違うインスタンスを渡すと番号が衝突する。
+        customer_id: R-W-1 audit log の顧客識別子。None なら audit 記録なし。
+        session_id: R-W-1 audit log のセッション識別子。指定推奨 (Streamlit
+            session_state 経由で 1 セッション 1 ID に束ねる)。
+        audit_root: R-W-1 audit log の出力ルート (テスト用)。
 
     Returns:
         SanitizedDocument: 最終的な outbound_text / sanitized_excerpt /
@@ -239,6 +252,42 @@ def apply_user_decisions(
         finding_summary = f"NER {category}: {value}"
         if finding_summary not in findings:
             findings.append(finding_summary)
+
+    # R-W-1: audit log にユーザ判断結果を追記。customer_id 指定時のみ動作。
+    # 失敗してもパイプライン全体は止めない (best-effort)。
+    if customer_id is not None:
+        try:
+            from secure_review.audit_log import log_decisions
+
+            # 候補メタデータ収集 (uncertain_candidates から)
+            candidate_metadata: dict[str, dict[str, object]] = {}
+            for cand in state.uncertain_candidates:
+                # 文脈を周辺テキストから抽出 (60 字前後)
+                ctx_start = max(0, cand.start - 30)
+                ctx_end = min(len(state.sanitized.original_excerpt), cand.end + 30)
+                ctx = state.sanitized.original_excerpt[ctx_start:ctx_end]
+                candidate_metadata[cand.text] = {
+                    "label": cand.label,
+                    "source": cand.source,
+                    "context": ctx,
+                }
+
+            # 全 uncertain candidate の判断を記録 (検出されたが decisions に
+                # 入っていない = "skip" 判断とみなす)
+            full_decisions: dict[str, bool] = {}
+            for cand in state.uncertain_candidates:
+                full_decisions[cand.text] = bool(user_decisions.get(cand.text, False))
+
+            log_decisions(
+                document_name=state.sanitized.name,
+                decisions=full_decisions,
+                candidate_metadata=candidate_metadata,
+                customer_id=customer_id,
+                session_id=session_id,
+                audit_root=audit_root,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("audit_log write failed: %s", exc)
 
     return SanitizedDocument(
         name=state.sanitized.name,

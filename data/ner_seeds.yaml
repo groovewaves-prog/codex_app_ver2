@@ -10,6 +10,11 @@
 # canonical (任意): 別名統合用。指定時は台帳の value としてこれを使う。
 # 例: "日立" を "日立製作所" として正規化したい場合。
 #
+# confirm (任意, デフォルト true): R-S (2026-05-07) で追加。
+# - true (省略時): 検出されたら自動マスク (確定機密)
+# - false: 強制検出するが auto-mask せず uncertain candidate にまわす
+#   (人間が文脈判断する必要がある語、例: 文脈次第で公開してもよい社名)
+#
 # Phase 1 方針 (handoff 判断 2):
 # - 含める: 公知日本企業 (大手キャリア、大手IT、銀行、SIer、製造業大手、
 #   官公庁など)
@@ -145,6 +150,26 @@ phrases:
     label: ORG
   - text: "国税庁"
     label: ORG
+
+  # ----- R-S (2026-05-07): KDDIアイレット (英字表記) -----
+  # spaCy が小文字 4 文字英字社名を ORG として検出しない可能性があるため、
+  # シード辞書に登録して強制検出する。ただし「iret 製品の cloudpack を
+  # 議論したい」など文脈次第でマスクしたくない場合があるので、
+  # confirm: false で uncertain candidate にまわし、人間判断に委ねる。
+  # canonical を "KDDIアイレット" にすることで、表面形に関係なく一貫した
+  # 候補として扱える (UI 表示も "KDDIアイレット" に統一される)。
+  - text: "iret"
+    label: "ORG"
+    canonical: "KDDIアイレット"
+    confirm: false
+  - text: "Iret"
+    label: "ORG"
+    canonical: "KDDIアイレット"
+    confirm: false
+  - text: "IRET"
+    label: "ORG"
+    canonical: "KDDIアイレット"
+    confirm: false
 
 # Phase 1 では空。複数トークンや POS フィルタが必要なパターンを後付け
 # する場合の脱出ハッチ。

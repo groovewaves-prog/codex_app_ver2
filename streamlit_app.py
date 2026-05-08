@@ -1207,13 +1207,49 @@ if preview_docs:
 
     # Q12 (2026-05-08): 「レビューに送信」押下時の処理
     # LLM 送信のみ (文書チェック後の preview_docs を使用)。
+    #
+    # 課題 2 改修 (2026-05-08): chunking 進捗表示
+    # GeminiApiReviewProvider が文書ごとに API call する際、
+    # st.progress と st.status で進捗を可視化する。
+    # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
         try:
             preview_docs = st.session_state.get("preview_docs") or preview_docs
             provider_impl = choose_provider()
             _enforce_outbound_guard(provider_impl.name, preview_docs)
+
+            # 進捗表示用 progress bar (chunking で文書ごとに更新)
+            _progress_bar = st.progress(0.0, text="")
+
+            def _update_progress(idx: int, total: int, doc_name: str) -> None:
+                """課題 2 改修: chunking 進捗 callback。
+                Gemini プロバイダから文書処理ごとに呼び出される。
+                """
+                try:
+                    fraction = min(1.0, idx / max(1, total))
+                    if doc_name == "完了":
+                        _progress_bar.progress(1.0, text=f"✅ 全 {total} 文書のレビュー完了")
+                    else:
+                        # 文書名が長すぎると progress bar の text が見づらくなるので適度に切る
+                        display_name = doc_name if len(doc_name) <= 50 else doc_name[:47] + "..."
+                        _progress_bar.progress(
+                            fraction,
+                            text=f"📄 {idx}/{total} 処理中: {display_name}",
+                        )
+                except Exception:  # noqa: BLE001
+                    # progress bar の更新失敗は致命的ではない (ログのみ)
+                    pass
+
             with st.spinner(f"{provider_impl.name} でレビュー実行中..."):
-                review = provider_impl.review(preview_docs, document_profile_override)
+                review = provider_impl.review(
+                    preview_docs,
+                    document_profile_override,
+                    progress_callback=_update_progress,
+                )
+
+            # progress bar をクリア (結果表示の邪魔にならないように)
+            _progress_bar.empty()
+
             st.session_state.review_result = review
         except LocalUrlError as exc:
             st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")

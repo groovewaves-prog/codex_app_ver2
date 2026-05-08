@@ -20,6 +20,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import socket
 import urllib.error
 import urllib.parse
@@ -41,7 +42,36 @@ class UpstreamHttpError(RuntimeError):
     """Raised when an upstream HTTP call fails.
 
     The message is intentionally generic. Rich detail is logged separately.
+
+    課題 2 改修 (2026-05-08):
+        retryable と status_code 属性を追加し、上位の呼び出し側 (例: GeminiApiReviewProvider)
+        がリトライ判定に使えるようにする。
+        - status_code: HTTP ステータスコード (transport error の場合は None)
+        - retryable: リトライすれば成功する可能性があるか
+            * HTTP 503/504/429 → True (一時的な問題)
+            * HTTP 500/502 → True (サーバ側エラー、たまに復旧する)
+            * HTTP 4xx (上記以外) → False (恒久的な問題、リクエスト側が悪い)
+            * transport error (timeout, connection refused, ...) → True
+            * JSON parse error → False (サーバ応答の構造問題、リトライしても同じ)
     """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = True,
+    ) -> None:
+        # レビュー後修正 (2026-05-08): デフォルト retryable=True に変更。
+        # 理由: 旧スタイル UpstreamHttpError("msg") (status_code/retryable なしで raise)
+        #       との後方互換性。旧コードは「失敗したらとりあえずリトライ」前提だった。
+        #       既存テスト test_retry_once_then_raise_on_transport_error 互換性のため、
+        #       明示的に retryable=False と指定しない限りリトライ対象とする。
+        # 新規 raise 箇所 (post_json_safely 内) は明示的に True/False をセットしているので
+        # デフォルト変更の影響は受けない。
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 def validate_local_url(url: str, *, label: str = "endpoint") -> str:
@@ -91,12 +121,44 @@ def validate_local_url(url: str, *, label: str = "endpoint") -> str:
     return url
 
 
+# 課題 2 改修 (2026-05-08): リトライ可能な HTTP ステータスコード集合
+# - 429 Too Many Requests: レート制限、待てば解消
+# - 500 Internal Server Error: サーバ側の一時的問題
+# - 502 Bad Gateway: 上流ゲートウェイ問題
+# - 503 Service Unavailable: 高負荷など、Gemini ログでも観測
+# - 504 Gateway Timeout: 上流タイムアウト
+_RETRYABLE_HTTP_STATUS = {429, 500, 502, 503, 504}
+
+
+def _resolve_default_timeout() -> int:
+    """環境変数 LLM_HTTP_TIMEOUT があれば優先、なければデフォルト 60 秒。
+
+    課題 2 改修 (2026-05-08): chunking 後の単一 call の応答時間に余裕を持たせる
+    + 環境ごとに調整可能 (Streamlit Cloud は遅いことがある)。
+    """
+    raw = os.getenv("LLM_HTTP_TIMEOUT", "").strip()
+    if not raw:
+        return 60
+    try:
+        value = int(raw)
+        if value < 5 or value > 600:
+            LOGGER.warning(
+                "LLM_HTTP_TIMEOUT=%s is out of range [5, 600], using default 60",
+                raw,
+            )
+            return 60
+        return value
+    except ValueError:
+        LOGGER.warning("LLM_HTTP_TIMEOUT=%r is not an integer, using default 60", raw)
+        return 60
+
+
 def post_json_safely(
     url: str,
     payload: dict[str, Any],
     headers: dict[str, str],
     *,
-    timeout: int = 60,
+    timeout: int | None = None,
     context_label: str = "upstream",
 ) -> dict[str, Any]:
     """POST JSON to ``url`` and return the parsed JSON response.
@@ -104,7 +166,14 @@ def post_json_safely(
     On any failure, raises :class:`UpstreamHttpError` with a generic message.
     Detailed diagnostic information is written to the module logger with the
     request body redacted.
+
+    課題 2 改修 (2026-05-08):
+        - timeout=None の場合、環境変数 LLM_HTTP_TIMEOUT で制御可能に。
+        - UpstreamHttpError に status_code と retryable を設定し、上位がリトライ判定で使える。
     """
+
+    if timeout is None:
+        timeout = _resolve_default_timeout()
 
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=body, headers=headers, method="POST")
@@ -121,13 +190,20 @@ def post_json_safely(
             _redact_url(url),
             detail[:500],
         )
+        # 課題 2 改修: HTTP ステータスに基づく retryable 判定
+        retryable = exc.code in _RETRYABLE_HTTP_STATUS
         raise UpstreamHttpError(
-            f"{context_label} returned HTTP {exc.code}. See server logs for details."
+            f"{context_label} returned HTTP {exc.code}. See server logs for details.",
+            status_code=exc.code,
+            retryable=retryable,
         ) from None
     except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
         LOGGER.warning("%s transport error to %s: %s", context_label, _redact_url(url), exc)
+        # 課題 2 改修: transport error はリトライ可能 (一時的なネットワーク問題)
         raise UpstreamHttpError(
-            f"{context_label} could not be reached. See server logs for details."
+            f"{context_label} could not be reached. See server logs for details.",
+            status_code=None,
+            retryable=True,
         ) from None
 
     try:
@@ -139,8 +215,11 @@ def post_json_safely(
             _redact_url(url),
             raw[:200],
         )
+        # 課題 2 改修: JSON パース失敗はリトライしても同じ結果になる可能性が高い
         raise UpstreamHttpError(
-            f"{context_label} returned invalid JSON. See server logs for details."
+            f"{context_label} returned invalid JSON. See server logs for details.",
+            status_code=None,
+            retryable=False,
         ) from None
 
 

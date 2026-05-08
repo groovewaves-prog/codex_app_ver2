@@ -1,0 +1,59 @@
+[b14c9303] Request failed
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\secure_review\app.py", line 62, in do_POST
+    self._handle_review(request_id)
+  File "C:\Users\groov\Documents\codex_app\secure_review\app.py", line 128, in _handle_review
+    sanitized_documents, extraction_warnings = _run_sanitization_pipeline(documents)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1114, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1118, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1179, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "C:\Users\groov\Documents\codex_app\tests\test_app.py", line 150, in boom
+    raise RuntimeError("internal detail with sensitive prompt echo")
+RuntimeError: internal detail with sensitive prompt echo
+............................................gBizINFO v2 failed (<urlopen error unreachable>), falling back to v1
+.....gBizINFO v2 failed (<urlopen error network unreachable>), falling back to v1
+....................................................................test HTTP 500 from http://127.0.0.1:11434/v1/responses: sensitive prompt echo: 'customer Acme Corp password123'
+.test returned invalid JSON from http://127.0.0.1:11434/v1/responses (first 200 chars): 'not json at all'
+..test transport error to http://127.0.0.1:11434/v1/responses: conn timed out
+..........................E....................................................HojinLookup.search('XYZ') raised: boom
+.HojinLookup.search('XYZ') raised: boom
+.....NerMasker.extract_candidates failed: spaCy boom
+.................Local sanitizer URL rejected: LOCAL_SANITIZER_API_URL URL host 'example.com' is not a loopback literal. Use 127.0.0.1, ::1, or localhost.
+..................Local sensitivity URL rejected: LOCAL_SENSITIVITY_API_URL URL host 'evil.example.com' is not a loopback literal. Use 127.0.0.1, ::1, or localhost.
+..
+======================================================================
+ERROR: test_retry_once_then_raise_on_transport_error (test_reviewer.GeminiRetryTests)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\secure_review\reviewer.py", line 868, in _post_with_retry
+    return post_json_safely(
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1114, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1118, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "C:\Users\groov\AppData\Local\Programs\Python\Python310\lib\unittest\mock.py", line 1179, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "C:\Users\groov\Documents\codex_app\tests\test_reviewer.py", line 91, in fake_post
+    raise UpstreamHttpError("transport failed.")
+secure_review.network_guard.UpstreamHttpError: transport failed.
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\groov\Documents\codex_app\tests\test_reviewer.py", line 96, in test_retry_once_then_raise_on_transport_error
+    provider.review([_doc()])
+  File "C:\Users\groov\Documents\codex_app\secure_review\reviewer.py", line 665, in review
+    return self._review_single_call(
+  File "C:\Users\groov\Documents\codex_app\secure_review\reviewer.py", line 697, in _review_single_call
+    response = self._post_with_retry(payload)
+  File "C:\Users\groov\Documents\codex_app\secure_review\reviewer.py", line 912, in _post_with_retry
+    jitter = random.uniform(0, _jitter_max)
+NameError: name 'random' is not defined
+
+----------------------------------------------------------------------
+Ran 242 tests in 17.140s
+
+FAILED (errors=1)

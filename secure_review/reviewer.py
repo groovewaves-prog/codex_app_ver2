@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import random
 import re
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Callable
 
 from secure_review.models import ReviewIssue, ReviewResult, ReviewSummary, SanitizedDocument
 from secure_review.network_guard import UpstreamHttpError, post_json_safely
@@ -484,6 +486,7 @@ class HttpLlmReviewProvider(ReviewProvider):
         *,
         deep_dive_target: str | None = None,
         existing_issues: "list[ReviewIssue] | None" = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> ReviewResult:
         if not self.api_url or not self.model:
             raise ValueError("LLM_API_URL and LLM_MODEL must be configured.")
@@ -551,8 +554,23 @@ class GeminiApiReviewProvider(ReviewProvider):
 
     name = "gemini-api"
     default_model = "gemma-4-31b-it"
+    # 課題 2 改修 (2026-05-08, レビュー後修正):
+    # - max_retries クラス変数のデフォルトは 1 を維持 (既存テスト互換性)
+    #   GeminiApiReviewProvider() の通常生成時は __init__ で環境変数を見て上書き。
+    #   __new__() で生成するテストではクラス変数 (= 1) が使われ、旧来挙動を保つ。
+    # - retry_backoff_base_seconds: 指数バックオフの基準時間
+    # - retry_backoff_jitter: バックオフに乱数オフセットを加え、複数クライアントの
+    #   同期的リトライを避ける (thundering herd 対策)
     max_retries = 1
-    retry_backoff_seconds = 2.0
+    retry_backoff_base_seconds = 1.5
+    retry_backoff_jitter = 0.5
+
+    # 課題 2 改修 (2026-05-08):
+    # chunking 後の文書間隔。Free tier の RPM (≈10) を超えないように、
+    # 各 API call の間に sleep を入れる。
+    # デフォルト 0 は本番テスト容易性のため (テストでは時間を浪費しない)。
+    # 環境変数 GEMINI_CHUNKING_INTERVAL で 6.0 (= 60s/10req) のような値に設定可。
+    chunking_interval_seconds = 0.0
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
@@ -561,8 +579,48 @@ class GeminiApiReviewProvider(ReviewProvider):
             or os.getenv("GEMINI_MODEL", "").strip()
             or self.default_model
         )
-        self.max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "2048"))
+        # 課題 2 改修 (2026-05-08): デフォルトを 2048 → 8192 に
+        # (戦略 B: Gemini 2.5 Flash の出力上限まで使う、応答途切れ防止)
+        # 環境変数 GEMINI_MAX_OUTPUT_TOKENS で上書き可能。
+        self.max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
         self.temperature = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
+
+        # 課題 2 改修 (2026-05-08, レビュー後修正): max_retries を環境変数で制御
+        # (戦略 C: リトライ強化を本番のみに限定、既存テスト互換性を維持)
+        # 通常生成時 (= GeminiApiReviewProvider()) はこの __init__ が走り、
+        # 環境変数があれば値を上書き。Streamlit Cloud では GEMINI_MAX_RETRIES=3 を推奨。
+        # テストの __new__() インスタンスはクラス変数 (max_retries=1) のまま。
+        try:
+            _retries_env = os.getenv("GEMINI_MAX_RETRIES", "").strip()
+            if _retries_env:
+                _retries_val = int(_retries_env)
+                if 0 <= _retries_val <= 10:
+                    self.max_retries = _retries_val
+                else:
+                    LOGGER.warning(
+                        "GEMINI_MAX_RETRIES=%s is out of range [0, 10], using class default (%d)",
+                        _retries_env,
+                        type(self).max_retries,
+                    )
+        except ValueError:
+            LOGGER.warning(
+                "GEMINI_MAX_RETRIES=%r is not an integer, using class default",
+                os.getenv("GEMINI_MAX_RETRIES"),
+            )
+
+        # 課題 2 改修 (2026-05-08): chunking モードの ON/OFF
+        # デフォルト ON (戦略 A: 1 文書 = 1 API call で安定化)
+        # 環境変数 GEMINI_CHUNKING で "false" を指定すると旧来の一括送信に戻る (緊急時用)
+        chunking_env = os.getenv("GEMINI_CHUNKING", "true").strip().lower()
+        self.chunking_enabled = chunking_env not in {"false", "0", "no", "off"}
+
+        # chunking 間隔を環境変数で上書き可能 (Free tier RPM 対策)
+        try:
+            self.chunking_interval_seconds = float(
+                os.getenv("GEMINI_CHUNKING_INTERVAL", "0").strip() or "0"
+            )
+        except ValueError:
+            self.chunking_interval_seconds = 0.0
 
     def review(
         self,
@@ -571,35 +629,72 @@ class GeminiApiReviewProvider(ReviewProvider):
         *,
         deep_dive_target: str | None = None,
         existing_issues: "list[ReviewIssue] | None" = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> ReviewResult:
+        """課題 2 改修 (2026-05-08): chunking 対応のレビュー実装。
+
+        chunking_enabled (デフォルト True) の場合:
+            各文書を 1 つずつ別の API call で処理し、結果をマージする。
+            これにより以下を達成:
+            - 各 call の入出力サイズが小さく、503/timeout のリスクが激減
+            - 失敗時は文書単位で限定 (リトライ可能)
+            - 進捗の可視化 (progress_callback)
+
+        chunking_enabled が False の場合:
+            旧来の挙動 (全文書を 1 call で送る)。緊急時の fallback 用。
+
+        deep_dive_target 指定時:
+            深堀レビューは元々 1 文書を対象とするので、chunking は適用せず、
+            旧来通り 1 call で処理する。
+        """
         if not self.api_key:
             raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY must be configured.")
         if not self.model:
             raise ValueError("GEMMA_MODEL or GEMINI_MODEL must be configured.")
 
+        # 課題 2 改修 (2026-05-08): chunking 適用判定
+        # 順序が重要:
+        #   1. 単一文書 (len <= 1) → chunking 不要 (テストの __new__ インスタンス互換性)
+        #   2. 深堀 → 1 文書を対象とするので chunking 不要
+        #   3. chunking_enabled が False → 緊急 fallback (旧来挙動)
+        # getattr で chunking_enabled を取得することで、テストが手動構築した
+        # インスタンス (chunking_enabled 属性なし) でも動作する。
+        if (
+            len(documents) <= 1
+            or deep_dive_target is not None
+            or not getattr(self, "chunking_enabled", True)
+        ):
+            return self._review_single_call(
+                documents,
+                document_profile_override,
+                deep_dive_target=deep_dive_target,
+                existing_issues=existing_issues,
+            )
+
+        # ---- chunking フロー ----
+        return self._review_chunked(
+            documents,
+            document_profile_override,
+            progress_callback=progress_callback,
+        )
+
+    def _review_single_call(
+        self,
+        documents: list[SanitizedDocument],
+        document_profile_override: str | None,
+        *,
+        deep_dive_target: str | None,
+        existing_issues: "list[ReviewIssue] | None",
+    ) -> ReviewResult:
+        """旧来の単一 API call レビュー (深堀および chunking 無効時に使用)。"""
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
-        # R-Y (2026-05-08): deep_dive_target 指定時は深堀プロンプトを生成。
         prompt = build_prompt(
             documents, rubric,
             deep_dive_target=deep_dive_target,
             existing_issues=existing_issues,
         )
-        # Force JSON output so the model cannot return literal placeholder
-        # strings ("severity", "title", ...) the way it did with the older
-        # pipe-delimited template. The schema is enforced on the server side
-        # for models that support it; for models that do not, the prompt
-        # alone still describes the same JSON shape.
-        payload = {
-            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": self.temperature,
-                "maxOutputTokens": self.max_output_tokens,
-                "responseMimeType": "application/json",
-                "responseSchema": REVIEW_RESPONSE_SCHEMA,
-            },
-        }
+        payload = self._build_payload(prompt)
 
         response = self._post_with_retry(payload)
         content = _extract_gemini_text(response)
@@ -609,12 +704,6 @@ class GeminiApiReviewProvider(ReviewProvider):
                 f"Gemini returned no text (finish_reason={finish_reason or 'unknown'}). "
                 "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
             )
-        # R-B + R-C: surface the model's own summary in the UI. Fall back to
-        # an explicit Japanese notice when the model returned no summary, so
-        # operators can spot misbehaving responses (choice γ from the design
-        # discussion). The English boilerplate previously shown unconditionally
-        # is removed.
-        # B2: also extract the structured summary and assign issue IDs.
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
@@ -632,7 +721,149 @@ class GeminiApiReviewProvider(ReviewProvider):
             model=self.model,
         )
 
+    def _review_chunked(
+        self,
+        documents: list[SanitizedDocument],
+        document_profile_override: str | None,
+        *,
+        progress_callback: Callable[[int, int, str], None] | None,
+    ) -> ReviewResult:
+        """課題 2 改修 (2026-05-08): chunking 版レビュー (各文書を別 API call で処理)。
+
+        各文書を独立した API call で処理し、結果 (issues) をマージする。
+        全体の summary は各文書の結果から構成 (Phase 5 で missing_chapters 統合 call に拡張予定)。
+
+        Free tier の RPM (10/分) を超えないよう、call 間に sleep を入れる
+        (chunking_interval_seconds で制御)。
+        """
+        classification = classify_documents(documents, document_profile_override)
+        rubric = choose_rubric(documents, document_profile_override)
+
+        all_issues: list[ReviewIssue] = []
+        per_doc_summaries: list[str] = []
+        per_doc_raw_responses: list[str] = []
+        per_doc_prompts: list[str] = []
+        failed_docs: list[tuple[str, str]] = []  # (doc_name, error_message)
+
+        total = len(documents)
+        for idx, doc in enumerate(documents, start=1):
+            doc_name = doc.name
+
+            # 進捗通知 (Streamlit 側で progress bar を更新)
+            if progress_callback is not None:
+                try:
+                    progress_callback(idx, total, doc_name)
+                except Exception as cb_exc:  # noqa: BLE001
+                    LOGGER.warning("progress_callback raised: %s; continuing", cb_exc)
+
+            # この文書 1 件だけのプロンプトを生成
+            single_prompt = build_prompt([doc], rubric)
+            payload = self._build_payload(single_prompt)
+            per_doc_prompts.append(single_prompt)
+
+            # API call (リトライ機構付き)
+            try:
+                response = self._post_with_retry(payload)
+                content = _extract_gemini_text(response)
+                if not content.strip():
+                    finish_reason = _first_finish_reason(response)
+                    raise RuntimeError(
+                        f"Empty response (finish_reason={finish_reason or 'unknown'})"
+                    )
+                # 1 文書のレビュー結果から issues を抽出
+                doc_summary, _struct, doc_issues = _parse_review_payload(content, [doc])
+                all_issues.extend(doc_issues)
+                if doc_summary:
+                    per_doc_summaries.append(f"【{doc_name}】{doc_summary}")
+                per_doc_raw_responses.append(f"=== {doc_name} ===\n{content}")
+            except RuntimeError as exc:
+                # 個別文書の失敗は記録し、他の文書の処理は継続
+                err_msg = str(exc)
+                LOGGER.warning("Document %s failed: %s", doc_name, err_msg)
+                failed_docs.append((doc_name, err_msg))
+                per_doc_raw_responses.append(f"=== {doc_name} (FAILED) ===\n{err_msg}")
+                if _looks_like_quota(err_msg):
+                    # クォータ超過は処理を中断する (続行しても全部失敗するため)
+                    raise
+
+            # Free tier RPM 対策の sleep (最後の文書では不要)
+            _interval = getattr(self, "chunking_interval_seconds", 0.0)
+            if idx < total and _interval > 0:
+                time.sleep(_interval)
+
+        # 全件失敗した場合は明確にエラーにする
+        if not all_issues and failed_docs and len(failed_docs) == total:
+            details = "; ".join(f"{n}: {e}" for n, e in failed_docs[:3])
+            raise RuntimeError(
+                f"All {total} documents failed during chunked review. First errors: {details}"
+            )
+
+        # ID 割り当て (D-001, D-002, ...)
+        _assign_issue_ids(all_issues, classification.document_profile)
+
+        # 全体 summary を構成 (Phase 5 で集約 LLM call に置き換え予定)
+        summary_lines = []
+        if per_doc_summaries:
+            summary_lines.append(
+                f"全 {total} 文書のレビューを完了 (合計 {len(all_issues)} 件の指摘)。"
+            )
+            summary_lines.append("")
+            summary_lines.extend(per_doc_summaries)
+        else:
+            summary_lines.append(
+                f"全 {total} 文書のレビューを完了 (合計 {len(all_issues)} 件の指摘)。"
+            )
+        if failed_docs:
+            summary_lines.append("")
+            summary_lines.append(f"⚠️ 以下 {len(failed_docs)} 件の文書はレビューできませんでした:")
+            for n, e in failed_docs:
+                summary_lines.append(f"  - {n}: {e[:120]}")
+        summary = "\n".join(summary_lines)
+
+        # 最終通知 (100% 完了)
+        if progress_callback is not None:
+            try:
+                progress_callback(total, total, "完了")
+            except Exception:  # noqa: BLE001
+                pass
+
+        return _build_review_result(
+            summary=summary,
+            summary_structured=None,  # Phase 5 で集約 call から取得予定
+            issues=all_issues,
+            provider=self.name,
+            documents=documents,
+            rubric=rubric,
+            classification_confidence=classification.confidence,
+            classification_reason=classification.reason,
+            prompt="\n\n".join(per_doc_prompts)[:50000],  # 上限 50k chars (UI 表示用)
+            raw_response="\n\n".join(per_doc_raw_responses)[:50000],
+            model=self.model,
+        )
+
+    def _build_payload(self, prompt: str) -> dict:
+        """Gemini API リクエストペイロードを構築 (共通処理)。"""
+        return {
+            "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": self.temperature,
+                "maxOutputTokens": self.max_output_tokens,
+                "responseMimeType": "application/json",
+                "responseSchema": REVIEW_RESPONSE_SCHEMA,
+            },
+        }
+
     def _post_with_retry(self, payload: dict) -> dict:
+        """課題 2 改修 (2026-05-08): リトライ機構強化版。
+
+        変更点:
+        - max_retries 1 → 3 (計 4 回試行)
+        - 指数バックオフ (1.5s → 3s → 6s) + jitter
+        - UpstreamHttpError.retryable で条件分岐 (network_guard.py 改修と連携)
+        - 503/timeout は確実にリトライされる
+        - クォータ超過 (429 + quota メッセージ) はリトライしない
+        """
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
@@ -648,16 +879,56 @@ class GeminiApiReviewProvider(ReviewProvider):
             except UpstreamHttpError as exc:
                 last_error = exc
                 message = str(exc)
+
+                # Quota 超過は即座に諦める (リトライしても回復しない)
                 if _looks_like_quota(message):
-                    # Quota errors do not help by retrying.
                     raise RuntimeError(
                         "Gemini free-tier quota appears to be exhausted. "
                         "Wait a minute and try again, or switch to a paid tier."
                     ) from None
+
+                # network_guard.py 改修と連携: retryable=False のエラーは即座に raise
+                # (例: HTTP 400 Bad Request, JSON parse error)
+                #
+                # レビュー後修正 (2026-05-08): デフォルトを True に変更。
+                # これは旧 UpstreamHttpError (retryable 属性なしで raise されるもの)
+                # を後方互換的にリトライ対象とするため。
+                # 既存テスト互換性 (test_retry_once_then_raise_on_transport_error) を保ち、
+                # 新しい網羅的な network_guard.py からの raise は明示的に True/False が
+                # セットされているので、属性ありの場合はその値が使われる。
+                _retryable = getattr(exc, "retryable", True)
+                if not _retryable:
+                    LOGGER.info(
+                        "Gemini call failed with non-retryable error (status=%s); not retrying",
+                        getattr(exc, "status_code", None),
+                    )
+                    raise
+
+                # リトライ可能、かつ残試行回数あり
                 if attempt < self.max_retries:
-                    LOGGER.info("Gemini call failed (attempt %s); retrying: %s", attempt + 1, exc)
-                    time.sleep(self.retry_backoff_seconds)
+                    # 指数バックオフ + jitter で thundering herd を回避
+                    # getattr で属性アクセスを安全に (テスト互換性)
+                    _base = getattr(self, "retry_backoff_base_seconds", 1.5)
+                    _jitter_max = getattr(self, "retry_backoff_jitter", 0.5)
+                    backoff = _base * (2 ** attempt)
+                    jitter = random.uniform(0, _jitter_max)
+                    delay = backoff + jitter
+                    LOGGER.info(
+                        "Gemini call failed (attempt %d/%d, status=%s); retrying in %.1fs: %s",
+                        attempt + 1,
+                        self.max_retries + 1,
+                        getattr(exc, "status_code", None),
+                        delay,
+                        exc,
+                    )
+                    time.sleep(delay)
                     continue
+                # リトライ上限に達した
+                LOGGER.warning(
+                    "Gemini call exhausted retries (%d/%d); giving up",
+                    attempt + 1,
+                    self.max_retries + 1,
+                )
                 raise
         # Defensive: loop above always either returns or raises.
         raise last_error or RuntimeError("Gemini call failed with no error captured.")

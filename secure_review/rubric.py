@@ -1079,3 +1079,718 @@ def _looks_like_source_code(text: str) -> bool:
     signal_hits = sum(1 for signal in signals if signal in lowered)
     punctuation_hits = sum(token in text for token in ("{", "}", ";", "=>"))
     return signal_hits >= 2 or (signal_hits >= 1 and punctuation_hits >= 2)
+
+
+# ============================================================================
+# Phase 4 (2026-05-08): 構造定義書 v0.2 ベースの 15 章構造定義
+# ============================================================================
+# 構造定義書「設計書 構造定義書 v0.2」(IPA + AWS WAF + ISO/IEC 25010 ベース) の
+# §3 (15 章構造) と §4 (各章の必須記載事項) を Python データクラスとして定義。
+#
+# 既存の MandatoryCheck / EvaluationAxis / ReviewRubric / RUBRICS は変更せず、
+# 新しい構造を **追加** する形で共存させる。Phase 5 で LLM プロンプトと統合し、
+# checklist_results / missing_chapters の評価に使う。
+#
+# 必須度 (necessity) と重み (weight) の対応は v0.2 §6.3 に基づく:
+#   - "must" (必須):       weight = 3
+#   - "recommended" (推奨): weight = 2
+#   - "optional" (任意):    weight = 1
+#
+# related_quality は ISO/IEC 25010 (8 特性) または AWS WAF (5 柱) のタグ。
+# 表記:
+#   ISO 25010: ISO_FunctionalSuitability, ISO_PerformanceEfficiency,
+#              ISO_Compatibility, ISO_Usability, ISO_Reliability,
+#              ISO_Security, ISO_Maintainability, ISO_Portability
+#   AWS WAF:   WAF_OE (Operational Excellence), WAF_SEC (Security),
+#              WAF_REL (Reliability), WAF_PERF (Performance Efficiency),
+#              WAF_COST (Cost Optimization)
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class ChapterChecklistItem:
+    """構造定義書 v0.2 第 4 章のチェック項目 1 件分。
+
+    LLM はこの構造を input として受け取り、各文書がこの項目を満たすかを
+    5 段階 (excellent/good/acceptable/needs_improvement/unacceptable) で評価する。
+    """
+    item_id: str               # 例: "1.1"
+    item_name: str             # 例: "本書の目的"
+    necessity: str             # "must" / "recommended" / "optional"
+    weight: int                # 3 / 2 / 1 (v0.2 §6.3)
+    expected_content: str      # 記載内容 (v0.2 §4 各表「記載内容」列)
+    fail_conditions: tuple[str, ...]   # 失敗条件 (v0.2 §4 各表「失敗条件」列)
+    related_quality: tuple[str, ...] = ()  # ISO 25010 / WAF タグ
+
+
+@dataclass(frozen=True)
+class StandardChapter:
+    """15 章構造の 1 章分。
+
+    LLM は文書全体に対して、この章をカバーしているかどうかを判定する
+    (Phase 5 の missing_chapters 機能で使用)。
+    """
+    chapter_id: str                        # 例: "ch1"
+    chapter_name: str                      # 例: "はじめに"
+    purpose: str                           # 章の主目的 (v0.2 §3 の表より)
+    items: tuple[ChapterChecklistItem, ...]
+
+
+# ----------------------------------------------------------------------------
+# 構造定義書 v0.2 §3 + §4 から派生する 15 章構造の完全定義
+# ----------------------------------------------------------------------------
+DESIGN_DOC_STRUCTURE_V0_2: tuple[StandardChapter, ...] = (
+    # ========================================================================
+    # 第 1 章 はじめに (v0.2 §4.1)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch1",
+        chapter_name="はじめに",
+        purpose="目的・スコープ・関係者の明示",
+        items=(
+            ChapterChecklistItem(
+                item_id="1.1", item_name="本書の目的", necessity="must", weight=3,
+                expected_content="構築目的、対象システム、想定読者、期待される成果",
+                fail_conditions=("目的が抽象的", "対象不明"),
+                related_quality=("ISO_FunctionalSuitability",),
+            ),
+            ChapterChecklistItem(
+                item_id="1.2", item_name="スコープ", necessity="must", weight=3,
+                expected_content="対象範囲・対象外範囲・関連システムとの境界",
+                fail_conditions=("スコープ不明", "対象外の言及なし"),
+                related_quality=("ISO_FunctionalSuitability",),
+            ),
+            ChapterChecklistItem(
+                item_id="1.3", item_name="関係者・体制", necessity="must", weight=3,
+                expected_content="体制図、責任範囲、エスカレーションパス、ベンダー",
+                fail_conditions=("体制不明", "責任分界点不明"),
+            ),
+            ChapterChecklistItem(
+                item_id="1.4", item_name="用語定義", necessity="recommended", weight=2,
+                expected_content="略語・固有用語・本書独自用語の定義",
+                fail_conditions=("主要用語が未定義",),
+            ),
+            ChapterChecklistItem(
+                item_id="1.5", item_name="参照文書", necessity="recommended", weight=2,
+                expected_content="関連設計書・規格・既存運用文書の一覧",
+                fail_conditions=("参照文書なし", "版番号不明"),
+            ),
+            ChapterChecklistItem(
+                item_id="1.6", item_name="改訂履歴", necessity="must", weight=3,
+                expected_content="版番号、改訂日、改訂内容、承認者",
+                fail_conditions=("改訂履歴なし", "未管理状態"),
+                related_quality=("ISO_Maintainability",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 2 章 システム要件 (v0.2 §4.2)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch2",
+        chapter_name="システム要件",
+        purpose="機能要件・非機能要件の整理",
+        items=(
+            ChapterChecklistItem(
+                item_id="2.1", item_name="業務要件", necessity="must", weight=3,
+                expected_content="業務目的、現状業務、改善目標",
+                fail_conditions=("業務目的不明", "現状把握なし"),
+                related_quality=("ISO_FunctionalSuitability",),
+            ),
+            ChapterChecklistItem(
+                item_id="2.2", item_name="機能要件", necessity="must", weight=3,
+                expected_content="ユースケース、機能一覧、優先度、入出力",
+                fail_conditions=("機能一覧なし", "優先度なし"),
+                related_quality=("ISO_FunctionalSuitability",),
+            ),
+            ChapterChecklistItem(
+                item_id="2.3", item_name="非機能要件 (NFR)", necessity="must", weight=3,
+                expected_content="WAF 5 柱 (OE/SEC/REL/PERF/COST) について各々定量目標",
+                fail_conditions=("WAF 5 柱のいずれかに言及なし", "定量目標なし"),
+                related_quality=("WAF_OE", "WAF_SEC", "WAF_REL", "WAF_PERF", "WAF_COST"),
+            ),
+            ChapterChecklistItem(
+                item_id="2.4", item_name="制約条件", necessity="recommended", weight=2,
+                expected_content="法令・社内ポリシー・ベンダ依存・予算・スケジュール",
+                fail_conditions=("制約事項の記載なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="2.5", item_name="前提条件", necessity="recommended", weight=2,
+                expected_content="業務前提、技術前提、環境前提",
+                fail_conditions=("前提が暗黙的", "未明示"),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 3 章 システム全体構成 (v0.2 §4.3)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch3",
+        chapter_name="システム全体構成",
+        purpose="物理・論理の構成、データフロー",
+        items=(
+            ChapterChecklistItem(
+                item_id="3.1", item_name="全体構成図", necessity="must", weight=3,
+                expected_content="物理構成 + 論理構成 (両方)、凡例",
+                fail_conditions=("構成図なし", "凡例なし"),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="3.2", item_name="構成要素一覧", necessity="must", weight=3,
+                expected_content="各コンポーネント、役割、提供元、版数",
+                fail_conditions=("コンポーネント一覧なし",),
+                related_quality=("ISO_Maintainability",),
+            ),
+            ChapterChecklistItem(
+                item_id="3.3", item_name="データフロー", necessity="recommended", weight=2,
+                expected_content="システム間/コンポーネント間のデータの流れ",
+                fail_conditions=("データフロー図なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="3.4", item_name="ステークホルダ視点", necessity="recommended", weight=2,
+                expected_content="利用者/運用者/監査の各視点での見え方",
+                fail_conditions=("単一視点のみ",),
+            ),
+            ChapterChecklistItem(
+                item_id="3.5", item_name="環境構成", necessity="must", weight=3,
+                expected_content="本番/検証/開発環境の構成と差異",
+                fail_conditions=("環境分離なし", "差異不明"),
+                related_quality=("WAF_OE",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 4 章 ネットワーク設計 (v0.2 §4.4)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch4",
+        chapter_name="ネットワーク設計",
+        purpose="接続性・帯域・冗長性",
+        items=(
+            ChapterChecklistItem(
+                item_id="4.1", item_name="ネットワーク構成", necessity="must", weight=3,
+                expected_content="VPC/サブネット/AZ 構成、IP アドレス体系",
+                fail_conditions=("構成図なし", "IP 設計なし"),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="4.2", item_name="接続要件", necessity="must", weight=3,
+                expected_content="利用プロトコル、ポート、暗号化要件",
+                fail_conditions=("プロトコル不明", "平文通信が暗黙"),
+                related_quality=("WAF_SEC",),
+            ),
+            ChapterChecklistItem(
+                item_id="4.3", item_name="経路設計", necessity="must", weight=3,
+                expected_content="ルーティング、Direct Connect/VPN、NAT/PAT",
+                fail_conditions=("経路設計なし",),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="4.4", item_name="帯域・遅延設計", necessity="recommended", weight=2,
+                expected_content="想定帯域、SLA、レイテンシ目標",
+                fail_conditions=("帯域見積なし",),
+                related_quality=("WAF_PERF", "ISO_PerformanceEfficiency"),
+            ),
+            ChapterChecklistItem(
+                item_id="4.5", item_name="冗長化", necessity="must", weight=3,
+                expected_content="SPOF 排除、フェイルオーバ、BGP/HA",
+                fail_conditions=("SPOF 残存", "冗長化なし"),
+                related_quality=("WAF_REL", "ISO_Reliability"),
+            ),
+            ChapterChecklistItem(
+                item_id="4.6", item_name="DNS 設計", necessity="must", weight=3,
+                expected_content="名前解決方針、DNS サーバ、ゾーン設計",
+                fail_conditions=("DNS 設計なし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 5 章 アカウント・認可設計 (v0.2 §4.5)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch5",
+        chapter_name="アカウント・認可設計",
+        purpose="認証・認可・権限分離",
+        items=(
+            ChapterChecklistItem(
+                item_id="5.1", item_name="アカウント方針", necessity="must", weight=3,
+                expected_content="人/サービスの分類、命名規則、ライフサイクル",
+                fail_conditions=("方針なし", "命名不統一"),
+                related_quality=("WAF_SEC",),
+            ),
+            ChapterChecklistItem(
+                item_id="5.2", item_name="認証方式", necessity="must", weight=3,
+                expected_content="パスワードポリシー、MFA、SSO、フェデレーション",
+                fail_conditions=("MFA なし", "ポリシー不明"),
+                related_quality=("WAF_SEC", "ISO_Security"),
+            ),
+            ChapterChecklistItem(
+                item_id="5.3", item_name="認可・権限分離", necessity="must", weight=3,
+                expected_content="最小権限原則、ロール設計、ABAC/RBAC",
+                fail_conditions=("全権限付与", "最小権限なし"),
+                related_quality=("WAF_SEC", "ISO_Security"),
+            ),
+            ChapterChecklistItem(
+                item_id="5.4", item_name="職務分掌 (SoD)", necessity="recommended", weight=2,
+                expected_content="開発/運用/監査の権限分離",
+                fail_conditions=("単一人物が全権限保有",),
+                related_quality=("WAF_SEC",),
+            ),
+            ChapterChecklistItem(
+                item_id="5.5", item_name="アカウント棚卸", necessity="recommended", weight=2,
+                expected_content="定期見直しサイクル、退職者処理",
+                fail_conditions=("棚卸プロセスなし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 6 章 データ設計 (v0.2 §4.6)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch6",
+        chapter_name="データ設計",
+        purpose="データモデル・ストレージ・保護",
+        items=(
+            ChapterChecklistItem(
+                item_id="6.1", item_name="データモデル", necessity="recommended", weight=2,
+                expected_content="エンティティ、関連、属性 (アプリ依存)",
+                fail_conditions=("アプリ設計に委譲不明",),
+            ),
+            ChapterChecklistItem(
+                item_id="6.2", item_name="ストレージ設計", necessity="must", weight=3,
+                expected_content="種別 (DB/オブジェクト/ブロック)、容量、IOPS",
+                fail_conditions=("ストレージ未定",),
+                related_quality=("WAF_REL", "WAF_PERF"),
+            ),
+            ChapterChecklistItem(
+                item_id="6.3", item_name="データ保護", necessity="must", weight=3,
+                expected_content="暗号化 (in-transit, at-rest)、鍵管理",
+                fail_conditions=("暗号化なし", "平文保管"),
+                related_quality=("WAF_SEC", "ISO_Security"),
+            ),
+            ChapterChecklistItem(
+                item_id="6.4", item_name="バックアップ・リカバリ", necessity="must", weight=3,
+                expected_content="RPO/RTO、頻度、保管期間、リストア手順",
+                fail_conditions=("RPO/RTO 未定義",),
+                related_quality=("WAF_REL", "ISO_Reliability"),
+            ),
+            ChapterChecklistItem(
+                item_id="6.5", item_name="データライフサイクル", necessity="recommended", weight=2,
+                expected_content="保存期間、廃棄ポリシー、アーカイブ",
+                fail_conditions=("廃棄ポリシーなし",),
+            ),
+            ChapterChecklistItem(
+                item_id="6.6", item_name="ログ保管", necessity="must", weight=3,
+                expected_content="監査ログ・アプリログの保管期間と取扱",
+                fail_conditions=("ログ保管期間不明",),
+                related_quality=("WAF_SEC",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 7 章 アプリケーション・サービス設計 (v0.2 §4.7)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch7",
+        chapter_name="アプリケーション・サービス設計",
+        purpose="アプリ構成・連携・メッセージング",
+        items=(
+            ChapterChecklistItem(
+                item_id="7.1", item_name="アプリ構成", necessity="must", weight=3,
+                expected_content="コンポーネント構成、デプロイ方式",
+                fail_conditions=("構成不明",),
+                related_quality=("ISO_FunctionalSuitability",),
+            ),
+            ChapterChecklistItem(
+                item_id="7.2", item_name="外部 IF", necessity="must", weight=3,
+                expected_content="API、メッセージング、ファイル連携",
+                fail_conditions=("IF 仕様なし",),
+                related_quality=("ISO_Compatibility",),
+            ),
+            ChapterChecklistItem(
+                item_id="7.3", item_name="内部連携", necessity="recommended", weight=2,
+                expected_content="サービス間通信、認証伝播",
+                fail_conditions=("内部認証不明",),
+            ),
+            ChapterChecklistItem(
+                item_id="7.4", item_name="エラーハンドリング", necessity="recommended", weight=2,
+                expected_content="異常系設計、リトライ、サーキットブレーカー",
+                fail_conditions=("正常系のみ",),
+                related_quality=("ISO_Reliability",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 8 章 可用性設計 (v0.2 §4.8)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch8",
+        chapter_name="可用性設計",
+        purpose="SLI/SLO/SLA, DR/BCP",
+        items=(
+            ChapterChecklistItem(
+                item_id="8.1", item_name="SLI/SLO/SLA", necessity="must", weight=3,
+                expected_content="サービス指標、目標、契約レベル",
+                fail_conditions=("SLO 未定義",),
+                related_quality=("WAF_REL", "ISO_Reliability"),
+            ),
+            ChapterChecklistItem(
+                item_id="8.2", item_name="単一障害点", necessity="must", weight=3,
+                expected_content="SPOF の特定と対策",
+                fail_conditions=("SPOF 残存",),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="8.3", item_name="DR (災害対策)", necessity="must", weight=3,
+                expected_content="DR 方針、リージョン構成、RPO/RTO",
+                fail_conditions=("DR 設計なし",),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="8.4", item_name="BCP (事業継続)", necessity="recommended", weight=2,
+                expected_content="業務継続計画、復旧手順",
+                fail_conditions=("BCP なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="8.5", item_name="訓練・演習", necessity="recommended", weight=2,
+                expected_content="切替訓練、リハーサル計画",
+                fail_conditions=("訓練計画なし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 9 章 性能設計 (v0.2 §4.9)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch9",
+        chapter_name="性能設計",
+        purpose="性能目標・スケーラビリティ",
+        items=(
+            ChapterChecklistItem(
+                item_id="9.1", item_name="性能目標", necessity="must", weight=3,
+                expected_content="スループット、レスポンスタイム、同時接続数",
+                fail_conditions=("性能目標なし",),
+                related_quality=("WAF_PERF", "ISO_PerformanceEfficiency"),
+            ),
+            ChapterChecklistItem(
+                item_id="9.2", item_name="容量見積", necessity="must", weight=3,
+                expected_content="データ容量、ピーク負荷、伸び率",
+                fail_conditions=("容量見積なし",),
+                related_quality=("WAF_PERF",),
+            ),
+            ChapterChecklistItem(
+                item_id="9.3", item_name="スケーラビリティ", necessity="must", weight=3,
+                expected_content="スケールアウト/アップ方針、自動化",
+                fail_conditions=("スケール戦略なし",),
+                related_quality=("WAF_PERF",),
+            ),
+            ChapterChecklistItem(
+                item_id="9.4", item_name="ボトルネック分析", necessity="recommended", weight=2,
+                expected_content="想定ボトルネック、対策",
+                fail_conditions=("分析なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="9.5", item_name="性能試験計画", necessity="recommended", weight=2,
+                expected_content="負荷試験のシナリオ、ツール、合格基準",
+                fail_conditions=("試験計画なし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 10 章 セキュリティ設計 (v0.2 §4.10)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch10",
+        chapter_name="セキュリティ設計",
+        purpose="脅威モデル・暗号化・監査",
+        items=(
+            ChapterChecklistItem(
+                item_id="10.1", item_name="脅威モデル", necessity="must", weight=3,
+                expected_content="STRIDE 等での脅威分析",
+                fail_conditions=("脅威分析なし",),
+                related_quality=("WAF_SEC", "ISO_Security"),
+            ),
+            ChapterChecklistItem(
+                item_id="10.2", item_name="ネットワーク境界防御", necessity="must", weight=3,
+                expected_content="FW、WAF、IDS/IPS",
+                fail_conditions=("境界防御なし",),
+                related_quality=("WAF_SEC",),
+            ),
+            ChapterChecklistItem(
+                item_id="10.3", item_name="エンドポイント防御", necessity="recommended", weight=2,
+                expected_content="アンチウィルス、EDR",
+                fail_conditions=("設計なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="10.4", item_name="データ暗号化", necessity="must", weight=3,
+                expected_content="in-transit, at-rest、鍵管理 (KMS)",
+                fail_conditions=("暗号化なし",),
+                related_quality=("WAF_SEC", "ISO_Security"),
+            ),
+            ChapterChecklistItem(
+                item_id="10.5", item_name="監査ログ", necessity="must", weight=3,
+                expected_content="取得対象、改ざん防止、保管",
+                fail_conditions=("監査ログなし",),
+                related_quality=("WAF_SEC",),
+            ),
+            ChapterChecklistItem(
+                item_id="10.6", item_name="インシデント対応", necessity="must", weight=3,
+                expected_content="検知/通報/復旧プロセス",
+                fail_conditions=("プロセスなし",),
+                related_quality=("WAF_SEC",),
+            ),
+            ChapterChecklistItem(
+                item_id="10.7", item_name="脆弱性管理", necessity="recommended", weight=2,
+                expected_content="スキャン、パッチ管理",
+                fail_conditions=("管理プロセスなし",),
+            ),
+            ChapterChecklistItem(
+                item_id="10.8", item_name="法令・規制対応", necessity="recommended", weight=2,
+                expected_content="個人情報保護法、業界規制",
+                fail_conditions=("法令言及なし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 11 章 運用設計 (v0.2 §4.11)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch11",
+        chapter_name="運用設計",
+        purpose="監視・アラート・デプロイ・バックアップ",
+        items=(
+            ChapterChecklistItem(
+                item_id="11.1", item_name="監視設計", necessity="must", weight=3,
+                expected_content="メトリクス、ログ、トレース、ダッシュボード",
+                fail_conditions=("監視設計なし",),
+                related_quality=("WAF_OE",),
+            ),
+            ChapterChecklistItem(
+                item_id="11.2", item_name="アラート", necessity="must", weight=3,
+                expected_content="閾値、通知先、エスカレーション",
+                fail_conditions=("閾値なし", "宛先不明"),
+                related_quality=("WAF_OE",),
+            ),
+            ChapterChecklistItem(
+                item_id="11.3", item_name="オンコール体制", necessity="recommended", weight=2,
+                expected_content="当番制、シフト、エスカレーションパス",
+                fail_conditions=("体制不明",),
+            ),
+            ChapterChecklistItem(
+                item_id="11.4", item_name="デプロイ・リリース", necessity="must", weight=3,
+                expected_content="デプロイ方式、ロールバック手順",
+                fail_conditions=("手順なし",),
+                related_quality=("WAF_OE", "ISO_Maintainability"),
+            ),
+            ChapterChecklistItem(
+                item_id="11.5", item_name="構成管理", necessity="recommended", weight=2,
+                expected_content="IaC、変更履歴、承認プロセス",
+                fail_conditions=("手作業前提",),
+                related_quality=("ISO_Maintainability",),
+            ),
+            ChapterChecklistItem(
+                item_id="11.6", item_name="バックアップ運用", necessity="must", weight=3,
+                expected_content="取得頻度、検証、保管",
+                fail_conditions=("運用計画なし",),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="11.7", item_name="定期作業", necessity="recommended", weight=2,
+                expected_content="パッチ、ローテーション、棚卸",
+                fail_conditions=("計画なし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 12 章 コスト設計 (v0.2 §4.12)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch12",
+        chapter_name="コスト設計",
+        purpose="コスト見積・最適化",
+        items=(
+            ChapterChecklistItem(
+                item_id="12.1", item_name="コスト見積", necessity="must", weight=3,
+                expected_content="月額/年額、内訳 (リソース別)",
+                fail_conditions=("見積なし",),
+                related_quality=("WAF_COST",),
+            ),
+            ChapterChecklistItem(
+                item_id="12.2", item_name="コスト最適化", necessity="recommended", weight=2,
+                expected_content="リザーブドインスタンス、Spot、Auto Scaling",
+                fail_conditions=("最適化施策なし",),
+                related_quality=("WAF_COST",),
+            ),
+            ChapterChecklistItem(
+                item_id="12.3", item_name="予算管理", necessity="recommended", weight=2,
+                expected_content="予算アラート、承認フロー",
+                fail_conditions=("管理プロセスなし",),
+            ),
+            ChapterChecklistItem(
+                item_id="12.4", item_name="コスト削減シナリオ", necessity="optional", weight=1,
+                expected_content="スケールダウン手順、廃止計画",
+                fail_conditions=(),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 13 章 拡張性・保守性設計 (v0.2 §4.13)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch13",
+        chapter_name="拡張性・保守性設計",
+        purpose="機能追加・ベンダロックイン回避",
+        items=(
+            ChapterChecklistItem(
+                item_id="13.1", item_name="機能拡張への対応", necessity="recommended", weight=2,
+                expected_content="機能追加時のインパクト、拡張ポイント",
+                fail_conditions=("拡張不可な硬直設計",),
+                related_quality=("ISO_Maintainability",),
+            ),
+            ChapterChecklistItem(
+                item_id="13.2", item_name="ベンダロックイン回避", necessity="recommended", weight=2,
+                expected_content="標準準拠、移行可能性",
+                fail_conditions=("完全ロックイン",),
+                related_quality=("ISO_Portability",),
+            ),
+            ChapterChecklistItem(
+                item_id="13.3", item_name="技術的負債管理", necessity="optional", weight=1,
+                expected_content="既知の負債、解消計画",
+                fail_conditions=(),
+            ),
+            ChapterChecklistItem(
+                item_id="13.4", item_name="ドキュメント保守", necessity="must", weight=3,
+                expected_content="改訂サイクル、責任者",
+                fail_conditions=("保守計画なし",),
+                related_quality=("ISO_Maintainability",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 14 章 移行設計 (v0.2 §4.14)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch14",
+        chapter_name="移行設計",
+        purpose="移行方針・手順・ロールバック",
+        items=(
+            ChapterChecklistItem(
+                item_id="14.1", item_name="移行方針", necessity="must", weight=3,
+                expected_content="一括/段階、並行稼働の有無",
+                fail_conditions=("方針なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="14.2", item_name="移行手順", necessity="must", weight=3,
+                expected_content="切替手順、検証手順",
+                fail_conditions=("手順なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="14.3", item_name="ロールバック計画", necessity="must", weight=3,
+                expected_content="失敗時の戻し方、判定基準",
+                fail_conditions=("ロールバック計画なし",),
+                related_quality=("WAF_REL",),
+            ),
+            ChapterChecklistItem(
+                item_id="14.4", item_name="データ移行", necessity="must", weight=3,
+                expected_content="データ変換、検証、整合性確認",
+                fail_conditions=("データ移行設計なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="14.5", item_name="利用者影響", necessity="recommended", weight=2,
+                expected_content="サービス停止時間、利用者通知",
+                fail_conditions=("影響評価なし",),
+            ),
+        ),
+    ),
+    # ========================================================================
+    # 第 15 章 補足 (v0.2 §4.15)
+    # ========================================================================
+    StandardChapter(
+        chapter_id="ch15",
+        chapter_name="補足",
+        purpose="リスク・前提・改訂履歴・参照文書",
+        items=(
+            ChapterChecklistItem(
+                item_id="15.1", item_name="リスクと前提", necessity="must", weight=3,
+                expected_content="リスク一覧、対応方針、未決事項",
+                fail_conditions=("リスク管理なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="15.2", item_name="課題管理", necessity="recommended", weight=2,
+                expected_content="未決事項一覧、責任者、期限",
+                fail_conditions=("課題管理なし",),
+            ),
+            ChapterChecklistItem(
+                item_id="15.3", item_name="別紙・付録", necessity="optional", weight=1,
+                expected_content="詳細データ、参考情報",
+                fail_conditions=(),
+            ),
+        ),
+    ),
+)
+
+
+def render_chapter_checklist_for_prompt(
+    structure: tuple[StandardChapter, ...] = DESIGN_DOC_STRUCTURE_V0_2,
+) -> str:
+    """構造定義書 v0.2 の 15 章チェックリストを LLM プロンプト用に文字列化。
+
+    Phase 5 で reviewer.py の SYSTEM_PROMPT に埋め込み、LLM が
+    各文書のチェック項目を 5 段階で評価できるようにする。
+
+    Returns:
+        LLM が読みやすい階層構造のテキスト形式 (各章 + 必須度 + 期待内容)
+    """
+    lines: list[str] = []
+    necessity_label = {
+        "must": "[必須]",
+        "recommended": "[推奨]",
+        "optional": "[任意]",
+    }
+    for chapter in structure:
+        lines.append(
+            f"== 第 {chapter.chapter_id[2:]} 章 {chapter.chapter_name} =="
+            f" (主目的: {chapter.purpose})"
+        )
+        for item in chapter.items:
+            label = necessity_label.get(item.necessity, "[?]")
+            lines.append(
+                f"  {item.item_id} {label} {item.item_name} "
+                f"(weight={item.weight}): {item.expected_content}"
+            )
+            if item.fail_conditions:
+                fc = "、".join(item.fail_conditions)
+                lines.append(f"    失敗条件: {fc}")
+        lines.append("")  # 章間の空行
+    return "\n".join(lines).rstrip()
+
+
+def get_chapter_by_id(
+    chapter_id: str,
+    structure: tuple[StandardChapter, ...] = DESIGN_DOC_STRUCTURE_V0_2,
+) -> StandardChapter | None:
+    """章 ID (例: 'ch9') から StandardChapter を取得。Phase 5/6 で使用。
+
+    missing_chapters の verdict 判定や UI でのサジェスチョン表示で、
+    LLM が返した chapter_id から本来の章定義を引くのに使う。
+    """
+    for chapter in structure:
+        if chapter.chapter_id == chapter_id:
+            return chapter
+    return None
+
+
+def get_checklist_item_by_id(
+    item_id: str,
+    structure: tuple[StandardChapter, ...] = DESIGN_DOC_STRUCTURE_V0_2,
+) -> ChapterChecklistItem | None:
+    """項目 ID (例: '4.1') から ChapterChecklistItem を取得。Phase 5/6 で使用。
+
+    LLM が返した checklist_results の item_id から本来の項目定義を引くのに使う。
+    重み計算や UI でのカテゴリ表示で必要。
+    """
+    for chapter in structure:
+        for item in chapter.items:
+            if item.item_id == item_id:
+                return item
+    return None

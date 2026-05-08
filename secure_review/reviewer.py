@@ -21,10 +21,12 @@ from secure_review.models import (
 )
 from secure_review.network_guard import UpstreamHttpError, post_json_safely
 from secure_review.rubric import (
+    ChapterSection,
     DESIGN_DOC_STRUCTURE_V0_2,
     ReviewRubric,
     classify_documents,
     choose_rubric,
+    get_chapter_by_id,
     render_chapter_checklist_for_prompt,
     render_rubric_for_prompt,
 )
@@ -278,6 +280,7 @@ class ReviewProvider:
         *,
         deep_dive_target: str | None = None,
         existing_issues: "list[ReviewIssue] | None" = None,
+        chapter: ChapterSection | None = None,
     ) -> ReviewResult:
         """文書群をレビューする。
 
@@ -289,6 +292,8 @@ class ReviewProvider:
                 追加の詳細分析を LLM に依頼する。None なら通常レビュー。
             existing_issues: deep_dive_target 指定時に渡す既存指摘の集合。
                 通常レビュー時は無視される。
+            chapter: Phase 7 段階 2-B (2026-05-08) 章単位深堀り対象。指定時は
+                deep_dive_target も必須で、対象文書の特定章のみを評価する。
 
         Returns:
             ReviewResult。deep_dive_target 指定時は、target 文書に対する
@@ -307,8 +312,10 @@ class MockReviewProvider(ReviewProvider):
         *,
         deep_dive_target: str | None = None,
         existing_issues: "list[ReviewIssue] | None" = None,
+        chapter: ChapterSection | None = None,
     ) -> ReviewResult:
         # R-Y (2026-05-08): Mock は深堀をサポートしない (ヒューリスティクス).
+        # Phase 7 段階 2-B: chapter も同様に受け取って無視する。
         # 引数だけ受け取って無視する。
         issues: list[ReviewIssue] = []
         classification = classify_documents(documents, document_profile_override)
@@ -549,6 +556,7 @@ class HttpLlmReviewProvider(ReviewProvider):
         *,
         deep_dive_target: str | None = None,
         existing_issues: "list[ReviewIssue] | None" = None,
+        chapter: ChapterSection | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> ReviewResult:
         if not self.api_url or not self.model:
@@ -557,10 +565,12 @@ class HttpLlmReviewProvider(ReviewProvider):
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
         # R-Y (2026-05-08): deep_dive_target 指定時は深堀プロンプトを生成。
+        # Phase 7 段階 2-B (2026-05-08): chapter 指定時は章単位深堀り。
         prompt = build_prompt(
             documents, rubric,
             deep_dive_target=deep_dive_target,
             existing_issues=existing_issues,
+            chapter=chapter,
         )
         payload = {
             "model": self.model,
@@ -585,8 +595,19 @@ class HttpLlmReviewProvider(ReviewProvider):
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         # Phase 7 (2026-05-08): 一段目では checklist_results / missing_chapters は
-        # 取得しない。これらは「🔬 この文書を深堀」で取得する設計に変更。
-        # 一段目をシンプルにすることで応答時間と Free tier クォータ消費を抑える。
+        # 取得しない (一段目シンプル化)。
+        # 深堀り call (deep_dive_target 指定時) では取得する:
+        # - 章モード (chapter 指定): 該当章の 78 項目サブセットを評価
+        # - ファイル全体モード: 全 78 項目を該当性判定
+        checklist_results: tuple = ()
+        missing_chapters: tuple = ()
+        if deep_dive_target is not None:
+            # 深堀り call は target 文書名を fallback として渡す
+            checklist_results = _parse_checklist_results(content, deep_dive_target)
+            # 章モードでは missing_chapters は空配列指示なので取得しない
+            # ファイル全体モードでは取得する (LLM が返せば反映)
+            if chapter is None:
+                missing_chapters = _parse_missing_chapters(content)
         summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
         return _build_review_result(
             summary=summary,
@@ -600,6 +621,8 @@ class HttpLlmReviewProvider(ReviewProvider):
             prompt=prompt,
             raw_response=content,
             model=self.model,
+            checklist_results=checklist_results,
+            missing_chapters=missing_chapters,
         )
 
 
@@ -695,6 +718,7 @@ class GeminiApiReviewProvider(ReviewProvider):
         *,
         deep_dive_target: str | None = None,
         existing_issues: "list[ReviewIssue] | None" = None,
+        chapter: ChapterSection | None = None,
         progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> ReviewResult:
         """課題 2 改修 (2026-05-08): chunking 対応のレビュー実装。
@@ -735,6 +759,7 @@ class GeminiApiReviewProvider(ReviewProvider):
                 document_profile_override,
                 deep_dive_target=deep_dive_target,
                 existing_issues=existing_issues,
+                chapter=chapter,
             )
 
         # ---- chunking フロー ----
@@ -751,14 +776,19 @@ class GeminiApiReviewProvider(ReviewProvider):
         *,
         deep_dive_target: str | None,
         existing_issues: "list[ReviewIssue] | None",
+        chapter: ChapterSection | None = None,
     ) -> ReviewResult:
-        """旧来の単一 API call レビュー (深堀および chunking 無効時に使用)。"""
+        """旧来の単一 API call レビュー (深堀および chunking 無効時に使用)。
+
+        Phase 7 段階 2-B: chapter 指定時は章単位深堀り (deep_dive_target も必須)。
+        """
         classification = classify_documents(documents, document_profile_override)
         rubric = choose_rubric(documents, document_profile_override)
         prompt = build_prompt(
             documents, rubric,
             deep_dive_target=deep_dive_target,
             existing_issues=existing_issues,
+            chapter=chapter,
         )
         payload = self._build_payload(prompt)
 
@@ -773,8 +803,19 @@ class GeminiApiReviewProvider(ReviewProvider):
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         # Phase 7 (2026-05-08): 一段目では checklist_results / missing_chapters は
-        # 取得しない。これらは「🔬 この文書を深堀」で取得する設計に変更。
-        # 一段目をシンプルにすることで応答時間と Free tier クォータ消費を抑える。
+        # 取得しない (一段目シンプル化)。
+        # 深堀り call (deep_dive_target 指定時) では取得する:
+        # - 章モード (chapter 指定): 該当章の 78 項目サブセットを評価
+        # - ファイル全体モード: 全 78 項目を該当性判定
+        checklist_results: tuple = ()
+        missing_chapters: tuple = ()
+        if deep_dive_target is not None:
+            # 深堀り call は target 文書名を fallback として渡す
+            checklist_results = _parse_checklist_results(content, deep_dive_target)
+            # 章モードでは missing_chapters は空配列指示なので取得しない
+            # ファイル全体モードでは取得する (LLM が返せば反映)
+            if chapter is None:
+                missing_chapters = _parse_missing_chapters(content)
         summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
         return _build_review_result(
             summary=summary,
@@ -788,6 +829,8 @@ class GeminiApiReviewProvider(ReviewProvider):
             prompt=prompt,
             raw_response=content,
             model=self.model,
+            checklist_results=checklist_results,
+            missing_chapters=missing_chapters,
         )
 
     def _review_chunked(
@@ -1029,8 +1072,9 @@ def _build_deep_dive_prompt(
     rubric: ReviewRubric,
     target_doc_name: str,
     existing_issues: list,
+    chapter: ChapterSection | None = None,
 ) -> str:
-    """R-Y (2026-05-08): 深堀レビュー用プロンプトを構築する。
+    """R-Y (2026-05-08) + Phase 7 段階 2-B (2026-05-08): 深堀レビュー用プロンプトを構築する。
 
     対象文書 (1 件) + その文書由来の既存指摘群 を入力に、LLM に
     「これらをより詳細に掘り下げ、追加の懸念点や具体的な推奨対応を
@@ -1041,6 +1085,11 @@ def _build_deep_dive_prompt(
     - 既存の総合レビューで既に分析済みのため
     - LLM の入力 token を target 文書の深掘りに集中させたい
     - 文脈が混在すると深堀の焦点がぼやける
+
+    Phase 7 段階 2-B: chapter パラメータが指定された場合、章単位深堀りモード:
+    - 評価対象は ChapterSection.extracted_text (1 章分のみ)
+    - 78 項目チェックリストの該当章サブセットのみをプロンプトに埋め込み
+    - missing_chapters は空配列を返すよう指示 (章単位では判定しない)
     """
     target_doc = next((d for d in documents if d.name == target_doc_name), None)
     if target_doc is None:
@@ -1052,26 +1101,50 @@ def _build_deep_dive_prompt(
         if getattr(i, "source_document", "") == target_doc_name
     ]
 
-    sections = [
-        "以下は **深堀レビュー** のリクエストです。",
-        f"対象文書: **{target_doc_name}**",
-        "",
-        "この文書には既に以下のレビュー指摘がされています。これらをさらに掘り下げ、",
-        "より具体的な対応手順、関連する追加の懸念点、考慮すべきエッジケースなど、",
-        "**新しい視点での詳細な分析** を追加してください。",
-        "",
-        "なお、既存指摘と完全に同じ内容を再掲する必要はなく、新たな観点 (運用・",
-        "セキュリティ・性能・障害復旧・関係者間の合意プロセスなど) からの追加指摘",
-        "や、既存指摘の具体化 (代替案・実装手順・前提条件) を中心に提示してください。",
-        "",
-        render_rubric_for_prompt(rubric),
-        "",
-        "出力は必ず JSON オブジェクトのみで返してください。",
-        "JSON の構造はシステムプロンプトで指定した形式に従ってください。",
-        "",
-        "## 既存のレビュー指摘",
-        "",
-    ]
+    # Phase 7 段階 2-B (2026-05-08): 章単位深堀りモード判定
+    is_chapter_mode = chapter is not None
+    chapter_label = chapter.chapter_label if is_chapter_mode else ""
+
+    if is_chapter_mode:
+        sections = [
+            "以下は **章単位の深堀レビュー** のリクエストです。",
+            f"対象文書: **{target_doc_name}**",
+            f"対象章: **{chapter_label}** (章 ID: {chapter.chapter_id})",
+            "",
+            "この章を、構造定義書 v0.2 の該当チェック項目に基づいて詳細に評価してください。",
+            "**章本文は文書全体の一部** ですが、評価はこの章単独の品質を見てください。",
+            "(他の章との連携は、ファイル全体の深堀りで別途評価されます。)",
+            "",
+            render_rubric_for_prompt(rubric),
+            "",
+            "出力は必ず JSON オブジェクトのみで返してください。",
+            "JSON の構造はシステムプロンプトで指定した形式に従ってください。",
+            "missing_chapters は **空配列 []** を返してください (章単位では判定不要)。",
+            "",
+            "## 既存のレビュー指摘 (この文書全体に対するもの、章別ではない)",
+            "",
+        ]
+    else:
+        sections = [
+            "以下は **深堀レビュー** のリクエストです。",
+            f"対象文書: **{target_doc_name}**",
+            "",
+            "この文書には既に以下のレビュー指摘がされています。これらをさらに掘り下げ、",
+            "より具体的な対応手順、関連する追加の懸念点、考慮すべきエッジケースなど、",
+            "**新しい視点での詳細な分析** を追加してください。",
+            "",
+            "なお、既存指摘と完全に同じ内容を再掲する必要はなく、新たな観点 (運用・",
+            "セキュリティ・性能・障害復旧・関係者間の合意プロセスなど) からの追加指摘",
+            "や、既存指摘の具体化 (代替案・実装手順・前提条件) を中心に提示してください。",
+            "",
+            render_rubric_for_prompt(rubric),
+            "",
+            "出力は必ず JSON オブジェクトのみで返してください。",
+            "JSON の構造はシステムプロンプトで指定した形式に従ってください。",
+            "",
+            "## 既存のレビュー指摘",
+            "",
+        ]
 
     if not related_issues:
         sections.append("(この文書に対する既存指摘はありません。文書本文から新規指摘のみ提示してください。)")
@@ -1093,10 +1166,44 @@ def _build_deep_dive_prompt(
                     sections.append(f"- {label}: {val}")
             sections.append("")
 
-    sections.append("## 対象文書の本文")
-    sections.append("")
-    sections.append(f"--- 文書: {target_doc.name} ---")
-    sections.append(target_doc.outbound_text)
+    if is_chapter_mode:
+        # Phase 7 段階 2-B: 章モード時は章本文のみ + 該当章のチェックリスト
+        sections.append(f"## 対象章の本文")
+        sections.append("")
+        sections.append(f"--- 文書: {target_doc.name} | 章: {chapter_label} ---")
+        sections.append(chapter.extracted_text)
+        sections.append("")
+
+        # 該当章の 78 項目サブセットを埋め込み (例: ch4 なら 6 項目)
+        if rubric.document_profile == "design" and chapter.chapter_id != "ch_unknown":
+            std_chapter = get_chapter_by_id(chapter.chapter_id)
+            if std_chapter is not None:
+                sections.append(f"## この章のチェック項目 ({chapter.chapter_id} {std_chapter.chapter_name})")
+                sections.append("")
+                sections.append(f"主目的: {std_chapter.purpose}")
+                sections.append("")
+                sections.append("以下の項目について、この章を 5 段階で評価し、checklist_results 配列に格納してください:")
+                sections.append("")
+                necessity_label = {"must": "[必須]", "recommended": "[推奨]", "optional": "[任意]"}
+                for item in std_chapter.items:
+                    label = necessity_label.get(item.necessity, "[?]")
+                    sections.append(
+                        f"- {item.item_id} {label} {item.item_name} (weight={item.weight}): {item.expected_content}"
+                    )
+                    if item.fail_conditions:
+                        fc = "、".join(item.fail_conditions)
+                        sections.append(f"  失敗条件: {fc}")
+                sections.append("")
+                sections.append(
+                    "各 checklist_result には source_document に文書名 ("
+                    f"{target_doc.name}) を、item_id / item_name は上記から正確にコピーしてください。"
+                )
+    else:
+        # 従来通り: ファイル全体の深堀り
+        sections.append("## 対象文書の本文")
+        sections.append("")
+        sections.append(f"--- 文書: {target_doc.name} ---")
+        sections.append(target_doc.outbound_text)
 
     return "\n".join(sections)
 
@@ -1107,19 +1214,24 @@ def build_prompt(
     *,
     deep_dive_target: str | None = None,
     existing_issues: "list[ReviewIssue] | None" = None,
+    chapter: ChapterSection | None = None,
 ) -> str:
     """LLM 入力プロンプトを構築する。
 
     R-Y (2026-05-08): ``deep_dive_target`` が指定された場合は、対象文書 +
     既存指摘 + 深堀指示の特殊プロンプトを返す。それ以外は従来通り全文書の
     総合レビュー用プロンプトを返す。
+
+    Phase 7 段階 2-B (2026-05-08): chapter が指定された場合、章単位深堀り
+    モードで _build_deep_dive_prompt を呼び出す (deep_dive_target も必須)。
     """
     if rubric is None:
         rubric = choose_rubric(documents)
 
     if deep_dive_target:
         return _build_deep_dive_prompt(
-            documents, rubric, deep_dive_target, existing_issues or []
+            documents, rubric, deep_dive_target, existing_issues or [],
+            chapter=chapter,
         )
 
     sections = [

@@ -1629,7 +1629,163 @@ if review is not None:
                                 unsafe_allow_html=True,
                             )
 
+            # Phase 6 (2026-05-08): この文書のチェック項目評価 (構造定義書 v0.2)
+            # Q19=A: status 重要度順 (unacceptable → ... → not_applicable) で表示
+            # 該当する ChecklistResult のみフィルタ
+            _doc_checklists = [
+                cr for cr in (review.checklist_results or ())
+                if cr.source_document == _doc_name
+            ]
+            if _doc_checklists:
+                # 集計: status 別カウント
+                _status_counts = {
+                    "excellent": 0, "good": 0, "acceptable": 0,
+                    "needs_improvement": 0, "unacceptable": 0, "not_applicable": 0,
+                }
+                for _cr in _doc_checklists:
+                    _status_counts[_cr.status] = _status_counts.get(_cr.status, 0) + 1
+                # 「X 充足 / Y 注意 / Z 不充足」の表示用集計
+                _ok_count = _status_counts["excellent"] + _status_counts["good"] + _status_counts["acceptable"]
+                _warn_count = _status_counts["needs_improvement"]
+                _bad_count = _status_counts["unacceptable"]
+                _na_count = _status_counts["not_applicable"]
+
+                _summary_label = (
+                    f"✅ チェック項目評価 "
+                    f"({_ok_count} 充足 / {_warn_count} 注意 / {_bad_count} 不充足"
+                    + (f" / {_na_count} 該当なし" if _na_count else "")
+                    + ")"
+                )
+                with st.expander(_summary_label, expanded=False):
+                    st.caption(
+                        "構造定義書 v0.2 の 15 章 78 項目から、この文書に該当する項目を "
+                        "LLM が 5 段階で評価した結果です。問題のある項目が上に表示されます。"
+                    )
+                    # Q19=A: status 重要度順 (問題駆動型 UI)
+                    _status_order = {
+                        "unacceptable": 0,
+                        "needs_improvement": 1,
+                        "acceptable": 2,
+                        "good": 3,
+                        "excellent": 4,
+                        "not_applicable": 5,
+                    }
+                    _status_emoji = {
+                        "excellent": "🌟",
+                        "good": "✅",
+                        "acceptable": "🟡",
+                        "needs_improvement": "⚠️",
+                        "unacceptable": "❌",
+                        "not_applicable": "➖",
+                    }
+                    _status_label_jp = {
+                        "excellent": "模範",
+                        "good": "充足",
+                        "acceptable": "可",
+                        "needs_improvement": "要改善",
+                        "unacceptable": "不充足",
+                        "not_applicable": "該当なし",
+                    }
+                    # 重要度順にソート、同 status 内では item_id で安定化
+                    _sorted_crs = sorted(
+                        _doc_checklists,
+                        key=lambda c: (
+                            _status_order.get(c.status, 99),
+                            tuple(int(p) for p in c.item_id.split(".") if p.isdigit())
+                            if c.item_id else (99,),
+                        ),
+                    )
+                    for _cr in _sorted_crs:
+                        _emoji = _status_emoji.get(_cr.status, "❓")
+                        _slabel = _status_label_jp.get(_cr.status, _cr.status)
+                        _evidence_html = (
+                            f' <span style="color:#888;font-size:0.85rem;">'
+                            f'(根拠: {_cr.evidence})</span>'
+                            if _cr.evidence else ""
+                        )
+                        st.markdown(
+                            f"<div style='padding:0.4rem 0.6rem;margin:0.3rem 0;"
+                            f"border-left:3px solid #ccc;background:#fafaf7;'>"
+                            f"<b>{_emoji} {_cr.item_id} {_cr.item_name}</b> "
+                            f"<span style='color:#666;font-size:0.85rem;'>[{_slabel}]</span>"
+                            f"{_evidence_html}<br/>"
+                            f"<span style='color:#444;font-size:0.92rem;'>{_cr.reason}</span>"
+                            f"</div>",
+                            unsafe_allow_html=True,
+                        )
+
             st.markdown("")  # 文書間の余白
+
+    # Phase 6 (2026-05-08): 欠落章へのサジェスチョン表示
+    # Q20=A: 全文書のレビュー結果の後、開発者モード expander の前に配置
+    # 全文書俯瞰した後で「文書群全体として何が欠けているか」を示す自然な流れ
+    _missing_chapters = review.missing_chapters or ()
+    # out_of_scope は表示しない (UI からは見せない、LLM の判断は記録に残す)
+    _displayable_mc = [
+        mc for mc in _missing_chapters
+        if mc.verdict in ("should_have", "recommended")
+    ]
+    if _displayable_mc:
+        st.markdown("---")
+        st.markdown("### 📋 欠落章へのサジェスチョン")
+        st.caption(
+            "構造定義書 v0.2 の 15 章のうち、この文書群が **明らかにカバーしていない章** を "
+            "LLM が判定した結果です。設計書として完成度を上げるための参考としてご活用ください。"
+        )
+
+        # verdict 別にグループ化 (should_have を上に、recommended を下に)
+        _should_have = [mc for mc in _displayable_mc if mc.verdict == "should_have"]
+        _recommended = [mc for mc in _displayable_mc if mc.verdict == "recommended"]
+
+        if _should_have:
+            st.markdown(
+                f"<div style='margin-top:0.6rem;font-weight:bold;color:#a02020;'>"
+                f"🔴 重要欠落 ({len(_should_have)} 件) — 設計書として本来必要"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            for _mc in _should_have:
+                _suggested_html = (
+                    f"<div style='margin-top:0.4rem;color:#4a5549;font-size:0.92rem;'>"
+                    f"<b>本来書かれるべき内容:</b><br/>"
+                    f"{_mc.suggested_content}</div>"
+                    if _mc.suggested_content else ""
+                )
+                st.markdown(
+                    f"<div style='padding:0.6rem 0.8rem;margin:0.4rem 0;"
+                    f"border-left:4px solid #c04040;background:#fff5f5;'>"
+                    f"<b>📕 {_mc.chapter_id} {_mc.chapter_name}</b><br/>"
+                    f"<span style='color:#444;font-size:0.92rem;'>"
+                    f"<b>判定理由:</b> {_mc.justification}</span>"
+                    f"{_suggested_html}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+        if _recommended:
+            st.markdown(
+                f"<div style='margin-top:0.8rem;font-weight:bold;color:#a07020;'>"
+                f"🟡 推奨欠落 ({len(_recommended)} 件) — あればよい (Optional)"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            for _mc in _recommended:
+                _suggested_html = (
+                    f"<div style='margin-top:0.4rem;color:#4a5549;font-size:0.92rem;'>"
+                    f"<b>本来書かれるべき内容:</b><br/>"
+                    f"{_mc.suggested_content}</div>"
+                    if _mc.suggested_content else ""
+                )
+                st.markdown(
+                    f"<div style='padding:0.6rem 0.8rem;margin:0.4rem 0;"
+                    f"border-left:4px solid #c0a040;background:#fffaf0;'>"
+                    f"<b>📒 {_mc.chapter_id} {_mc.chapter_name}</b><br/>"
+                    f"<span style='color:#444;font-size:0.92rem;'>"
+                    f"<b>判定理由:</b> {_mc.justification}</span>"
+                    f"{_suggested_html}"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
 
     # 開発者モード ON 時のみ表示 (2026-05-08): プロンプト・LLM 生レスポンスの確認用
     if st.session_state.get("developer_mode", False):

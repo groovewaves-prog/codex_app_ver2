@@ -122,6 +122,62 @@ class ReviewSummary:
         )
 
 
+@dataclass(frozen=True)
+class ChecklistResult:
+    """Phase 5 (2026-05-08): 構造定義書 v0.2 §6 のチェック項目評価結果。
+
+    LLM は文書ごとに、rubric.py の DESIGN_DOC_STRUCTURE_V0_2 にある各項目を
+    5 段階で評価し、根拠 (reason) と文書内根拠 (evidence) を返す。
+
+    フィールド:
+        item_id: rubric.py の ChapterChecklistItem.item_id と紐づく (例: "1.1")
+        item_name: 項目名 (LLM が返す表示用、例: "本書の目的")
+        source_document: どの文書を評価したか (例: "基本設計書 1. はじめに.pdf")
+        status: 5 段階評価 + 該当なし
+            "excellent" / "good" / "acceptable" /
+            "needs_improvement" / "unacceptable" / "not_applicable"
+        reason: 評価の根拠 (必須、v0.2 §6.2)
+        evidence: 文書内の根拠箇所 (例: "1.1 本書の位置付け")
+    """
+    item_id: str
+    item_name: str
+    source_document: str
+    status: str
+    reason: str
+    evidence: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class MissingChapter:
+    """Phase 5 (2026-05-08): 構造定義書 v0.2 §7 の欠落章サジェスチョン。
+
+    集約 LLM call (chunking 完了後の 13 番目の call) で、rubric.py の
+    DESIGN_DOC_STRUCTURE_V0_2 のうち、提供文書群に欠けている章について
+    LLM が verdict と suggested_content を返す。
+
+    フィールド:
+        chapter_id: rubric.py の StandardChapter.chapter_id と紐づく (例: "ch9")
+        chapter_name: 章名 (LLM が返す表示用、例: "性能設計")
+        verdict: 3 段階の判定 (v0.2 §7.2)
+            "should_have"  - 本来必要、欠落として指摘すべき
+            "recommended"  - あればよい、サジェスチョンとして推奨
+            "out_of_scope" - スコープ外として黙認 (UI では非表示)
+        justification: なぜその verdict と判定したか
+        suggested_content: もし作成するなら、本来書かれるべき内容
+    """
+    chapter_id: str
+    chapter_name: str
+    verdict: str
+    justification: str
+    suggested_content: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
 @dataclass
 class ReviewIssue:
     severity: str
@@ -181,6 +237,13 @@ class ReviewResult:
     # should prefer ``summary_structured`` when populated. Defaults to an
     # empty ReviewSummary, whose ``is_empty()`` returns True.
     summary_structured: ReviewSummary = field(default_factory=ReviewSummary)
+    # Phase 5 (2026-05-08): 構造定義書 v0.2 ベースの評価結果。
+    # 既存呼び出し側 (テスト等) は、これらのフィールドを意識しなくても済むよう、
+    # デフォルト空 tuple とした。新呼び出し側は LLM 出力から populate する。
+    # checklist_results: 各文書 chunk call で得た 5 段階評価結果のリスト
+    # missing_chapters: 集約 call で得た欠落章サジェスチョンのリスト
+    checklist_results: tuple = field(default_factory=tuple)
+    missing_chapters: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -196,6 +259,8 @@ class ReviewResult:
             "classification_reason": self.classification_reason,
             "raw_response": self.raw_response,
             "model": self.model,
+            "checklist_results": [r.to_dict() for r in self.checklist_results],
+            "missing_chapters": [m.to_dict() for m in self.missing_chapters],
         }
 
 

@@ -155,6 +155,13 @@ def render_session_summary() -> None:
     apply_user_decisions が customer_id/session_id 付きで呼ばれた直後に
     audit log に追記された内容を集計表示。
     各エントリに R-W-3 の永続化ボタンを表示。
+
+    課題 1 修正 (2026-05-08):
+        永続化ボタン押下時の rerun で expander が勝手に折りたたまれる問題への対処。
+        session_state.session_summary_expanded で展開状態を保持し、永続化ボタン押下後も
+        ユーザの操作意図 (= 連続で複数語を判断する) を維持する。
+        デフォルトは True (展開) - 永続化ボタンが画面に現れている = ユーザがそれを使う
+        意図がある状況なので、展開がデフォルトの方が UX として自然。
     """
     ensure_session_state()
     customer_id = get_customer_id()
@@ -171,10 +178,15 @@ def render_session_summary() -> None:
     mask_count = sum(e["mask_count"] for e in agg.values())
     skip_count = sum(e["skip_count"] for e in agg.values())
 
+    # 課題 1 修正: 展開状態を session_state で保持
+    # デフォルト True (展開) — サマリは永続化操作の起点なので、最初から見えている方が良い
+    if "session_summary_expanded" not in st.session_state:
+        st.session_state.session_summary_expanded = True
+
     with st.expander(
         f"📊 本セッションのマスク判断サマリ "
         f"(語 {len(agg)} 種類、判断 {total_decisions} 件: マスク {mask_count} / 素通し {skip_count})",
-        expanded=False,
+        expanded=st.session_state.session_summary_expanded,
     ):
         st.caption(
             "このセッションで `uncertain candidates` UI で判断された結果です。"
@@ -227,21 +239,39 @@ def _render_term_card(
     btn_cols = st.columns([1, 1, 1, 2])
     base_key = f"{key_prefix}_{term}"
 
+    # Q2 修正 (2026-05-08): ボタン名を機能差分が明確になるよう変更。
+    # 「watchlist (人間判断)」→「都度判断 (毎回確認)」: 毎回 UI で確認したい語
+    # 「素通し確定」: もう確認不要、候補にも出さない語 (異なる目的)
     if btn_cols[0].button(
-        "📥 マスク確定 (auto-mask)", key=f"{base_key}_mask",
-        help="ner_seeds_user.yaml に confirm:true で追記。次回セッションから自動マスク。",
+        "📥 マスク確定 (自動伏字)", key=f"{base_key}_mask",
+        help=(
+            "次回セッションから【自動的にマスク】されます (uncertain UI に出ません)。"
+            "確実に機密と分かっている語に使います。例: KDDI、府中、KDDIアイレット。"
+            " 反映先: ner_seeds_user.yaml (confirm:true)。"
+            " ⚠️ 永続化は次回セッション以降に有効。今のセッションには影響しません。"
+        ),
     ):
         _persist_term(term, label, customer_id, action="seed_mask")
 
     if btn_cols[1].button(
-        "👁️ watchlist (人間判断)", key=f"{base_key}_watch",
-        help="ner_seeds_user.yaml に confirm:false で追記。検出は確実、判断は都度。",
+        "👁️ 都度判断 (毎回確認)", key=f"{base_key}_watch",
+        help=(
+            "次回セッションでも【uncertain UI に表示】され、毎回ユーザが判断します。"
+            "文脈次第でマスク要否が変わる語に使います (例: 用途により判断が分かれる地名)。"
+            " 反映先: ner_seeds_user.yaml (confirm:false)。"
+            " ⚠️ 永続化は次回セッション以降に有効。今のセッションには影響しません。"
+        ),
     ):
         _persist_term(term, label, customer_id, action="seed_watch")
 
     if btn_cols[2].button(
-        "🟢 素通し確定", key=f"{base_key}_allow",
-        help="tech_allowlist_user.yaml に追記。次回セッションから候補にも出ない。",
+        "🟢 素通し確定 (候補から除外)", key=f"{base_key}_allow",
+        help=(
+            "次回セッションから【候補にも出ません】(完全スキップ)。もう判断不要な"
+            "公知用語に使います。例: 東京リージョン、Amazon SES、AWS、Linux。"
+            " 反映先: tech_allowlist_user.yaml。"
+            " ⚠️ 永続化は次回セッション以降に有効。今のセッションには影響しません。"
+        ),
     ):
         _persist_term(term, label, customer_id, action="allowlist")
 
@@ -275,10 +305,10 @@ def _persist_term(
                 customer_id=customer_id,
             )
             if added:
+                _kind = "自動伏字" if confirm else "都度判断"
                 st.success(
-                    f"✅ `{term}` を `{path}` に追加しました "
-                    f"({'auto-mask' if confirm else 'watchlist'})。"
-                    " 次回セッションから反映されます。"
+                    f"✅ `{term}` を `{path}` に追加しました ({_kind})。"
+                    " 次回セッションから反映されます。今のセッションでは効果がありません。"
                 )
             else:
                 st.info(f"ℹ️ `{term}` は既に `{path}` に登録済みです。")
@@ -290,7 +320,7 @@ def _persist_term(
             if added:
                 st.success(
                     f"✅ `{term}` を `{path}` に追加しました (素通し確定)。"
-                    " 次回セッションから候補にも出なくなります。"
+                    " 次回セッションから候補にも出なくなります。今のセッションでは効果がありません。"
                 )
             else:
                 st.info(f"ℹ️ `{term}` は既に `{path}` に登録済みです。")

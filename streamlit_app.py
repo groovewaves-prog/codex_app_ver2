@@ -303,8 +303,6 @@ def _reset_state() -> None:
         # R-Y (2026-05-08): 深堀結果。リセット時にクリアしないと、
         # 次のレビュー実行時に同名文書の旧深堀結果が表示されてしまう。
         "deep_dive_results",
-        # Q12 (2026-05-08): 文書チェック完了フラグ
-        "docs_checked",
     ):
         st.session_state.pop(key, None)
 
@@ -824,8 +822,7 @@ with col2:
 
 
 if preview_clicked:
-    # Q12 (2026-05-08): 新しい preview の度に文書チェック状態をリセット
-    st.session_state.docs_checked = False
+    # Phase 7 段階 1.5 (2026-05-08): docs_checked フラグ廃止に伴い、リセット不要に
     # 古い deep_dive_results も新 preview には不適合なのでクリア
     st.session_state.pop("deep_dive_results", None)
 
@@ -1082,26 +1079,30 @@ if preview_docs:
     all_confirmed = (not mask_docs) or all(confirmations.get(doc.name) for doc in mask_docs)
     can_send = bool(preview_docs) and not blocked_docs and all_confirmed
 
-    # Q12 (2026-05-08): 「文書チェック」ボタン新設で 2 段階フロー化
-    # 1. 「📋 文書チェック」(secondary) — ローカル処理: ユーザ判断反映 + サマリ表示
-    # 2. 「レビューに送信」(primary) — LLM 送信のみ (文書チェック後のみ有効)
+    # Phase 7 段階 1.5 (2026-05-08): docs_checked ガード廃止 + ボタン改名
+    # ユーザフィードバック: 「匿名化してプレビュー」直後にサマリは既に見えているため、
+    # 「文書チェック」ボタンを押す手順は冗長だった。
     #
-    # これにより、LLM 送信前に永続化操作・ログ DL が落ち着いて行えるようになる
-    # (旧フローでは LLM 送信中に永続化ボタン等が表示されて違和感があった)。
+    # 1. 「📋 匿名化結果を確認」(secondary, 旧「文書チェック」) — オプション操作
+    #    ユーザ判断 (uncertain candidate) を反映して preview_docs を再生成。
+    #    押さなくても先に進める (ガードではなくオプション)。
+    # 2. 「レビューに送信」(primary) — preview_docs があれば常時有効
+    #    各文書の承認 (all_confirmed) と送信禁止 (blocked_docs) のチェックは継続。
     can_check = bool(preview_docs) and not blocked_docs and all_confirmed
-    can_send = st.session_state.get("docs_checked", False) and bool(preview_docs) and not blocked_docs and all_confirmed
+    can_send = bool(preview_docs) and not blocked_docs and all_confirmed
 
     check_col, send_col, status_col = st.columns([1.5, 1.5, 4])
     with check_col:
         check_clicked = st.button(
-            "📋 文書チェック",
+            "📋 匿名化結果を確認",
             type="secondary",
             disabled=not can_check,
             width='stretch',
             help=(
-                "マスク判断を反映し、LLM 送信前のサマリを確認します。"
-                "このステップでは LLM には何も送信されません。"
-                " 匿名化結果に問題ないことを確認してから「レビューに送信」を押してください。"
+                "マスク判断を反映し、preview_docs を再生成します (オプション操作)。"
+                " このステップでは LLM には何も送信されません。"
+                " 押さなくても「レビューに送信」で先に進めますが、uncertain candidate を"
+                " 修正した場合や、最新の匿名化結果を確認したい場合に使用します。"
             ),
             key="doc_check_button",
         )
@@ -1113,7 +1114,6 @@ if preview_docs:
             width='stretch',
             help=(
                 "LLM プロバイダに匿名化済みテキストを送信し、レビュー結果を取得します。"
-                " 「📋 文書チェック」を実行してから押せるようになります。"
             ),
             key="send_review_button",
         )
@@ -1128,13 +1128,6 @@ if preview_docs:
                 '<div class="muted">送信ボタンを有効にするには、上記の各文書を確認・承認してください。</div>',
                 unsafe_allow_html=True,
             )
-        elif not st.session_state.get("docs_checked", False):
-            st.markdown(
-                '<div class="muted">まず <b>「📋 文書チェック」</b> を実行して、'
-                'マスク判断サマリを確認してください。'
-                '問題なければ「レビューに送信」を押せるようになります。</div>',
-                unsafe_allow_html=True,
-            )
         else:
             st.markdown(
                 '<div class="muted">✅ 送信準備完了。設定された LLM プロバイダには'
@@ -1142,12 +1135,12 @@ if preview_docs:
                 unsafe_allow_html=True,
             )
 
-    # Q12 (2026-05-08): 「📋 文書チェック」押下時の処理
+    # Phase 7 段階 1.5 (2026-05-08): 「📋 匿名化結果を確認」押下時の処理
+    # 旧「文書チェック」のロジックを温存しつつ、docs_checked ガードを撤廃。
     # ローカル処理のみ (LLM 送信なし):
     #   - ユーザ判断を反映して preview_docs を再生成
     #   - session_state.preview_docs を更新
-    #   - docs_checked = True にして「レビューに送信」を有効化
-    # 完了後、render_session_summary と render_log_export_button が表示される。
+    # 押さなくても先に進める (オプション操作)。
     if check_clicked:
         try:
             _states = st.session_state.get("masking_states", {})
@@ -1182,24 +1175,25 @@ if preview_docs:
                 preview_docs = rebuilt
                 st.session_state.preview_docs = preview_docs
 
-            # 文書チェック完了をマーク
-            st.session_state.docs_checked = True
+            # Phase 7 段階 1.5: docs_checked フラグ廃止 (オプション操作のためガード不要)
             # 古いレビュー結果が残っていればクリア (新しい判断には合わないため)
             st.session_state.pop("review_result", None)
             st.session_state.pop("deep_dive_results", None)
             st.success(
-                "✅ 文書チェック完了。下記サマリで匿名化結果を確認してください。"
-                " 問題なければ「レビューに送信」ボタンで LLM レビューを実行できます。"
+                "✅ 匿名化結果を再生成しました。下記サマリで確認できます。"
+                " 「レビューに送信」で LLM レビューを実行できます。"
             )
         except Exception as exc:  # noqa: BLE001
             _request_id = uuid.uuid4().hex[:8]
-            st.error(f"文書チェックに失敗しました ({_request_id})。")
+            st.error(f"匿名化結果の再生成に失敗しました ({_request_id})。")
             with st.expander("詳細トレース"):
                 st.code(traceback.format_exc())
 
-    # Q12 (2026-05-08): 文書チェック完了後の表示 (常時、check_clicked 直後に依存しない)
-    # docs_checked が True なら、preview_docs に紐づくサマリと DL ボタンを表示。
-    if st.session_state.get("docs_checked", False):
+    # Phase 7 段階 1.5 (2026-05-08): preview_docs があれば常時表示
+    # docs_checked ガードを廃止し、プレビュー直後からサマリと DL ボタンが見えるように。
+    # ユーザフィードバック: 「匿名化してプレビュー」直後にサマリは既に見えていたほうが
+    # 自然な UX (「文書チェック」を押すまで見えない、は不自然だった)。
+    if preview_docs:
         # R-W-2 (2026-05-08): 本セッションのマスク判断サマリ
         render_session_summary()
         # R-W-export (2026-05-08): 結果ログのダウンロードボタン

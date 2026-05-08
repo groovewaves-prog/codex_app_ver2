@@ -1213,6 +1213,12 @@ if preview_docs:
     # st.progress と st.status で進捗を可視化する。
     # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
+        # 課題 1 拡張 (2026-05-08): ボタン押下時に「本セッションのマスク判断サマリ」を
+        # 折りたたむ。Streamlit の st.expander は開閉状態を session_state に自動
+        # バインドしないため、True のままだと rerun 後に勝手に再展開してしまう。
+        # ボタン押下時に明示的に False に設定することで、レビュー結果が下に表示される
+        # 際にサマリが邪魔にならない UX を実現する。
+        st.session_state.session_summary_expanded = False
         try:
             preview_docs = st.session_state.get("preview_docs") or preview_docs
             provider_impl = choose_provider()
@@ -1629,9 +1635,9 @@ if review is not None:
                                 unsafe_allow_html=True,
                             )
 
-            # Phase 6 (2026-05-08): この文書のチェック項目評価 (構造定義書 v0.2)
-            # Q19=A: status 重要度順 (unacceptable → ... → not_applicable) で表示
-            # 該当する ChecklistResult のみフィルタ
+            # Phase 7 (2026-05-08): この文書のチェック項目評価表示。
+            # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。
+            # Phase 6 で構築したロジックを温存し、深堀り側で活用する設計。
             _doc_checklists = [
                 cr for cr in (review.checklist_results or ())
                 if cr.source_document == _doc_name
@@ -1716,9 +1722,9 @@ if review is not None:
 
             st.markdown("")  # 文書間の余白
 
-    # Phase 6 (2026-05-08): 欠落章へのサジェスチョン表示
-    # Q20=A: 全文書のレビュー結果の後、開発者モード expander の前に配置
-    # 全文書俯瞰した後で「文書群全体として何が欠けているか」を示す自然な流れ
+    # Phase 7 (2026-05-08): 欠落章サジェスチョン表示
+    # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。
+    # Phase 6 で構築したロジックを温存し、深堀り側で活用する設計。
     _missing_chapters = review.missing_chapters or ()
     # out_of_scope は表示しない (UI からは見せない、LLM の判断は記録に残す)
     _displayable_mc = [

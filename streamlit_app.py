@@ -35,6 +35,8 @@ from secure_review.models import (
 )
 from secure_review.network_guard import LocalUrlError
 from secure_review.reviewer import choose_provider
+# Phase 7 段階 2-C (2026-05-08): 章単位深堀り
+from secure_review.rubric import ChapterSection, extract_chapters_from_text
 from secure_review.run_masking_pipeline import (
     apply_user_decisions,
     run_masking_pipeline,
@@ -303,6 +305,8 @@ def _reset_state() -> None:
         # R-Y (2026-05-08): 深堀結果。リセット時にクリアしないと、
         # 次のレビュー実行時に同名文書の旧深堀結果が表示されてしまう。
         "deep_dive_results",
+        # Phase 7 段階 2-C (2026-05-08): 章境界キャッシュ。文書が変われば再計算。
+        "chapter_sections_cache",
     ):
         st.session_state.pop(key, None)
 
@@ -825,6 +829,8 @@ if preview_clicked:
     # Phase 7 段階 1.5 (2026-05-08): docs_checked フラグ廃止に伴い、リセット不要に
     # 古い deep_dive_results も新 preview には不適合なのでクリア
     st.session_state.pop("deep_dive_results", None)
+    # Phase 7 段階 2-C (2026-05-08): 章キャッシュも古い文書のものなのでクリア
+    st.session_state.pop("chapter_sections_cache", None)
 
     # R-X-2 (2026-05-08): SHA256 で重複アップロードを検出し、あれば中断
     duplicates = _detect_duplicate_uploads()
@@ -1179,6 +1185,8 @@ if preview_docs:
             # 古いレビュー結果が残っていればクリア (新しい判断には合わないため)
             st.session_state.pop("review_result", None)
             st.session_state.pop("deep_dive_results", None)
+            # Phase 7 段階 2-C: outbound_text が変わると章境界が変わる可能性
+            st.session_state.pop("chapter_sections_cache", None)
             st.success(
                 "✅ 匿名化結果を再生成しました。下記サマリで確認できます。"
                 " 「レビューに送信」で LLM レビューを実行できます。"
@@ -1488,6 +1496,167 @@ if review is not None:
                         st.error(f"深堀レビューに失敗しました ({_request_id})。")
                         with st.expander("詳細トレース"):
                             st.code(traceback.format_exc())
+
+            # Phase 7 段階 2-C (2026-05-08): 章境界検出 + 章単位深堀り UI
+            # Q35=A: 3 章以上検出時のみ「複数章ファイル」と判定して章サブグループ表示。
+            # 検出は preview_docs から (LLM 結果ではなく入力テキストベース)。
+            # キャッシュ: session_state.chapter_sections_cache に文書名→ChapterSection
+            # の dict を保持。preview リセット時にクリアされる。
+            _preview_docs_for_chapter = st.session_state.get("preview_docs") or []
+            _doc_for_chapter = next(
+                (d for d in _preview_docs_for_chapter if d.name == _doc_name), None
+            )
+            _chapters: tuple = ()
+            if _doc_for_chapter is not None:
+                # キャッシュチェック (rerun ごとの再計算回避)
+                if "chapter_sections_cache" not in st.session_state:
+                    st.session_state.chapter_sections_cache = {}
+                _cache = st.session_state.chapter_sections_cache
+                if _doc_name not in _cache:
+                    _cache[_doc_name] = extract_chapters_from_text(
+                        _doc_for_chapter.outbound_text
+                    )
+                _chapters = _cache[_doc_name]
+
+            if len(_chapters) >= 3:
+                # 「複数章ファイル」と判定 → 章サブグループ表示
+                st.markdown(
+                    f"<div style='margin-top:0.6rem;padding:0.5rem 0.8rem;"
+                    f"background:#f5f5f0;border-left:3px solid #888;'>"
+                    f"📖 <b>このファイルから {len(_chapters)} 章を検出しました。</b> "
+                    f"章ごとに深堀りできます。</div>",
+                    unsafe_allow_html=True,
+                )
+
+                # 一括ボタン (Q37=A: 順次実行 + 進捗バー)
+                _bulk_btn_key = (
+                    "bulk_deepdive_btn_"
+                    + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:12]
+                )
+                _bulk_clicked = st.button(
+                    f"📚 全章一括深堀り ({len(_chapters)} 章 = {len(_chapters)} calls 消費)",
+                    key=_bulk_btn_key,
+                    help=(
+                        f"検出された {len(_chapters)} 章を順次深堀りレビューします。"
+                        f" Free tier クォータは {len(_chapters)} calls 消費します。"
+                        " 個別の章だけ深堀りしたい場合は、各章の '🔬 この章を深堀' を使用してください。"
+                    ),
+                    width='stretch',
+                )
+
+                if _bulk_clicked:
+                    _preview_docs = st.session_state.get("preview_docs") or []
+                    if not _preview_docs:
+                        st.error("preview_docs が見つかりません。")
+                    else:
+                        try:
+                            _provider_impl = choose_provider()
+                            if _provider_impl.name == "mock":
+                                st.warning(
+                                    "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
+                                )
+                            _enforce_outbound_guard(_provider_impl.name, _preview_docs)
+                            _bulk_progress = st.progress(0.0, text="")
+                            _bulk_total = len(_chapters)
+                            for _i, _ch in enumerate(_chapters, 1):
+                                _bulk_progress.progress(
+                                    _i / _bulk_total,
+                                    text=f"📖 {_i}/{_bulk_total} 章深堀り中: {_ch.chapter_label}",
+                                )
+                                _deep_review = _provider_impl.review(
+                                    _preview_docs,
+                                    document_profile_override,
+                                    deep_dive_target=_doc_name,
+                                    existing_issues=review.issues,
+                                    chapter=_ch,
+                                )
+                                if "deep_dive_results" not in st.session_state:
+                                    st.session_state.deep_dive_results = {}
+                                st.session_state.deep_dive_results.setdefault(
+                                    _doc_name, []
+                                ).append(_deep_review)
+                            _bulk_progress.progress(
+                                1.0, text=f"✅ 全 {_bulk_total} 章の深堀り完了"
+                            )
+                            st.rerun()
+                        except LocalUrlError as exc:
+                            st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
+                        except ValueError as exc:
+                            st.error(str(exc))
+                        except RuntimeError as exc:
+                            st.error(str(exc))
+                        except Exception as exc:  # noqa: BLE001
+                            _request_id = uuid.uuid4().hex[:8]
+                            st.error(f"全章一括深堀りに失敗しました ({_request_id})。")
+                            with st.expander("詳細トレース"):
+                                st.code(traceback.format_exc())
+
+                # 各章の個別ボタン (Q37=A: オンデマンド)
+                with st.expander(f"📖 検出された章一覧 ({len(_chapters)} 章)", expanded=False):
+                    for _ch_idx, _ch in enumerate(_chapters):
+                        _ch_col1, _ch_col2 = st.columns([5, 2])
+                        with _ch_col1:
+                            st.markdown(
+                                f"**{_ch.chapter_label}** "
+                                f"<span style='color:#888;font-size:0.85rem;'>"
+                                f"({_ch.chapter_id}, {len(_ch.extracted_text)} chars)</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with _ch_col2:
+                            _ch_btn_key = (
+                                "ch_deepdive_btn_"
+                                + hashlib.sha256(
+                                    f"{_doc_name}|{_ch.chapter_id}|{_ch_idx}".encode("utf-8")
+                                ).hexdigest()[:12]
+                            )
+                            _ch_clicked = st.button(
+                                "🔬 この章を深堀",
+                                key=_ch_btn_key,
+                                help=(
+                                    f"{_ch.chapter_label} のみを対象に深堀りします。"
+                                    " 該当章のチェック項目で 5 段階評価されます (1 call 消費)。"
+                                ),
+                                width='stretch',
+                            )
+                        if _ch_clicked:
+                            _preview_docs = st.session_state.get("preview_docs") or []
+                            if not _preview_docs:
+                                st.error("preview_docs が見つかりません。")
+                            else:
+                                try:
+                                    _provider_impl = choose_provider()
+                                    if _provider_impl.name == "mock":
+                                        st.warning(
+                                            "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
+                                        )
+                                    _enforce_outbound_guard(_provider_impl.name, _preview_docs)
+                                    with st.spinner(
+                                        f"{_provider_impl.name} で「{_ch.chapter_label}」を深堀レビュー中..."
+                                    ):
+                                        _deep_review = _provider_impl.review(
+                                            _preview_docs,
+                                            document_profile_override,
+                                            deep_dive_target=_doc_name,
+                                            existing_issues=review.issues,
+                                            chapter=_ch,
+                                        )
+                                    if "deep_dive_results" not in st.session_state:
+                                        st.session_state.deep_dive_results = {}
+                                    st.session_state.deep_dive_results.setdefault(
+                                        _doc_name, []
+                                    ).append(_deep_review)
+                                    st.rerun()
+                                except LocalUrlError as exc:
+                                    st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
+                                except ValueError as exc:
+                                    st.error(str(exc))
+                                except RuntimeError as exc:
+                                    st.error(str(exc))
+                                except Exception as exc:  # noqa: BLE001
+                                    _request_id = uuid.uuid4().hex[:8]
+                                    st.error(f"章単位深堀りに失敗しました ({_request_id})。")
+                                    with st.expander("詳細トレース"):
+                                        st.code(traceback.format_exc())
 
             # Q4 修正 (2026-05-08): 指摘なしの場合の表示
             if not _doc_issues:

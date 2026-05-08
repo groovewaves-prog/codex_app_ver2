@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from secure_review.models import SanitizedDocument
@@ -1794,3 +1795,170 @@ def get_checklist_item_by_id(
             if item.item_id == item_id:
                 return item
     return None
+
+
+# ============================================================================
+# Phase 7 段階 2-A (2026-05-08): 章境界検出機能
+# ============================================================================
+# 1 ファイルに複数章が含まれる場合に、章境界を自動検出して章単位で
+# 深堀り評価を可能にする。検出方式は Q34=A: 「第 N 章」+ 「N.」パターン
+# (節レベル N.M は採用せず、UI 複雑化を回避)。
+#
+# 検出失敗時は呼び出し側で fallback (= 1 ファイル全体を深堀り) する設計。
+# ============================================================================
+
+
+@dataclass(frozen=True)
+class ChapterSection:
+    """1 ファイル内で検出された章の範囲 (Phase 7 段階 2)。
+
+    フィールド:
+        chapter_id: 構造定義書 v0.2 の章 ID と紐付け (例: "ch4")。
+            検出した章番号が 1〜15 の範囲外なら "ch_unknown"。
+        chapter_label: 検出された見出しテキスト (例: "第 4 章 ネットワーク構成")。
+            UI 表示用。LLM の章名と異なる場合あり (検出ベース)。
+        detected_chapter_num: 検出された章番号 (1〜N、N が 16 以上の場合あり)。
+        text_start: 文書内の章開始位置 (0-indexed chars)。
+        text_end: 文書内の章終了位置 (排他的、次の章直前 or 文書末尾)。
+        extracted_text: 章本文 (この章だけのテキスト)。
+            depth-dive call で送信するのはこれ。
+    """
+    chapter_id: str
+    chapter_label: str
+    detected_chapter_num: int
+    text_start: int
+    text_end: int
+    extracted_text: str
+
+
+# 章番号検出の正規表現パターン (Q34=A: 「第 N 章」+ 「N.」)
+# - パターン 1: 「第 1 章 はじめに」「第 1章 はじめに」
+# - パターン 2: 「1. はじめに」「1.はじめに」(行頭、N は 1〜2 桁)
+# 両パターンとも全角スペース・半角スペース両対応。
+_CHAPTER_PATTERN_FULL = re.compile(
+    r'^[\s\u3000]*第\s*(\d{1,2})\s*章[\s\u3000]+([^\n]+)$',
+    re.MULTILINE,
+)
+_CHAPTER_PATTERN_SHORT = re.compile(
+    r'^[\s\u3000]*(\d{1,2})\.\s*([^\n]+)$',
+    re.MULTILINE,
+)
+
+
+def extract_chapters_from_text(
+    text: str,
+    *,
+    min_chapters_for_split: int = 3,
+) -> tuple[ChapterSection, ...]:
+    """文書テキストから章境界を検出する (Phase 7 段階 2-A)。
+
+    Q34=A の方針:
+    - パターン 1 「第 N 章」を最優先で試す
+    - パターン 1 で 3 章以上検出できれば、それを採用
+    - そうでなければパターン 2 「N. 」を試す
+    - パターン 2 でも 3 章以上検出できれば採用
+    - どちらでも検出失敗 (3 章未満) なら空 tuple (= fallback で 1 文書全体を扱う)
+
+    Q35=A の方針:
+    - 3 章以上検出時のみ「複数章ファイル」と判定。
+    - 1〜2 章しか検出できなければ、章単位 UI を出さない (空 tuple 返却)。
+
+    Args:
+        text: 検出対象の文書テキスト
+        min_chapters_for_split: 章単位扱いにする最小章数 (default 3、Q35=A)
+
+    Returns:
+        ChapterSection のタプル (検出失敗時は空 tuple)。
+        text_start/text_end/extracted_text は文書内の正確な位置を保持。
+    """
+    # パターン 1 を優先
+    matches_full = list(_CHAPTER_PATTERN_FULL.finditer(text))
+    if len(matches_full) >= min_chapters_for_split:
+        return _build_chapter_sections(text, matches_full, "full")
+
+    # パターン 2 を試す
+    matches_short = list(_CHAPTER_PATTERN_SHORT.finditer(text))
+    # 注意: パターン 2 は誤検出しやすい (例: "1. はじめに" は章だが
+    # "1. 最初に" のような箇条書きも誤マッチする)。検出された章番号が
+    # 連番 (1, 2, 3, ...) になっているかを確認して誤検出を排除する。
+    if len(matches_short) >= min_chapters_for_split:
+        chapter_nums = [int(m.group(1)) for m in matches_short]
+        if _is_sequential_chapter_numbers(chapter_nums):
+            return _build_chapter_sections(text, matches_short, "short")
+
+    # どちらでも検出失敗
+    return ()
+
+
+def _is_sequential_chapter_numbers(nums: list[int]) -> bool:
+    """章番号リストが連番として妥当か判定 (パターン 2 の誤検出排除)。
+
+    妥当な条件:
+    - 最初の番号が 1 (0 や 2 から始まる箇条書きを排除)
+    - 全章の 80% 以上が diff=1 (連続) であること
+      (たまに 1 章スキップしても許容するが、1, 3, 5, 7 のような
+      飛び番号パターンは排除する)
+    - 最後の番号が 15 以下 (15 章を超える文書はないと仮定)
+
+    例:
+    - [1, 2, 3, 4] → True (全て diff=1)
+    - [1, 2, 4, 5] → True (3/3 が diff=1〜2 で 80%+)
+    - [1, 3, 5, 7] → False (全て diff=2、連続性がない)
+    - [3, 4, 5] → False (1 から始まらない)
+    - [1, 2, 3, ..., 30] → False (15 章を超える)
+    """
+    if not nums or nums[0] != 1:
+        return False
+    if nums[-1] > 15:
+        return False
+    if len(nums) < 2:
+        return True
+    # diff の集計
+    diffs = [nums[i + 1] - nums[i] for i in range(len(nums) - 1)]
+    # 全 diff が 1〜2 以内であり、かつ diff=1 の割合が 80% 以上
+    if any(d < 1 or d > 2 for d in diffs):
+        return False
+    # diff=1 の割合
+    seq_count = sum(1 for d in diffs if d == 1)
+    seq_ratio = seq_count / len(diffs)
+    return seq_ratio >= 0.8
+
+
+def _build_chapter_sections(
+    text: str,
+    matches: list,  # list[re.Match]
+    pattern_kind: str,  # "full" or "short"
+) -> tuple[ChapterSection, ...]:
+    """正規表現マッチ結果から ChapterSection のリストを構築。
+
+    各章の text_start は match.start() (見出し行の先頭)、
+    text_end は次の match.start() 直前 (or 文書末尾)。
+    """
+    sections: list[ChapterSection] = []
+    for i, m in enumerate(matches):
+        chapter_num = int(m.group(1))
+        chapter_title = m.group(2).strip()
+        text_start = m.start()
+        text_end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
+
+        if pattern_kind == "full":
+            chapter_label = f"第 {chapter_num} 章 {chapter_title}"
+        else:
+            chapter_label = f"{chapter_num}. {chapter_title}"
+
+        # 構造定義書 v0.2 の章 ID と紐付け
+        # 検出した章番号が 1〜15 の範囲なら "ch{N}"、範囲外なら "ch_unknown"
+        if 1 <= chapter_num <= 15:
+            chapter_id = f"ch{chapter_num}"
+        else:
+            chapter_id = "ch_unknown"
+
+        sections.append(ChapterSection(
+            chapter_id=chapter_id,
+            chapter_label=chapter_label,
+            detected_chapter_num=chapter_num,
+            text_start=text_start,
+            text_end=text_end,
+            extracted_text=text[text_start:text_end].strip(),
+        ))
+    return tuple(sections)

@@ -1518,8 +1518,21 @@ if review is not None:
                     )
                 _chapters = _cache[_doc_name]
 
+            # Phase 8 段階 8-C (2026-05-11): 開発者モード連動 UI 切り替え
+            # 設計方針 (Q61'=A、Q64'=B):
+            # - 開発者モード OFF (管理者向け、デフォルト):
+            #   「🔬 最初の章のみ深堀り (1 call)」ボタン 1 つだけ表示。
+            #   UI 冗長性ゼロ、誤操作リスクなし、TPM 消費最小。
+            # - 開発者モード ON (groovewaves-prog 等の開発者向け):
+            #   「📚 全章一括深堀り」+「📖 検出された章一覧」expander +
+            #   各章「🔬 この章を深堀」ボタン (フル機能、Phase 7 段階 2-C 通り)。
+            # 切り替え: サイドバーの「⚙️ 開発者モード」 toggle、即時反映。
+            # 環境変数 DEVELOPER_MODE_DEFAULT=true で初期値を ON にできる
+            # (将来のローカル LLM 移行時、クォータ制約なしになれば常時 ON 推奨)。
+            _is_dev_mode = st.session_state.get("developer_mode", False)
+
             if len(_chapters) >= 3:
-                # 「複数章ファイル」と判定 → 章サブグループ表示
+                # 「複数章ファイル」と判定 → 章サブグループ表示 (両モード共通)
                 st.markdown(
                     f"<div style='margin-top:0.6rem;padding:0.5rem 0.8rem;"
                     f"background:#f5f5f0;border-left:3px solid #888;'>"
@@ -1528,135 +1541,202 @@ if review is not None:
                     unsafe_allow_html=True,
                 )
 
-                # 一括ボタン (Q37=A: 順次実行 + 進捗バー)
-                _bulk_btn_key = (
-                    "bulk_deepdive_btn_"
-                    + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:12]
-                )
-                _bulk_clicked = st.button(
-                    f"📚 全章一括深堀り ({len(_chapters)} 章 = {len(_chapters)} calls 消費)",
-                    key=_bulk_btn_key,
-                    help=(
-                        f"検出された {len(_chapters)} 章を順次深堀りレビューします。"
-                        f" Free tier クォータは {len(_chapters)} calls 消費します。"
-                        " 個別の章だけ深堀りしたい場合は、各章の '🔬 この章を深堀' を使用してください。"
-                    ),
-                    width='stretch',
-                )
+                if _is_dev_mode:
+                    # ============================================================
+                    # 開発者モード ON: 全章一括ボタン + 章一覧 expander + 個別ボタン
+                    # ============================================================
+                    _bulk_btn_key = (
+                        "bulk_deepdive_btn_"
+                        + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:12]
+                    )
+                    _bulk_clicked = st.button(
+                        f"📚 全章一括深堀り ({len(_chapters)} 章 = {len(_chapters)} calls 消費)",
+                        key=_bulk_btn_key,
+                        help=(
+                            f"検出された {len(_chapters)} 章を順次深堀りレビューします。"
+                            f" Free tier クォータは {len(_chapters)} calls 消費します。"
+                            " 個別の章だけ深堀りしたい場合は、各章の '🔬 この章を深堀' を使用してください。"
+                            " (開発者モード ON 時のみ表示)"
+                        ),
+                        width='stretch',
+                    )
 
-                if _bulk_clicked:
-                    _preview_docs = st.session_state.get("preview_docs") or []
-                    if not _preview_docs:
-                        st.error("preview_docs が見つかりません。")
-                    else:
-                        try:
-                            _provider_impl = choose_provider()
-                            if _provider_impl.name == "mock":
-                                st.warning(
-                                    "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
-                                )
-                            _enforce_outbound_guard(_provider_impl.name, _preview_docs)
-                            _bulk_progress = st.progress(0.0, text="")
-                            _bulk_total = len(_chapters)
-                            for _i, _ch in enumerate(_chapters, 1):
-                                _bulk_progress.progress(
-                                    _i / _bulk_total,
-                                    text=f"📖 {_i}/{_bulk_total} 章深堀り中: {_ch.chapter_label}",
-                                )
-                                _deep_review = _provider_impl.review(
-                                    _preview_docs,
-                                    document_profile_override,
-                                    deep_dive_target=_doc_name,
-                                    existing_issues=review.issues,
-                                    chapter=_ch,
-                                )
-                                if "deep_dive_results" not in st.session_state:
-                                    st.session_state.deep_dive_results = {}
-                                st.session_state.deep_dive_results.setdefault(
-                                    _doc_name, []
-                                ).append(_deep_review)
-                            _bulk_progress.progress(
-                                1.0, text=f"✅ 全 {_bulk_total} 章の深堀り完了"
-                            )
-                            st.rerun()
-                        except LocalUrlError as exc:
-                            st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
-                        except ValueError as exc:
-                            st.error(str(exc))
-                        except RuntimeError as exc:
-                            st.error(str(exc))
-                        except Exception as exc:  # noqa: BLE001
-                            _request_id = uuid.uuid4().hex[:8]
-                            st.error(f"全章一括深堀りに失敗しました ({_request_id})。")
-                            with st.expander("詳細トレース"):
-                                st.code(traceback.format_exc())
-
-                # 各章の個別ボタン (Q37=A: オンデマンド)
-                with st.expander(f"📖 検出された章一覧 ({len(_chapters)} 章)", expanded=False):
-                    for _ch_idx, _ch in enumerate(_chapters):
-                        _ch_col1, _ch_col2 = st.columns([5, 2])
-                        with _ch_col1:
-                            st.markdown(
-                                f"**{_ch.chapter_label}** "
-                                f"<span style='color:#888;font-size:0.85rem;'>"
-                                f"({_ch.chapter_id}, {len(_ch.extracted_text)} chars)</span>",
-                                unsafe_allow_html=True,
-                            )
-                        with _ch_col2:
-                            _ch_btn_key = (
-                                "ch_deepdive_btn_"
-                                + hashlib.sha256(
-                                    f"{_doc_name}|{_ch.chapter_id}|{_ch_idx}".encode("utf-8")
-                                ).hexdigest()[:12]
-                            )
-                            _ch_clicked = st.button(
-                                "🔬 この章を深堀",
-                                key=_ch_btn_key,
-                                help=(
-                                    f"{_ch.chapter_label} のみを対象に深堀りします。"
-                                    " 該当章のチェック項目で 5 段階評価されます (1 call 消費)。"
-                                ),
-                                width='stretch',
-                            )
-                        if _ch_clicked:
-                            _preview_docs = st.session_state.get("preview_docs") or []
-                            if not _preview_docs:
-                                st.error("preview_docs が見つかりません。")
-                            else:
-                                try:
-                                    _provider_impl = choose_provider()
-                                    if _provider_impl.name == "mock":
-                                        st.warning(
-                                            "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
-                                        )
-                                    _enforce_outbound_guard(_provider_impl.name, _preview_docs)
-                                    with st.spinner(
-                                        f"{_provider_impl.name} で「{_ch.chapter_label}」を深堀レビュー中..."
-                                    ):
-                                        _deep_review = _provider_impl.review(
-                                            _preview_docs,
-                                            document_profile_override,
-                                            deep_dive_target=_doc_name,
-                                            existing_issues=review.issues,
-                                            chapter=_ch,
-                                        )
+                    if _bulk_clicked:
+                        _preview_docs = st.session_state.get("preview_docs") or []
+                        if not _preview_docs:
+                            st.error("preview_docs が見つかりません。")
+                        else:
+                            try:
+                                _provider_impl = choose_provider()
+                                if _provider_impl.name == "mock":
+                                    st.warning(
+                                        "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
+                                    )
+                                _enforce_outbound_guard(_provider_impl.name, _preview_docs)
+                                _bulk_progress = st.progress(0.0, text="")
+                                _bulk_total = len(_chapters)
+                                for _i, _ch in enumerate(_chapters, 1):
+                                    _bulk_progress.progress(
+                                        _i / _bulk_total,
+                                        text=f"📖 {_i}/{_bulk_total} 章深堀り中: {_ch.chapter_label}",
+                                    )
+                                    _deep_review = _provider_impl.review(
+                                        _preview_docs,
+                                        document_profile_override,
+                                        deep_dive_target=_doc_name,
+                                        existing_issues=review.issues,
+                                        chapter=_ch,
+                                    )
                                     if "deep_dive_results" not in st.session_state:
                                         st.session_state.deep_dive_results = {}
                                     st.session_state.deep_dive_results.setdefault(
                                         _doc_name, []
                                     ).append(_deep_review)
-                                    st.rerun()
-                                except LocalUrlError as exc:
-                                    st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
-                                except ValueError as exc:
-                                    st.error(str(exc))
-                                except RuntimeError as exc:
-                                    st.error(str(exc))
-                                except Exception as exc:  # noqa: BLE001
-                                    _request_id = uuid.uuid4().hex[:8]
-                                    st.error(f"章単位深堀りに失敗しました ({_request_id})。")
-                                    with st.expander("詳細トレース"):
-                                        st.code(traceback.format_exc())
+                                _bulk_progress.progress(
+                                    1.0, text=f"✅ 全 {_bulk_total} 章の深堀り完了"
+                                )
+                                st.rerun()
+                            except LocalUrlError as exc:
+                                st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
+                            except ValueError as exc:
+                                st.error(str(exc))
+                            except RuntimeError as exc:
+                                st.error(str(exc))
+                            except Exception as exc:  # noqa: BLE001
+                                _request_id = uuid.uuid4().hex[:8]
+                                st.error(f"全章一括深堀りに失敗しました ({_request_id})。")
+                                with st.expander("詳細トレース"):
+                                    st.code(traceback.format_exc())
+
+                    # 各章の個別ボタン (開発者モード ON 時のみ、Q64'=B)
+                    with st.expander(f"📖 検出された章一覧 ({len(_chapters)} 章)", expanded=False):
+                        for _ch_idx, _ch in enumerate(_chapters):
+                            _ch_col1, _ch_col2 = st.columns([5, 2])
+                            with _ch_col1:
+                                st.markdown(
+                                    f"**{_ch.chapter_label}** "
+                                    f"<span style='color:#888;font-size:0.85rem;'>"
+                                    f"({_ch.chapter_id}, {len(_ch.extracted_text)} chars)</span>",
+                                    unsafe_allow_html=True,
+                                )
+                            with _ch_col2:
+                                _ch_btn_key = (
+                                    "ch_deepdive_btn_"
+                                    + hashlib.sha256(
+                                        f"{_doc_name}|{_ch.chapter_id}|{_ch_idx}".encode("utf-8")
+                                    ).hexdigest()[:12]
+                                )
+                                _ch_clicked = st.button(
+                                    "🔬 この章を深堀",
+                                    key=_ch_btn_key,
+                                    help=(
+                                        f"{_ch.chapter_label} のみを対象に深堀りします。"
+                                        " 該当章のチェック項目で 5 段階評価されます (1 call 消費)。"
+                                    ),
+                                    width='stretch',
+                                )
+                            if _ch_clicked:
+                                _preview_docs = st.session_state.get("preview_docs") or []
+                                if not _preview_docs:
+                                    st.error("preview_docs が見つかりません。")
+                                else:
+                                    try:
+                                        _provider_impl = choose_provider()
+                                        if _provider_impl.name == "mock":
+                                            st.warning(
+                                                "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
+                                            )
+                                        _enforce_outbound_guard(_provider_impl.name, _preview_docs)
+                                        with st.spinner(
+                                            f"{_provider_impl.name} で「{_ch.chapter_label}」を深堀レビュー中..."
+                                        ):
+                                            _deep_review = _provider_impl.review(
+                                                _preview_docs,
+                                                document_profile_override,
+                                                deep_dive_target=_doc_name,
+                                                existing_issues=review.issues,
+                                                chapter=_ch,
+                                            )
+                                        if "deep_dive_results" not in st.session_state:
+                                            st.session_state.deep_dive_results = {}
+                                        st.session_state.deep_dive_results.setdefault(
+                                            _doc_name, []
+                                        ).append(_deep_review)
+                                        st.rerun()
+                                    except LocalUrlError as exc:
+                                        st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
+                                    except ValueError as exc:
+                                        st.error(str(exc))
+                                    except RuntimeError as exc:
+                                        st.error(str(exc))
+                                    except Exception as exc:  # noqa: BLE001
+                                        _request_id = uuid.uuid4().hex[:8]
+                                        st.error(f"章単位深堀りに失敗しました ({_request_id})。")
+                                        with st.expander("詳細トレース"):
+                                            st.code(traceback.format_exc())
+                else:
+                    # ============================================================
+                    # 開発者モード OFF (管理者向け、デフォルト):
+                    # 「🔬 最初の章のみ深堀り (1 call)」ボタン 1 つだけ
+                    # 誤操作リスクなし、TPM 消費最小、UI 冗長性ゼロ
+                    # ============================================================
+                    _first_chapter = _chapters[0]
+                    _first_btn_key = (
+                        "first_chapter_deepdive_btn_"
+                        + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:12]
+                    )
+                    _first_clicked = st.button(
+                        f"🔬 最初の章のみ深堀り (検証用、1 call、対象: {_first_chapter.chapter_label})",
+                        key=_first_btn_key,
+                        help=(
+                            f"検出された {len(_chapters)} 章のうち、最初の章"
+                            f" ({_first_chapter.chapter_label}) のみを深堀りレビューします。"
+                            " 1 call 消費。検証用の TPM 消費抑制モードです。"
+                            " 全章一括や個別章選択は、サイドバーの '⚙️ 開発者モード' を"
+                            " ON にすると利用できます。"
+                        ),
+                        width='stretch',
+                    )
+
+                    if _first_clicked:
+                        _preview_docs = st.session_state.get("preview_docs") or []
+                        if not _preview_docs:
+                            st.error("preview_docs が見つかりません。")
+                        else:
+                            try:
+                                _provider_impl = choose_provider()
+                                if _provider_impl.name == "mock":
+                                    st.warning(
+                                        "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
+                                    )
+                                _enforce_outbound_guard(_provider_impl.name, _preview_docs)
+                                with st.spinner(
+                                    f"{_provider_impl.name} で「{_first_chapter.chapter_label}」を深堀レビュー中..."
+                                ):
+                                    _deep_review = _provider_impl.review(
+                                        _preview_docs,
+                                        document_profile_override,
+                                        deep_dive_target=_doc_name,
+                                        existing_issues=review.issues,
+                                        chapter=_first_chapter,
+                                    )
+                                if "deep_dive_results" not in st.session_state:
+                                    st.session_state.deep_dive_results = {}
+                                st.session_state.deep_dive_results.setdefault(
+                                    _doc_name, []
+                                ).append(_deep_review)
+                                st.rerun()
+                            except LocalUrlError as exc:
+                                st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
+                            except ValueError as exc:
+                                st.error(str(exc))
+                            except RuntimeError as exc:
+                                st.error(str(exc))
+                            except Exception as exc:  # noqa: BLE001
+                                _request_id = uuid.uuid4().hex[:8]
+                                st.error(f"最初の章の深堀りに失敗しました ({_request_id})。")
+                                with st.expander("詳細トレース"):
+                                    st.code(traceback.format_exc())
 
             # Q4 修正 (2026-05-08): 指摘なしの場合の表示
             if not _doc_issues:

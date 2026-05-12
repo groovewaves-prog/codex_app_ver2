@@ -221,6 +221,14 @@ PROFILE_LABELS = {
     "source_code": "ソースコード",
 }
 
+ISSUE_ID_PREFIX_HELP = {
+    "design": "D = Design（設計書）",
+    "proposal": "P = Proposal（企画書）",
+    "change_runbook": "CR = Change Runbook（変更・切替手順書）",
+    "operations_runbook": "OR = Operations Runbook（保守・運用手順書）",
+    "source_code": "SC = Source Code（ソースコード）",
+}
+
 # B3: total verdict labels (A / B / C / D from the structured summary).
 VERDICT_LABELS = {
     "A": "A: 問題なし",
@@ -269,6 +277,12 @@ def _profile_label(value: str | None) -> str:
     return PROFILE_LABELS.get(value, value)
 
 
+def _issue_id_prefix_help(value: str | None) -> str:
+    if value is None:
+        return "I = Issue（レビュー指摘）"
+    return ISSUE_ID_PREFIX_HELP.get(value, "I = Issue（レビュー指摘）")
+
+
 def _verdict_badge(verdict: str) -> str:
     """B3: render an A/B/C/D verdict badge using existing decision-* classes."""
     if not verdict:
@@ -303,6 +317,7 @@ def _reset_state() -> None:
         "preview_attempted",
         "send_approval",
         "anonymization_details_visible",
+        "anonymization_details_expand_once",
         "review_result",
         # R-M (PR-D2)
         "masking_states",
@@ -427,7 +442,11 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
     )
 
 
-def _render_anonymization_detail_panel(preview_docs: list[SanitizedDocument]) -> None:
+def _render_anonymization_detail_panel(
+    preview_docs: list[SanitizedDocument],
+    *,
+    expanded: bool = False,
+) -> None:
     st.markdown("#### 匿名化後テキスト確認")
     st.caption(
         "下記が外部 LLM に送信される匿名化済みテキストです。"
@@ -437,7 +456,7 @@ def _render_anonymization_detail_panel(preview_docs: list[SanitizedDocument]) ->
         digest = hashlib.sha256(
             f"{doc.name}|{doc.outbound_text}|{doc.sanitized_excerpt}".encode("utf-8")
         ).hexdigest()[:12]
-        with st.expander(f"📄 {doc.name} の匿名化結果", expanded=True):
+        with st.expander(f"📄 {doc.name} の匿名化結果", expanded=expanded):
             meta_cols = st.columns(4)
             meta_cols[0].metric("推定トークン", doc.estimated_input_tokens)
             meta_cols[1].metric("置換数", len(doc.replacements))
@@ -983,6 +1002,7 @@ if preview_clicked:
         "preview_trace",
         "send_approval",
         "anonymization_details_visible",
+        "anonymization_details_expand_once",
         "review_result",
     ):
         st.session_state.pop(key, None)
@@ -1019,6 +1039,7 @@ if preview_clicked:
         st.session_state.preview_docs = sanitized
         st.session_state.preview_warnings = warnings
         st.session_state.anonymization_details_visible = True
+        st.session_state.anonymization_details_expand_once = True
         st.session_state.pop("review_result", None)
 
         # ----- R-M (PR-D2): 未確定候補抽出と gBizINFO 検索 -----
@@ -1390,6 +1411,7 @@ if preview_docs:
             st.session_state.pop("deep_dive_results", None)
             st.session_state.pop("send_approval", None)
             st.session_state.anonymization_details_visible = True
+            st.session_state.anonymization_details_expand_once = True
             # Phase 7 段階 2-C: outbound_text が変わると章境界が変わる可能性
             st.session_state.pop("chapter_sections_cache", None)
             st.success(
@@ -1409,7 +1431,13 @@ if preview_docs:
     if preview_docs:
         _render_anonymization_summary(preview_docs)
         if st.session_state.get("anonymization_details_visible", False):
-            _render_anonymization_detail_panel(preview_docs)
+            _expand_anonymization_details = bool(
+                st.session_state.pop("anonymization_details_expand_once", False)
+            )
+            _render_anonymization_detail_panel(
+                preview_docs,
+                expanded=_expand_anonymization_details,
+            )
         # R-W-2 (2026-05-08): 本セッションのマスク判断サマリ
         render_session_summary()
         # R-W-export (2026-05-08): 結果ログのダウンロードボタン
@@ -1769,6 +1797,12 @@ if review is not None:
                     "より詳細な分析が必要なら章別概要レビュー内の「🔬 この章を深堀」をご利用ください。"
                     "</div>",
                     unsafe_allow_html=True,
+                )
+            else:
+                st.caption(
+                    "以下は概要レビューで検出された主な指摘です。"
+                    f"指摘IDの接頭辞は {_issue_id_prefix_help(review.document_profile)} を示し、"
+                    "番号はこのレビュー内の管理番号です。"
                 )
 
             # 既存指摘の表示 (severity 順)

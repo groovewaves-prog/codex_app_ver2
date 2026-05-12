@@ -126,6 +126,134 @@ class GeminiRetryTests(unittest.TestCase):
         self.assertEqual(len(captured_timeouts), 4)
         self.assertEqual(captured_timeouts, [7, 7, 7, 7])
 
+    def test_gemma_model_disables_response_schema_by_default(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "dummy",
+                "GEMMA_MODEL": "gemma-4-31b-it",
+            },
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        payload = provider._build_payload("Return JSON.")
+        generation_config = payload["generationConfig"]
+        self.assertEqual(generation_config["responseMimeType"], "application/json")
+        self.assertNotIn("responseSchema", generation_config)
+
+    def test_gemini_model_keeps_response_schema_by_default(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "dummy",
+                "GEMINI_MODEL": "gemini-2.5-flash",
+            },
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        payload = provider._build_payload("Return JSON.")
+        self.assertIn("responseSchema", payload["generationConfig"])
+
+    def test_response_schema_can_be_forced_for_gemma_model(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "dummy",
+                "GEMMA_MODEL": "gemma-4-31b-it",
+                "GEMINI_USE_RESPONSE_SCHEMA": "true",
+            },
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        payload = provider._build_payload("Return JSON.")
+        self.assertIn("responseSchema", payload["generationConfig"])
+
+    def test_schema_http_500_falls_back_without_response_schema(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "dummy",
+                "GEMINI_MODEL": "gemini-2.5-flash",
+                "GEMINI_MAX_RETRIES": "0",
+            },
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        schema_flags: list[bool] = []
+
+        def fake_post(_url, payload, _headers, **_kwargs):
+            schema_flags.append("responseSchema" in payload["generationConfig"])
+            if len(schema_flags) == 1:
+                raise UpstreamHttpError(
+                    "Gemini returned HTTP 500.",
+                    status_code=500,
+                    retryable=True,
+                )
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": '{"summary": "ok", "issues": []}'},
+                            ],
+                        }
+                    }
+                ]
+            }
+
+        with patch("secure_review.reviewer.post_json_safely", side_effect=fake_post):
+            result = provider.review([_doc()])
+
+        self.assertEqual(result.summary, "ok")
+        self.assertEqual(schema_flags, [True, False])
+
+    def test_json_mode_http_500_falls_back_to_plain_text(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "dummy",
+                "GEMMA_MODEL": "gemma-4-31b-it",
+                "GEMINI_MAX_RETRIES": "0",
+            },
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        json_mode_flags: list[bool] = []
+
+        def fake_post(_url, payload, _headers, **_kwargs):
+            json_mode_flags.append(
+                payload["generationConfig"].get("responseMimeType")
+                == "application/json"
+            )
+            if len(json_mode_flags) == 1:
+                raise UpstreamHttpError(
+                    "Gemini returned HTTP 500.",
+                    status_code=500,
+                    retryable=True,
+                )
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"text": '{"summary": "ok", "issues": []}'},
+                            ],
+                        }
+                    }
+                ]
+            }
+
+        with patch("secure_review.reviewer.post_json_safely", side_effect=fake_post):
+            result = provider.review([_doc()])
+
+        self.assertEqual(result.summary, "ok")
+        self.assertEqual(json_mode_flags, [True, False])
+
     def test_quota_errors_do_not_retry(self) -> None:
         with patch.dict(
             os.environ,

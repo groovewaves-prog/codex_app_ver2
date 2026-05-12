@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -648,6 +649,14 @@ class GeminiApiReviewProvider(ReviewProvider):
         self.max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
         self.temperature = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
         self.timeout_seconds = _env_int("GEMINI_TIMEOUT_SECONDS", self.timeout_seconds, minimum=1)
+        # Gemma-hosted endpoints can be less tolerant of strict server-side
+        # response schemas than Gemini models. Keep JSON mode, but default the
+        # schema constraint to Gemini model IDs only. Operators can override
+        # this with GEMINI_USE_RESPONSE_SCHEMA=true/false.
+        self.use_response_schema = _env_bool(
+            "GEMINI_USE_RESPONSE_SCHEMA",
+            _model_supports_response_schema(self.model),
+        )
 
         # 課題 2 改修 (2026-05-08, レビュー後修正): max_retries を環境変数で制御
         # (戦略 C: リトライ強化を本番のみに限定、既存テスト互換性を維持)
@@ -938,20 +947,35 @@ class GeminiApiReviewProvider(ReviewProvider):
             chapter_overviews=tuple(per_doc_chapter_overviews),
         )
 
-    def _build_payload(self, prompt: str) -> dict:
+    def _build_payload(
+        self,
+        prompt: str,
+        *,
+        include_response_schema: bool | None = None,
+    ) -> dict:
         """Gemini API リクエストペイロードを構築 (共通処理)。"""
+        if include_response_schema is None:
+            include_response_schema = getattr(self, "use_response_schema", True)
+        generation_config = {
+            "temperature": self.temperature,
+            "maxOutputTokens": self.max_output_tokens,
+            "responseMimeType": "application/json",
+        }
+        if include_response_schema:
+            generation_config["responseSchema"] = REVIEW_RESPONSE_SCHEMA
         return {
             "system_instruction": {"parts": [{"text": SYSTEM_PROMPT}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": self.temperature,
-                "maxOutputTokens": self.max_output_tokens,
-                "responseMimeType": "application/json",
-                "responseSchema": REVIEW_RESPONSE_SCHEMA,
-            },
+            "generationConfig": generation_config,
         }
 
-    def _post_with_retry(self, payload: dict) -> dict:
+    def _post_with_retry(
+        self,
+        payload: dict,
+        *,
+        allow_schema_fallback: bool = True,
+        allow_json_mode_fallback: bool = True,
+    ) -> dict:
         """課題 2 改修 (2026-05-08): リトライ機構強化版。
 
         変更点:
@@ -1027,6 +1051,36 @@ class GeminiApiReviewProvider(ReviewProvider):
                     attempt + 1,
                     self.max_retries + 1,
                 )
+                if (
+                    allow_schema_fallback
+                    and _payload_has_response_schema(payload)
+                    and _is_schema_fallback_candidate(exc)
+                ):
+                    LOGGER.warning(
+                        "Gemini call failed with responseSchema (status=%s); "
+                        "retrying once more without responseSchema.",
+                        getattr(exc, "status_code", None),
+                    )
+                    return self._post_with_retry(
+                        _payload_without_response_schema(payload),
+                        allow_schema_fallback=False,
+                        allow_json_mode_fallback=allow_json_mode_fallback,
+                    )
+                if (
+                    allow_json_mode_fallback
+                    and _payload_has_json_mode(payload)
+                    and _is_schema_fallback_candidate(exc)
+                ):
+                    LOGGER.warning(
+                        "Gemini call failed with JSON mode (status=%s); "
+                        "retrying once more as plain text.",
+                        getattr(exc, "status_code", None),
+                    )
+                    return self._post_with_retry(
+                        _payload_without_json_mode(payload),
+                        allow_schema_fallback=False,
+                        allow_json_mode_fallback=False,
+                    )
                 raise
         # Defensive: loop above always either returns or raises.
         raise last_error or RuntimeError("Gemini call failed with no error captured.")
@@ -1411,6 +1465,57 @@ def _env_float(name: str, default: float, *, minimum: float | None = None) -> fl
     if minimum is not None and value < minimum:
         return minimum
     return value
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "y", "on"}:
+        return True
+    if raw in {"0", "false", "no", "n", "off"}:
+        return False
+    LOGGER.warning("Ignoring invalid boolean value for %s.", name)
+    return default
+
+
+def _model_supports_response_schema(model: str) -> bool:
+    """Default strict schema mode only for Gemini model identifiers."""
+
+    return model.strip().lower().startswith("gemini-")
+
+
+def _payload_has_response_schema(payload: dict) -> bool:
+    generation_config = payload.get("generationConfig", {})
+    return isinstance(generation_config, dict) and "responseSchema" in generation_config
+
+
+def _payload_without_response_schema(payload: dict) -> dict:
+    fallback_payload = copy.deepcopy(payload)
+    generation_config = fallback_payload.get("generationConfig", {})
+    if isinstance(generation_config, dict):
+        generation_config.pop("responseSchema", None)
+    return fallback_payload
+
+
+def _payload_has_json_mode(payload: dict) -> bool:
+    generation_config = payload.get("generationConfig", {})
+    return (
+        isinstance(generation_config, dict)
+        and generation_config.get("responseMimeType") == "application/json"
+    )
+
+
+def _payload_without_json_mode(payload: dict) -> dict:
+    fallback_payload = _payload_without_response_schema(payload)
+    generation_config = fallback_payload.get("generationConfig", {})
+    if isinstance(generation_config, dict):
+        generation_config.pop("responseMimeType", None)
+    return fallback_payload
+
+
+def _is_schema_fallback_candidate(exc: UpstreamHttpError) -> bool:
+    return getattr(exc, "status_code", None) in {500, 502, 503, 504}
 
 
 def _parse_review_response(content: str, documents: list[SanitizedDocument]) -> list[ReviewIssue]:

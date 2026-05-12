@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import io
+import json
 import os
 import re
 import traceback
@@ -69,8 +70,8 @@ if "env_loaded" not in st.session_state:
     load_dotenv()
     try:
         for key, value in st.secrets.items():
-            if isinstance(value, str) and key not in os.environ:
-                os.environ[key] = value
+            if isinstance(value, (str, int, float, bool)) and key not in os.environ:
+                os.environ[key] = str(value)
     except (FileNotFoundError, st.errors.StreamlitSecretNotFoundError):
         # No secrets.toml present (typical for local dev). Not an error.
         pass
@@ -297,6 +298,9 @@ def _reset_state() -> None:
         "preview_docs",
         "preview_warnings",
         "preview_security",
+        "preview_error",
+        "preview_trace",
+        "preview_attempted",
         "review_result",
         # R-M (PR-D2)
         "masking_states",
@@ -391,7 +395,6 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
             )
         )
     return items
-
 
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
@@ -813,7 +816,7 @@ st.file_uploader(
 col1, col2 = st.columns([1, 5])
 with col1:
     preview_clicked = st.button(
-        "匿名化してプレビュー",
+        "匿名化結果を確認",
         type="primary",
         disabled=not _get_uploads(),  # R-X-1: 動的 uploader_key 経由
         width='stretch',
@@ -826,6 +829,10 @@ with col2:
 
 
 if preview_clicked:
+    st.session_state.preview_attempted = True
+    for key in ("preview_docs", "preview_warnings", "preview_error", "preview_trace", "review_result"):
+        st.session_state.pop(key, None)
+
     # Phase 7 段階 1.5 (2026-05-08): docs_checked フラグ廃止に伴い、リセット不要に
     # 古い deep_dive_results も新 preview には不適合なのでクリア
     st.session_state.pop("deep_dive_results", None)
@@ -848,9 +855,13 @@ if preview_clicked:
         st.stop()  # 以降の preview 処理を中断
 
     documents = _uploaded_to_documents()
+    progress = st.progress(0, text="文書を読み込んでいます...")
     try:
+        progress.progress(20, text="ローカル匿名化パイプラインを開始しています...")
         with st.spinner("ローカルで匿名化中..."):
+            progress.progress(45, text="抽出・匿名化・機密度判定を実行しています...")
             sanitized, warnings = _run_sanitization_pipeline(documents)
+        progress.progress(85, text="匿名化結果プレビューを準備しています...")
         st.session_state.preview_docs = sanitized
         st.session_state.preview_warnings = warnings
         st.session_state.pop("review_result", None)
@@ -911,20 +922,38 @@ if preview_clicked:
             # R-M OFF の場合は既存 masking_states をクリア
             st.session_state.masking_states = {}
             st.session_state.user_decisions = {}
+        progress.progress(100, text="匿名化結果プレビューの準備が完了しました。")
     except LocalUrlError as exc:
-        st.error(
+        progress.progress(100, text="匿名化処理で停止しました。")
+        st.session_state.preview_error = (
             "ローカル限定エンドポイントの設定に問題があります: "
             f"{exc}。LOCAL_SANITIZER_API_URL と LOCAL_SENSITIVITY_API_URL を確認してください。"
         )
     except Exception as exc:  # noqa: BLE001
-        st.error(f"匿名化処理に失敗しました: {exc}")
-        with st.expander("詳細トレース"):
-            st.code(traceback.format_exc())
+        progress.progress(100, text="匿名化処理で停止しました。")
+        st.session_state.preview_error = f"匿名化処理に失敗しました: {exc}"
+        st.session_state.preview_trace = traceback.format_exc()
 
 
 # -- Step 2: Preview -------------------------------------------------------
 
+preview_error = st.session_state.get("preview_error")
+if preview_error:
+    st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
+    st.error(preview_error)
+    st.info(
+        "匿名化結果が作成されなかったため、ステップ 3 には進めません。"
+        "設定やローカル Ollama の起動状態を確認してから、もう一度「匿名化結果を確認」を押してください。"
+    )
+    if st.session_state.get("preview_trace"):
+        with st.expander("詳細トレース"):
+            st.code(st.session_state.preview_trace)
+
 preview_docs = st.session_state.get("preview_docs")
+if st.session_state.get("preview_attempted") and not preview_error and not preview_docs:
+    st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
+    st.info("匿名化結果はまだ作成されていません。ファイルを確認して、もう一度実行してください。")
+
 if preview_docs:
     st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
 
@@ -1081,6 +1110,11 @@ if preview_docs:
                     f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。 {_label_suffix}",
                     key=f"confirm_{doc.name}",
                 )
+    elif not blocked_docs:
+        st.success(
+            "追加承認が必要な文書はありません。"
+            "匿名化結果を確認したうえで、このまま外部レビューへ送信できます。"
+        )
 
     all_confirmed = (not mask_docs) or all(confirmations.get(doc.name) for doc in mask_docs)
     can_send = bool(preview_docs) and not blocked_docs and all_confirmed
@@ -1215,6 +1249,7 @@ if preview_docs:
     # st.progress と st.status で進捗を可視化する。
     # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
+        review_progress = st.progress(0.0, text="送信前チェックを開始しています...")
         # 課題 1 拡張 (2026-05-08): ボタン押下時に「本セッションのマスク判断サマリ」を
         # 折りたたむ。Streamlit の st.expander は開閉状態を session_state に自動
         # バインドしないため、True のままだと rerun 後に勝手に再展開してしまう。
@@ -1223,7 +1258,9 @@ if preview_docs:
         st.session_state.session_summary_expanded = False
         try:
             preview_docs = st.session_state.get("preview_docs") or preview_docs
+            review_progress.progress(20, text="レビュー LLM の設定を確認しています...")
             provider_impl = choose_provider()
+            review_progress.progress(40, text="外部送信ガードを確認しています...")
             _enforce_outbound_guard(provider_impl.name, preview_docs)
 
             # 進捗表示用 progress bar (chunking で文書ごとに更新)
@@ -1249,24 +1286,33 @@ if preview_docs:
                     pass
 
             with st.spinner(f"{provider_impl.name} でレビュー実行中..."):
+                review_progress.progress(
+                    65,
+                    text=f"{provider_impl.name} に匿名化済みテキストを送信し、レビューを実行しています...",
+                )
                 review = provider_impl.review(
                     preview_docs,
                     document_profile_override,
                     progress_callback=_update_progress,
                 )
+            review_progress.progress(100, text="レビューが完了しました。")
 
             # progress bar をクリア (結果表示の邪魔にならないように)
             _progress_bar.empty()
 
             st.session_state.review_result = review
         except LocalUrlError as exc:
+            review_progress.progress(100, text="レビュー処理で停止しました。")
             st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
         except ValueError as exc:
+            review_progress.progress(100, text="レビュー処理で停止しました。")
             st.error(str(exc))
         except RuntimeError as exc:
             # Gemini quota and similar user-actionable errors come through here.
+            review_progress.progress(100, text="レビュー処理で停止しました。")
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
+            review_progress.progress(100, text="レビュー処理で停止しました。")
             request_id = uuid.uuid4().hex[:8]
             st.error(f"レビューに失敗しました ({request_id})。詳細はサーバログを確認してください。")
             with st.expander("詳細トレース"):

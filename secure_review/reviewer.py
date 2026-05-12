@@ -604,6 +604,7 @@ class GeminiApiReviewProvider(ReviewProvider):
     # デフォルト 0 は本番テスト容易性のため (テストでは時間を浪費しない)。
     # 環境変数 GEMINI_CHUNKING_INTERVAL で 6.0 (= 60s/10req) のような値に設定可。
     chunking_interval_seconds = 0.0
+    timeout_seconds = 180
 
     def __init__(self) -> None:
         self.api_key = os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip()
@@ -617,6 +618,7 @@ class GeminiApiReviewProvider(ReviewProvider):
         # 環境変数 GEMINI_MAX_OUTPUT_TOKENS で上書き可能。
         self.max_output_tokens = int(os.getenv("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
         self.temperature = float(os.getenv("GEMINI_TEMPERATURE", "0.2"))
+        self.timeout_seconds = _env_int("GEMINI_TIMEOUT_SECONDS", self.timeout_seconds, minimum=1)
 
         # 課題 2 改修 (2026-05-08, レビュー後修正): max_retries を環境変数で制御
         # (戦略 C: リトライ強化を本番のみに限定、既存テスト互換性を維持)
@@ -935,6 +937,7 @@ class GeminiApiReviewProvider(ReviewProvider):
                         "Content-Type": "application/json",
                         "x-goog-api-key": self.api_key,
                     },
+                    timeout=getattr(self, "timeout_seconds", type(self).timeout_seconds),
                     context_label=f"Gemini ({self.model})",
                 )
             except UpstreamHttpError as exc:
@@ -1323,6 +1326,34 @@ def _first_finish_reason(payload: dict) -> str | None:
 def _looks_like_quota(message: str) -> bool:
     lower = message.lower()
     return any(marker.lower() in lower for marker in _GEMINI_QUOTA_MARKERS)
+
+
+def _env_int(name: str, default: int, *, minimum: int | None = None) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        LOGGER.warning("Ignoring invalid integer value for %s.", name)
+        return default
+    if minimum is not None and value < minimum:
+        return minimum
+    return value
+
+
+def _env_float(name: str, default: float, *, minimum: float | None = None) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        LOGGER.warning("Ignoring invalid float value for %s.", name)
+        return default
+    if minimum is not None and value < minimum:
+        return minimum
+    return value
 
 
 def _parse_review_response(content: str, documents: list[SanitizedDocument]) -> list[ReviewIssue]:

@@ -98,6 +98,34 @@ class GeminiRetryTests(unittest.TestCase):
         # Initial + 1 retry = 2 calls.
         self.assertEqual(call_count["n"], 2)
 
+    def test_gemini_retry_and_timeout_are_configurable(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GEMINI_API_KEY": "dummy",
+                "GEMINI_MODEL": "gemma-4-31b-it",
+                "GEMINI_MAX_RETRIES": "3",
+                "GEMINI_TIMEOUT_SECONDS": "7",
+            },
+            clear=True,
+        ):
+            provider = GeminiApiReviewProvider()
+
+        captured_timeouts: list[int] = []
+
+        def fake_post(*args, **kwargs):
+            captured_timeouts.append(kwargs["timeout"])
+            raise UpstreamHttpError("transport failed.")
+
+        with patch("secure_review.reviewer.post_json_safely", side_effect=fake_post), \
+             patch("secure_review.reviewer.time.sleep"):
+            with self.assertRaises(UpstreamHttpError):
+                provider.review([_doc()])
+
+        # Initial + 3 retries = 4 calls.
+        self.assertEqual(len(captured_timeouts), 4)
+        self.assertEqual(captured_timeouts, [7, 7, 7, 7])
+
     def test_quota_errors_do_not_retry(self) -> None:
         with patch.dict(
             os.environ,

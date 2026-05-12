@@ -302,6 +302,7 @@ def _reset_state() -> None:
         "preview_trace",
         "preview_attempted",
         "send_approval",
+        "anonymization_details_visible",
         "review_result",
         # R-M (PR-D2)
         "masking_states",
@@ -424,6 +425,59 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
         f"LLM 送信対象の推定トークン数: {estimated_tokens:,}。"
         "送信されるのは匿名化済みテキストのみです。"
     )
+
+
+def _render_anonymization_detail_panel(preview_docs: list[SanitizedDocument]) -> None:
+    st.markdown("#### 匿名化後テキスト確認")
+    st.caption(
+        "下記が外部 LLM に送信される匿名化済みテキストです。"
+        "必要に応じて置換一覧も確認してください。"
+    )
+    for doc in preview_docs:
+        digest = hashlib.sha256(
+            f"{doc.name}|{doc.outbound_text}|{doc.sanitized_excerpt}".encode("utf-8")
+        ).hexdigest()[:12]
+        with st.expander(f"📄 {doc.name} の匿名化結果", expanded=True):
+            meta_cols = st.columns(4)
+            meta_cols[0].metric("推定トークン", doc.estimated_input_tokens)
+            meta_cols[1].metric("置換数", len(doc.replacements))
+            meta_cols[2].metric("外部送信リスク", doc.outbound_risk)
+            meta_cols[3].metric(
+                "判定",
+                {
+                    "safe": "安全",
+                    "mask_and_continue": "要確認",
+                    "block": "送信禁止",
+                }.get(doc.local_sensitivity_decision, doc.local_sensitivity_decision),
+            )
+            tabs = st.tabs(["LLM送信対象テキスト", "匿名化後の抜粋", "置換一覧"])
+            with tabs[0]:
+                st.text_area(
+                    "LLM送信対象テキスト",
+                    value=doc.outbound_text or "(空)",
+                    height=260,
+                    disabled=True,
+                    key=f"outbound_text_confirm_{digest}",
+                    label_visibility="collapsed",
+                )
+            with tabs[1]:
+                st.text_area(
+                    "匿名化後の抜粋",
+                    value=doc.sanitized_excerpt or "(空)",
+                    height=220,
+                    disabled=True,
+                    key=f"sanitized_excerpt_confirm_{digest}",
+                    label_visibility="collapsed",
+                )
+            with tabs[2]:
+                if doc.replacements:
+                    rows = [
+                        {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
+                        for r in doc.replacements
+                    ]
+                    st.dataframe(rows, width='stretch', hide_index=True)
+                else:
+                    st.caption("置換は記録されませんでした。")
 
 
 def _find_chapter_overview(review, doc_name: str, chapter: ChapterSection):
@@ -928,6 +982,7 @@ if preview_clicked:
         "preview_error",
         "preview_trace",
         "send_approval",
+        "anonymization_details_visible",
         "review_result",
     ):
         st.session_state.pop(key, None)
@@ -963,6 +1018,7 @@ if preview_clicked:
         progress.progress(85, text="匿名化結果プレビューを準備しています...")
         st.session_state.preview_docs = sanitized
         st.session_state.preview_warnings = warnings
+        st.session_state.anonymization_details_visible = True
         st.session_state.pop("review_result", None)
 
         # ----- R-M (PR-D2): 未確定候補抽出と gBizINFO 検索 -----
@@ -1333,6 +1389,7 @@ if preview_docs:
             st.session_state.pop("review_result", None)
             st.session_state.pop("deep_dive_results", None)
             st.session_state.pop("send_approval", None)
+            st.session_state.anonymization_details_visible = True
             # Phase 7 段階 2-C: outbound_text が変わると章境界が変わる可能性
             st.session_state.pop("chapter_sections_cache", None)
             st.success(
@@ -1351,6 +1408,8 @@ if preview_docs:
     # 自然な UX (「文書チェック」を押すまで見えない、は不自然だった)。
     if preview_docs:
         _render_anonymization_summary(preview_docs)
+        if st.session_state.get("anonymization_details_visible", False):
+            _render_anonymization_detail_panel(preview_docs)
         # R-W-2 (2026-05-08): 本セッションのマスク判断サマリ
         render_session_summary()
         # R-W-export (2026-05-08): 結果ログのダウンロードボタン

@@ -364,6 +364,34 @@ class ReviewPayloadParsingTests(unittest.TestCase):
         self.assertEqual(len(issues), 1)
         self.assertEqual(issues[0].title, "legacy title")
 
+    def test_payload_extracts_json_from_markdown_or_prefix_text(self) -> None:
+        """Gemini can occasionally wrap JSON despite JSON-mode instructions."""
+        from secure_review.reviewer import _parse_review_payload
+
+        content = (
+            "レビュー結果です。\n```json\n"
+            '{"summary": "全体概要", "issues": []}'
+            "\n```"
+        )
+        summary, _, issues = _parse_review_payload(content, [_doc(name="doc.md")])
+        self.assertEqual(summary, "全体概要")
+        self.assertEqual(issues, [])
+
+    def test_chapter_overviews_are_parsed(self) -> None:
+        from secure_review.reviewer import _parse_chapter_overviews
+
+        content = (
+            '{"summary": "全体概要", "issues": [], "chapter_overviews": ['
+            '{"source_document": "design.docx", "chapter_id": "ch1", '
+            '"chapter_label": "第 1 章 はじめに", "summary": "目的と背景", '
+            '"review": "目的は読み取れる", "needs_deep_dive": true}'
+            ']}'
+        )
+        overviews = _parse_chapter_overviews(content, [_doc(name="design.docx")])
+        self.assertEqual(len(overviews), 1)
+        self.assertEqual(overviews[0].chapter_id, "ch1")
+        self.assertTrue(overviews[0].needs_deep_dive)
+
 
 class GeminiSummarySurfacingTests(unittest.TestCase):
     """R-B + R-C: the Gemini provider must surface the model's own summary

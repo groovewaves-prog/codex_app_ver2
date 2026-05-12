@@ -12,6 +12,7 @@ import urllib.request
 from typing import Callable
 
 from secure_review.models import (
+    ChapterOverview,
     ChecklistResult,
     MissingChapter,
     ReviewIssue,
@@ -26,6 +27,7 @@ from secure_review.rubric import (
     ReviewRubric,
     classify_documents,
     choose_rubric,
+    extract_chapters_from_text,
     get_chapter_by_id,
     render_chapter_checklist_for_prompt,
     render_rubric_for_prompt,
@@ -44,6 +46,16 @@ JSON オブジェクトのみを返してください。コードブロックや
 
 {
   "summary": "全体評価 (3-5 文の日本語、重大な懸念点を含める)",
+  "chapter_overviews": [
+    {
+      "source_document": "対象文書名",
+      "chapter_id": "ch1",
+      "chapter_label": "第 1 章 はじめに",
+      "summary": "この章の内容要約",
+      "review": "概要レベルの評価",
+      "needs_deep_dive": false
+    }
+  ],
   "issues": [
     {
       "severity": "high",
@@ -66,6 +78,7 @@ JSON オブジェクトのみを返してください。コードブロックや
 - 重大な不足や整合性の問題のみを指摘してください (細かすぎる指摘は不要)。
 - recommendation は具体的に記述してください。「対応してください」のような抽象表現は避け、含めるべき要素を列挙すること。
 - 指摘がない場合は issues を空配列 [] にしてください。
+- 章が提示されている場合、chapter_overviews には提示された全章を漏れなく含めてください。
 - 事実ベースで客観的に。「不適切である」より「〜のリスクがある」「〜の改善余地がある」を好む。
 """
 
@@ -124,6 +137,20 @@ REVIEW_RESPONSE_SCHEMA = {
                     "title",
                     "source_document",
                 ],
+            },
+        },
+        "chapter_overviews": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_document": {"type": "string"},
+                    "chapter_id": {"type": "string"},
+                    "chapter_label": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "review": {"type": "string"},
+                    "needs_deep_dive": {"type": "boolean"},
+                },
             },
         },
         # Phase 5 (2026-05-08): 構造定義書 v0.2 ベースの 5 段階評価結果。
@@ -537,6 +564,7 @@ class HttpLlmReviewProvider(ReviewProvider):
         # own summary; fall back to an explicit Japanese notice when absent.
         # B2: extract structured summary too; assign profile-based issue IDs.
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        chapter_overviews = _parse_chapter_overviews(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         # Phase 7 (2026-05-08): 一段目では checklist_results / missing_chapters は
         # 取得しない (一段目シンプル化)。
@@ -567,6 +595,7 @@ class HttpLlmReviewProvider(ReviewProvider):
             model=self.model,
             checklist_results=checklist_results,
             missing_chapters=missing_chapters,
+            chapter_overviews=chapter_overviews,
         )
 
 
@@ -747,6 +776,7 @@ class GeminiApiReviewProvider(ReviewProvider):
                 "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
             )
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        chapter_overviews = _parse_chapter_overviews(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         # Phase 7 (2026-05-08): 一段目では checklist_results / missing_chapters は
         # 取得しない (一段目シンプル化)。
@@ -777,6 +807,7 @@ class GeminiApiReviewProvider(ReviewProvider):
             model=self.model,
             checklist_results=checklist_results,
             missing_chapters=missing_chapters,
+            chapter_overviews=chapter_overviews,
         )
 
     def _review_chunked(
@@ -801,6 +832,7 @@ class GeminiApiReviewProvider(ReviewProvider):
         per_doc_summaries: list[str] = []
         per_doc_raw_responses: list[str] = []
         per_doc_prompts: list[str] = []
+        per_doc_chapter_overviews: list[ChapterOverview] = []
         # Phase 7 (2026-05-08): 集約 call と checklist 抽出を一段目から削除。
         # checklist_results / missing_chapters は深堀り call で取得する設計に変更。
         failed_docs: list[tuple[str, str]] = []  # (doc_name, error_message)
@@ -832,6 +864,7 @@ class GeminiApiReviewProvider(ReviewProvider):
                     )
                 # 1 文書のレビュー結果から issues を抽出
                 doc_summary, _struct, doc_issues = _parse_review_payload(content, [doc])
+                per_doc_chapter_overviews.extend(_parse_chapter_overviews(content, [doc]))
                 all_issues.extend(doc_issues)
                 if doc_summary:
                     per_doc_summaries.append(f"【{doc_name}】{doc_summary}")
@@ -902,6 +935,7 @@ class GeminiApiReviewProvider(ReviewProvider):
             prompt="\n\n".join(per_doc_prompts)[:50000],  # 上限 50k chars (UI 表示用、Phase 7-D で拡張予定)
             raw_response="\n\n".join(per_doc_raw_responses)[:50000],
             model=self.model,
+            chapter_overviews=tuple(per_doc_chapter_overviews),
         )
 
     def _build_payload(self, prompt: str) -> dict:
@@ -1210,12 +1244,33 @@ def build_prompt(
         sections.append("")
         sections.append(f"(本レビューでは合計 {total} 文書を順に提示します。連番付きファイル名は番号順にソート済みです。)")
 
+    detected_chapter_lines: list[str] = []
     for index, document in enumerate(documents, start=1):
         if total > 1:
             sections.append(f"--- 文書 {index}/{total}: {document.name} ---")
         else:
             sections.append(f"--- 文書: {document.name} ---")
         sections.append(document.outbound_text)
+        chapters = extract_chapters_from_text(document.outbound_text)
+        if chapters:
+            for chapter_item in chapters:
+                detected_chapter_lines.append(
+                    f"- source_document={document.name} / "
+                    f"chapter_id={chapter_item.chapter_id} / "
+                    f"chapter_label={chapter_item.chapter_label}"
+                )
+
+    if detected_chapter_lines:
+        sections.extend(
+            [
+                "",
+                "# 章別概要レビューの出力指示",
+                "上記文書から検出された章は以下です。",
+                "chapter_overviews には、以下の全章について 1 件ずつ、章の要約と概要レベルの評価を返してください。",
+                "重大な指摘は issues にも分離し、chapter_overviews は全章の俯瞰に使ってください。",
+                *detected_chapter_lines,
+            ]
+        )
 
     return "\n".join(sections)
 
@@ -1245,6 +1300,7 @@ def _build_review_result(
     summary_structured: ReviewSummary | None = None,
     checklist_results: tuple = (),
     missing_chapters: tuple = (),
+    chapter_overviews: tuple = (),
 ) -> ReviewResult:
     """Phase 5 (2026-05-08): checklist_results と missing_chapters 引数を追加。
 
@@ -1266,6 +1322,7 @@ def _build_review_result(
         summary_structured=summary_structured or ReviewSummary(),
         checklist_results=checklist_results,
         missing_chapters=missing_chapters,
+        chapter_overviews=chapter_overviews or _build_local_chapter_overviews(documents),
     )
 
 
@@ -1403,6 +1460,26 @@ def _assign_issue_ids(
     return issues
 
 
+def _extract_json_object_text(content: str) -> str:
+    """Return the first plausible JSON object from a model response."""
+
+    text = content.strip()
+    if not text:
+        return ""
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+        text = text.strip()
+    if text.startswith("{") and text.rstrip().endswith("}"):
+        return text
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return text[start : end + 1].strip()
+    return ""
+
+
 def _parse_checklist_results(
     content: str, source_doc_fallback: str = ""
 ) -> tuple[ChecklistResult, ...]:
@@ -1418,14 +1495,8 @@ def _parse_checklist_results(
     Returns:
         ChecklistResult のタプル (LLM が返さなかった場合は空)
     """
-    text = content.strip()
+    text = _extract_json_object_text(content)
     if not text:
-        return ()
-    # markdown フェンスを除去
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    if not (text.startswith("{") and text.rstrip().endswith("}")):
         return ()
     try:
         payload = json.loads(text)
@@ -1478,13 +1549,8 @@ def _parse_missing_chapters(content: str) -> tuple[MissingChapter, ...]:
     Returns:
         MissingChapter のタプル (LLM が返さなかった場合は空)
     """
-    text = content.strip()
+    text = _extract_json_object_text(content)
     if not text:
-        return ()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    if not (text.startswith("{") and text.rstrip().endswith("}")):
         return ()
     try:
         payload = json.loads(text)
@@ -1518,6 +1584,74 @@ def _parse_missing_chapters(content: str) -> tuple[MissingChapter, ...]:
             suggested_content=str(entry.get("suggested_content") or "").strip(),
         ))
     return tuple(results)
+
+
+def _parse_chapter_overviews(
+    content: str,
+    documents: list[SanitizedDocument],
+) -> tuple[ChapterOverview, ...]:
+    text = _extract_json_object_text(content)
+    if not text:
+        return ()
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        return ()
+    if not isinstance(payload, dict):
+        return ()
+    raw_list = payload.get("chapter_overviews", [])
+    if not isinstance(raw_list, list):
+        return ()
+
+    default_source = documents[0].name if documents else ""
+    overviews: list[ChapterOverview] = []
+    for entry in raw_list:
+        if not isinstance(entry, dict):
+            continue
+        chapter_label = str(entry.get("chapter_label") or "").strip()
+        summary = str(entry.get("summary") or "").strip()
+        review = str(entry.get("review") or "").strip()
+        if not chapter_label or not (summary or review):
+            continue
+        needs_deep_dive_raw = entry.get("needs_deep_dive", False)
+        needs_deep_dive = (
+            needs_deep_dive_raw
+            if isinstance(needs_deep_dive_raw, bool)
+            else str(needs_deep_dive_raw).strip().lower() in {"true", "1", "yes", "要", "必要"}
+        )
+        overviews.append(
+            ChapterOverview(
+                source_document=str(entry.get("source_document") or default_source).strip(),
+                chapter_id=str(entry.get("chapter_id") or "").strip(),
+                chapter_label=chapter_label,
+                summary=summary,
+                review=review,
+                needs_deep_dive=needs_deep_dive,
+            )
+        )
+    return tuple(overviews)
+
+
+def _build_local_chapter_overviews(
+    documents: list[SanitizedDocument],
+) -> tuple[ChapterOverview, ...]:
+    """Fallback chapter overview when the LLM does not return one."""
+
+    overviews: list[ChapterOverview] = []
+    for document in documents:
+        for chapter in extract_chapters_from_text(document.outbound_text):
+            excerpt = re.sub(r"\s+", " ", chapter.extracted_text).strip()[:220]
+            overviews.append(
+                ChapterOverview(
+                    source_document=document.name,
+                    chapter_id=chapter.chapter_id,
+                    chapter_label=chapter.chapter_label,
+                    summary=excerpt or "章本文を抽出できませんでした。",
+                    review="LLM から章別概要が返らなかったため、抽出した章本文の抜粋を表示しています。",
+                    needs_deep_dive=False,
+                )
+            )
+    return tuple(overviews)
 
 
 def _parse_review_payload(
@@ -1556,18 +1690,9 @@ def _parse_json_payload(
     ``(summary_text, summary_struct, issues)`` (issues possibly empty) when
     JSON parses successfully.
     """
-    text = content.strip()
+    text = _extract_json_object_text(content)
     empty_summary = ReviewSummary()
     if not text:
-        return "", empty_summary, None
-
-    # Strip optional markdown fences the model may have added despite the
-    # explicit instruction to return JSON only.
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-
-    if not (text.startswith("{") and text.rstrip().endswith("}")):
         return "", empty_summary, None
 
     try:
@@ -1677,7 +1802,7 @@ def _parse_json_issues(
     content: str, documents: list[SanitizedDocument]
 ) -> list[ReviewIssue] | None:
     """Backwards-compat shim. Prefer ``_parse_json_payload``."""
-    _, issues = _parse_json_payload(content, documents)
+    _, _, issues = _parse_json_payload(content, documents)
     return issues
 
 
@@ -1718,11 +1843,12 @@ def _parse_issue_blocks(content: str, documents: list[SanitizedDocument]) -> lis
 
     return [
         ReviewIssue(
-            severity="medium",
-            title="LLM review response",
+            severity="info",
+            title="LLM応答形式を解析できませんでした",
             details=content[:500] or "No review text was returned.",
-            recommendation="Confirm the provider response format and prompt template.",
+            recommendation="結果ログの LLM 生レスポンスを確認し、JSON 形式で返っているか確認してください。",
             source_document=default_source,
+            issue_id="PARSE-001",
         )
     ]
 

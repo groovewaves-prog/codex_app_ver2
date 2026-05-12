@@ -215,6 +215,19 @@ class ReviewIssue:
 
 
 @dataclass
+class ChapterOverview:
+    source_document: str
+    chapter_id: str
+    chapter_label: str
+    summary: str
+    review: str = ""
+    needs_deep_dive: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class ReviewResult:
     summary: str
     issues: list[ReviewIssue]
@@ -244,6 +257,7 @@ class ReviewResult:
     # missing_chapters: 集約 call で得た欠落章サジェスチョンのリスト
     checklist_results: tuple = field(default_factory=tuple)
     missing_chapters: tuple = field(default_factory=tuple)
+    chapter_overviews: tuple = field(default_factory=tuple)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -261,6 +275,7 @@ class ReviewResult:
             "model": self.model,
             "checklist_results": [r.to_dict() for r in self.checklist_results],
             "missing_chapters": [m.to_dict() for m in self.missing_chapters],
+            "chapter_overviews": [c.to_dict() for c in self.chapter_overviews],
         }
 
 

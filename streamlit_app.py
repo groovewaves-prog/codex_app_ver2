@@ -661,16 +661,17 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         if f.kind in {"chapter_structure_missing", "structure_template_suggestion", "structure_organization_suggestion"}
     ]
 
-    cols = st.columns(6)
+    cols = st.columns(7)
     cols[0].metric("対象文書", result.document_count)
     cols[1].metric("検出章", result.detected_chapter_count)
     cols[2].metric("重要不足", len(high_findings))
     cols[3].metric("要確認", len(medium_findings))
     cols[4].metric("不足観点", len(missing_chapters))
-    cols[5].metric("整理提案", len(organization_suggestions))
+    cols[5].metric("必須要素不足", len(item_gaps))
+    cols[6].metric("整理提案", len(organization_suggestions))
 
     if not findings:
-        st.success("標準構成上の明確な欠落章・必須要素不足は検出されませんでした。")
+        st.success("標準構成上の明確な不足観点・必須要素不足・構成整理提案は検出されませんでした。")
         return
 
     st.warning(
@@ -678,6 +679,7 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         "「不足観点」は該当する記述が見当たらないもの、"
         "「必須要素不足」は記述はあるものの中身が足りないもの、"
         "「構成整理の提案」は記述はあるものの見出し・章・粒度を整理した方がよいものです。"
+        "章概要レビューは各章本文の概要評価であり、ここでは文書全体の管理項目も含めて確認します。"
     )
 
     severity_order = {"high": 0, "medium": 1, "info": 2}
@@ -714,9 +716,13 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
                 title_parts.append("構成整理の提案")
                 if finding.chapter_name:
                     title_parts.append(f"対象観点: {finding.chapter_name}")
+            elif finding.kind == "required_item_gap":
+                title_parts.append(f"必須要素不足: {finding.item_name or '未指定'}")
+                if finding.chapter_name:
+                    title_parts.append(f"確認範囲: {finding.chapter_name}")
             elif finding.chapter_name:
                 title_parts.append(f"不足観点: {finding.chapter_name}")
-            if finding.item_name:
+            if finding.item_name and finding.kind != "required_item_gap":
                 title_parts.append(f"必須要素: {finding.item_name}")
             title = " · ".join(title_parts)
             suggested = ""

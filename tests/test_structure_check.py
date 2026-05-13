@@ -61,7 +61,53 @@ class StructureCheckTests(unittest.TestCase):
         }
         self.assertIn("1.1", item_ids)
         messages = "\n".join(finding.message for finding in result.findings)
-        self.assertIn("不足観点「はじめに」", messages)
+        self.assertIn("確認範囲「はじめに」", messages)
+
+    def test_document_wide_items_are_not_forced_into_intro(self) -> None:
+        result = build_structure_check_result(
+            [
+                _doc(
+                    "design.docx",
+                    "第 1 章 はじめに\n本書の目的と対象範囲を示す。\n"
+                    "第 2 章 システム要件\n機能要件と非機能要件を定義する。\n"
+                    "第 3 章 システム全体構成\n全体構成図と構成要素を示す。\n"
+                    "第 7 章 運用体制\n関係者、責任範囲、エスカレーションパスを示す。\n"
+                    "付録 改訂履歴\n版番号、改訂日、改訂内容、承認者を示す。",
+                )
+            ],
+            "design",
+        )
+        item_ids = {
+            finding.item_id
+            for finding in result.findings
+            if finding.kind == "required_item_gap"
+        }
+        self.assertNotIn("1.3", item_ids)
+        self.assertNotIn("1.6", item_ids)
+
+    def test_document_wide_items_are_reported_as_document_scope(self) -> None:
+        result = build_structure_check_result(
+            [
+                _doc(
+                    "design.docx",
+                    "第 1 章 はじめに\n本書の目的と対象範囲を示す。\n"
+                    "第 2 章 システム要件\n機能要件と非機能要件を定義する。\n"
+                    "第 3 章 システム全体構成\n全体構成図と構成要素を示す。",
+                )
+            ],
+            "design",
+        )
+        document_wide_gaps = [
+            finding
+            for finding in result.findings
+            if finding.kind == "required_item_gap"
+            and finding.item_id in {"1.3", "1.6"}
+        ]
+        self.assertTrue(document_wide_gaps)
+        self.assertTrue(all(finding.chapter_name == "文書全体" for finding in document_wide_gaps))
+        messages = "\n".join(finding.message for finding in document_wide_gaps)
+        self.assertIn("文書全体", messages)
+        self.assertNotIn("不足観点「はじめに」", messages)
 
     def test_design_plain_text_gets_template_suggestion(self) -> None:
         result = build_structure_check_result(

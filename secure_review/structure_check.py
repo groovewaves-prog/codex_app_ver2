@@ -5,6 +5,7 @@ from dataclasses import dataclass
 
 from secure_review.models import SanitizedDocument
 from secure_review.rubric import (
+    ChapterChecklistItem,
     ChapterSection,
     DESIGN_DOC_STRUCTURE_V0_2,
     StandardChapter,
@@ -54,11 +55,17 @@ CRITICAL_DESIGN_CHAPTER_IDS = {
 }
 
 
+DOCUMENT_WIDE_REQUIRED_ITEM_IDS = {
+    "1.3",  # stakeholders / responsibility can live in a RACI, appendix, or operations chapter.
+    "1.6",  # revision history is often front matter, back matter, or a separate appendix.
+}
+
+
 CRITICAL_ITEM_KEYWORDS: dict[str, tuple[str, ...]] = {
     "1.1": ("目的", "背景", "ねらい", "対象システム", "想定読者", "成果"),
     "1.2": ("スコープ", "対象範囲", "対象外", "範囲", "境界"),
     "1.3": ("関係者", "体制", "責任", "責任分界", "エスカレーション", "ベンダ"),
-    "1.6": ("改訂履歴", "変更履歴", "版", "承認者"),
+    "1.6": ("改訂履歴", "変更履歴", "版番号", "改訂日", "承認者"),
     "2.1": ("業務要件", "業務目的", "現状業務", "改善目標"),
     "2.2": ("機能要件", "機能一覧", "ユースケース", "入出力"),
     "2.3": ("非機能", "NFR", "可用性", "性能", "セキュリティ", "コスト"),
@@ -236,30 +243,77 @@ def _build_design_structure_check(
                 continue
             if item.item_id not in CRITICAL_ITEM_KEYWORDS:
                 continue
+            if item.item_id in DOCUMENT_WIDE_REQUIRED_ITEM_IDS:
+                continue
             if not _item_is_covered(chapter.extracted_text, item.item_id):
                 findings.append(
-                    StructureFinding(
-                        kind="required_item_gap",
-                        severity="high" if item.weight >= 3 else "medium",
-                        chapter_id=standard_chapter.chapter_id,
-                        chapter_name=standard_chapter.chapter_name,
-                        item_id=item.item_id,
-                        item_name=item.item_name,
+                    _required_item_gap_finding(
+                        standard_chapter,
+                        item,
                         source_document=doc_name,
-                        expected_content=item.expected_content,
-                        message=(
-                            f"不足観点「{standard_chapter.chapter_name}」で、"
-                            f"必須要素「{item.item_name}」"
-                            "が明確に見当たりません。"
-                        ),
+                        scope_name=standard_chapter.chapter_name,
                     )
                 )
+
+    for standard_chapter in DESIGN_DOC_STRUCTURE_V0_2:
+        for item in standard_chapter.items:
+            if item.item_id not in DOCUMENT_WIDE_REQUIRED_ITEM_IDS:
+                continue
+            if item.item_id not in CRITICAL_ITEM_KEYWORDS:
+                continue
+            if _item_is_covered(combined_text, item.item_id):
+                continue
+            findings.append(
+                _required_item_gap_finding(
+                    standard_chapter,
+                    item,
+                    scope_name="文書全体",
+                    document_wide=True,
+                )
+            )
 
     return StructureCheckResult(
         "design",
         len(documents),
         len(all_chapters),
         tuple(findings),
+    )
+
+
+def _required_item_gap_finding(
+    standard_chapter: StandardChapter,
+    item: ChapterChecklistItem,
+    *,
+    source_document: str = "",
+    scope_name: str = "",
+    document_wide: bool = False,
+) -> StructureFinding:
+    scope = scope_name or standard_chapter.chapter_name
+    if document_wide:
+        message = (
+            f"必須要素「{item.item_name}」が文書全体で明確に見当たりません。"
+            "配置は先頭・末尾・別章・付録でも構いませんが、"
+            "レビュー時に確認できる形で記載してください。"
+        )
+        chapter_id = ""
+        chapter_name = scope
+    else:
+        message = (
+            f"確認範囲「{scope}」で、"
+            f"必須要素「{item.item_name}」が明確に見当たりません。"
+        )
+        chapter_id = standard_chapter.chapter_id
+        chapter_name = standard_chapter.chapter_name
+    return StructureFinding(
+        kind="required_item_gap",
+        severity="high" if item.weight >= 3 else "medium",
+        chapter_id=chapter_id,
+        chapter_name=chapter_name,
+        item_id=item.item_id,
+        item_name=item.item_name,
+        source_document=source_document,
+        expected_content=item.expected_content,
+        message=message,
     )
 
 

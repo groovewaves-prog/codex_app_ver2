@@ -704,6 +704,29 @@ def _render_sticky_task_panel(action: NextAction, active_status: str) -> None:
     st.markdown("</div>", unsafe_allow_html=True)
 
 
+def _render_task_panel_for_state(
+    slot,
+    *,
+    preview_docs: list[SanitizedDocument],
+    blocked_docs: list[SanitizedDocument],
+    confirmation_docs: list[SanitizedDocument],
+    send_approved: bool,
+    active_status: str,
+) -> None:
+    """Render the single source-of-truth workflow task panel."""
+    action = next_action_for_preview(
+        has_preview_docs=bool(preview_docs),
+        blocked_count=len(blocked_docs),
+        confirmation_count=len(confirmation_docs),
+        send_approved=send_approved,
+        review_in_progress=active_status == "レビュー中",
+        review_done=active_status == "レビュー完了",
+    )
+    slot.empty()
+    with slot.container():
+        _render_sticky_task_panel(action, active_status)
+
+
 def _scroll_height_control(
     label: str,
     *,
@@ -743,22 +766,6 @@ def _render_review_bundle_overview(
         estimate = estimate_review_token_budget(preview_docs, document_profile_override)
     except Exception:
         estimate = None
-
-    action = next_action_for_preview(
-        has_preview_docs=bool(preview_docs),
-        blocked_count=len(blocked_docs),
-        confirmation_count=len(confirmation_docs),
-        send_approved=send_approved,
-        review_in_progress=bool(st.session_state.get("review_in_progress")),
-        review_done=st.session_state.get("review_result") is not None,
-    )
-    _render_sticky_task_panel(
-        action,
-        _active_status_for_preview(
-            blocked_docs=blocked_docs,
-            send_approved=send_approved,
-        ),
-    )
 
     st.markdown("<div class='bundle-card'>", unsafe_allow_html=True)
     st.markdown("<div class='bundle-kicker'>Review Bundle</div>", unsafe_allow_html=True)
@@ -1953,6 +1960,8 @@ if st.session_state.get("preview_attempted") and not preview_error and not previ
 if preview_docs:
     st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
 
+    _task_panel_slot = st.empty()
+
     warnings = st.session_state.get("preview_warnings", [])
     if warnings:
         with st.expander(f"抽出・パイプライン警告 ({len(warnings)} 件)"):
@@ -2193,8 +2202,6 @@ if preview_docs:
 
     can_send = bool(preview_docs) and not blocked_docs and send_approved
 
-    status_bar_slot = st.empty()
-
     send_col, status_col = st.columns([1.6, 4])
     with send_col:
         send_clicked = st.button(
@@ -2235,8 +2242,14 @@ if preview_docs:
         active_status = "送信準備完了"
     else:
         active_status = "確認待ち"
-    with status_bar_slot.container():
-        _render_review_status_bar(active_status)
+    _render_task_panel_for_state(
+        _task_panel_slot,
+        preview_docs=preview_docs,
+        blocked_docs=blocked_docs,
+        confirmation_docs=mask_docs,
+        send_approved=send_approved,
+        active_status=active_status,
+    )
 
     # Q12 (2026-05-08): 「レビューに送信」押下時の処理
     # LLM 送信のみ (文書チェック後の preview_docs を使用)。
@@ -2294,37 +2307,62 @@ if preview_docs:
 
             st.session_state.review_result = review
             st.session_state.review_in_progress = False
-            status_bar_slot.empty()
-            with status_bar_slot.container():
-                _render_review_status_bar("レビュー完了")
+            _render_task_panel_for_state(
+                _task_panel_slot,
+                preview_docs=preview_docs,
+                blocked_docs=blocked_docs,
+                confirmation_docs=mask_docs,
+                send_approved=send_approved,
+                active_status="レビュー完了",
+            )
         except LocalUrlError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            status_bar_slot.empty()
-            with status_bar_slot.container():
-                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
+            _render_task_panel_for_state(
+                _task_panel_slot,
+                preview_docs=preview_docs,
+                blocked_docs=blocked_docs,
+                confirmation_docs=mask_docs,
+                send_approved=send_approved,
+                active_status="送信準備完了" if send_approved else "確認待ち",
+            )
             st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
         except ValueError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            status_bar_slot.empty()
-            with status_bar_slot.container():
-                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
+            _render_task_panel_for_state(
+                _task_panel_slot,
+                preview_docs=preview_docs,
+                blocked_docs=blocked_docs,
+                confirmation_docs=mask_docs,
+                send_approved=send_approved,
+                active_status="送信準備完了" if send_approved else "確認待ち",
+            )
             st.error(str(exc))
         except RuntimeError as exc:
             # Gemini quota and similar user-actionable errors come through here.
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            status_bar_slot.empty()
-            with status_bar_slot.container():
-                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
+            _render_task_panel_for_state(
+                _task_panel_slot,
+                preview_docs=preview_docs,
+                blocked_docs=blocked_docs,
+                confirmation_docs=mask_docs,
+                send_approved=send_approved,
+                active_status="送信準備完了" if send_approved else "確認待ち",
+            )
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            status_bar_slot.empty()
-            with status_bar_slot.container():
-                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
+            _render_task_panel_for_state(
+                _task_panel_slot,
+                preview_docs=preview_docs,
+                blocked_docs=blocked_docs,
+                confirmation_docs=mask_docs,
+                send_approved=send_approved,
+                active_status="送信準備完了" if send_approved else "確認待ち",
+            )
             request_id = uuid.uuid4().hex[:8]
             st.error(f"レビューに失敗しました ({request_id})。詳細はサーバログを確認してください。")
             with st.expander("詳細トレース"):

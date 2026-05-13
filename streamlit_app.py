@@ -229,6 +229,8 @@ ISSUE_ID_PREFIX_HELP = {
     "source_code": "SC = Source Code（ソースコード）",
 }
 
+MAX_CHAPTER_DEEP_DIVE_PASSES = 2
+
 # B3: total verdict labels (A / B / C / D from the structured summary).
 VERDICT_LABELS = {
     "A": "A: 問題なし",
@@ -326,6 +328,8 @@ def _reset_state() -> None:
         # R-Y (2026-05-08): 深堀結果。リセット時にクリアしないと、
         # 次のレビュー実行時に同名文書の旧深堀結果が表示されてしまう。
         "deep_dive_results",
+        "chapter_deep_dive_results",
+        "deep_dive_notice",
         # Phase 7 段階 2-C (2026-05-08): 章境界キャッシュ。文書が変われば再計算。
         "chapter_sections_cache",
     ):
@@ -518,12 +522,131 @@ def _chapter_excerpt(text: str, limit: int = 220) -> str:
     return cleaned[:limit] + "..."
 
 
+def _chapter_cache_key(doc_name: str, chapter: ChapterSection) -> str:
+    digest = hashlib.sha256(f"{doc_name}|{chapter.chapter_id}".encode("utf-8")).hexdigest()
+    return digest[:16]
+
+
+def _issue_text(issue) -> str:
+    fields = (
+        "section",
+        "title",
+        "current_state",
+        "issue",
+        "impact",
+        "details",
+        "recommendation",
+    )
+    return " ".join(str(getattr(issue, field, "") or "") for field in fields)
+
+
+def _infer_issue_chapter(issue, chapters: tuple) -> str:
+    if not chapters:
+        return str(getattr(issue, "section", "") or "").strip()
+
+    explicit = str(getattr(issue, "section", "") or "").strip()
+    if explicit:
+        return explicit
+
+    text = _issue_text(issue)
+    match = re.search(r"第\s*([0-9０-９]+)\s*章", text)
+    if match:
+        number = match.group(1).translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+        for chapter in chapters:
+            if re.search(rf"第\s*{re.escape(number)}\s*章", chapter.chapter_label):
+                return chapter.chapter_label
+        return f"第 {number} 章"
+
+    tokens = set(
+        token
+        for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9:/._+-]{1,}|[一-龥ァ-ンー]{3,}", text)
+        if len(token) >= 3
+    )
+    best_label = ""
+    best_score = 0
+    for chapter in chapters:
+        haystack = f"{chapter.chapter_label}\n{chapter.extracted_text}"
+        score = sum(1 for token in tokens if token in haystack)
+        if score > best_score:
+            best_score = score
+            best_label = chapter.chapter_label
+    return best_label if best_score >= 2 else ""
+
+
+def _render_review_issue(issue, severity_order: dict[str, int]) -> None:
+    severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
+    if issue.has_structured_fields():
+        id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
+        section_suffix = f' · 章: {issue.section}' if issue.section else ''
+        timing_badge = _required_timing_badge(issue.required_timing)
+        re_review_badge = _re_review_badge(issue.re_review_required)
+        badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
+        badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
+
+        body_parts = []
+        if issue.current_state:
+            body_parts.append(
+                f"<div style='margin-top:0.3rem;'>"
+                f"<b>現状:</b> {issue.current_state}</div>"
+            )
+        if issue.issue:
+            body_parts.append(
+                f"<div style='margin-top:0.2rem;'>"
+                f"<b>問題点:</b> {issue.issue}</div>"
+            )
+        if issue.impact:
+            body_parts.append(
+                f"<div style='margin-top:0.2rem;'>"
+                f"<b>影響:</b> {issue.impact}</div>"
+            )
+        if not (issue.current_state or issue.issue or issue.impact) and issue.details:
+            body_parts.append(
+                f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
+            )
+        if issue.recommendation:
+            body_parts.append(
+                f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
+                f"<b>推奨対応:</b> {issue.recommendation}</div>"
+            )
+
+        st.markdown(
+            f"<div class='issue-row {issue.severity}'>"
+            f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
+            f'<span class="doc-meta">{section_suffix}</span>'
+            + "".join(body_parts)
+            + badges_html
+            + "</div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            f"<div class='issue-row {issue.severity}'>"
+            f"<b>[{severity_jp}]</b> {issue.title}<br/>"
+            f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
+            f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
+            f"<b>推奨対応:</b> {issue.recommendation}</div>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+
+
 def _run_chapter_deep_dive(
     doc_name: str,
     chapter: ChapterSection,
     review,
     document_profile_override: str | None,
 ) -> None:
+    cache_key = _chapter_cache_key(doc_name, chapter)
+    chapter_cache = st.session_state.setdefault("chapter_deep_dive_results", {})
+    previous_results = chapter_cache.get(cache_key, [])
+    if len(previous_results) >= MAX_CHAPTER_DEEP_DIVE_PASSES:
+        st.session_state.deep_dive_notice = (
+            f"{chapter.chapter_label} は既に {MAX_CHAPTER_DEEP_DIVE_PASSES} 回の深堀りを完了しています。"
+            "これ以上は新規観点が重複しやすいため、既存結果の確認を優先してください。"
+        )
+        st.rerun()
+        return
+
     preview_docs = st.session_state.get("preview_docs") or []
     if not preview_docs:
         st.error("preview_docs が見つかりません。ステップ 1〜3 を再実行してください。")
@@ -538,16 +661,23 @@ def _run_chapter_deep_dive(
         with st.spinner(
             f"{provider_impl.name} で「{chapter.chapter_label}」を深堀レビュー中..."
         ):
+            previous_issues = [
+                issue
+                for result in previous_results
+                for issue in getattr(result, "issues", []) or []
+            ]
             deep_review = provider_impl.review(
                 preview_docs,
                 document_profile_override,
                 deep_dive_target=doc_name,
-                existing_issues=review.issues,
+                existing_issues=[*review.issues, *previous_issues],
                 chapter=chapter,
             )
-        if "deep_dive_results" not in st.session_state:
-            st.session_state.deep_dive_results = {}
-        st.session_state.deep_dive_results.setdefault(doc_name, []).append(deep_review)
+        chapter_cache.setdefault(cache_key, []).append(deep_review)
+        st.session_state.chapter_deep_dive_results = chapter_cache
+        st.session_state.deep_dive_notice = (
+            f"{chapter.chapter_label} の深堀りレビューを記録しました。"
+        )
         st.rerun()
     except LocalUrlError as exc:
         st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
@@ -1010,6 +1140,8 @@ if preview_clicked:
     # Phase 7 段階 1.5 (2026-05-08): docs_checked フラグ廃止に伴い、リセット不要に
     # 古い deep_dive_results も新 preview には不適合なのでクリア
     st.session_state.pop("deep_dive_results", None)
+    st.session_state.pop("chapter_deep_dive_results", None)
+    st.session_state.pop("deep_dive_notice", None)
     # Phase 7 段階 2-C (2026-05-08): 章キャッシュも古い文書のものなのでクリア
     st.session_state.pop("chapter_sections_cache", None)
 
@@ -1194,28 +1326,6 @@ if preview_docs:
                     _masking_state,
                     full_text=doc.original_excerpt or "",
                 )
-
-            # PR-F: 「匿名化後の抜粋」「置換一覧」は長文化しがちなため
-            # エクスパンダーで折りたたむ。デフォルトは閉じておき、ユーザは
-            # マスク候補の検討に集中できる。
-            with st.expander("📄 匿名化後の抜粋・置換一覧", expanded=False):
-                tabs = st.tabs(["匿名化後の抜粋", "置換一覧"])
-                with tabs[0]:
-                    st.markdown(
-                        f"<pre class='sanitized'>{doc.sanitized_excerpt or '(空)'}</pre>",
-                        unsafe_allow_html=True,
-                    )
-                with tabs[1]:
-                    if doc.replacements:
-                        rows = [
-                            {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
-                            for r in doc.replacements[:50]
-                        ]
-                        st.dataframe(rows, width='stretch', hide_index=True)
-                        if len(doc.replacements) > 50:
-                            st.caption(f"全 {len(doc.replacements)} 件中 50 件を表示しています。")
-                    else:
-                        st.caption("置換は記録されませんでした。")
 
             st.markdown("</div>", unsafe_allow_html=True)
 
@@ -1409,6 +1519,8 @@ if preview_docs:
             # 古いレビュー結果が残っていればクリア (新しい判断には合わないため)
             st.session_state.pop("review_result", None)
             st.session_state.pop("deep_dive_results", None)
+            st.session_state.pop("chapter_deep_dive_results", None)
+            st.session_state.pop("deep_dive_notice", None)
             st.session_state.pop("send_approval", None)
             st.session_state.anonymization_details_visible = True
             st.session_state.anonymization_details_expand_once = True
@@ -1465,9 +1577,6 @@ if preview_docs:
             review_progress.progress(40, text="外部送信ガードを確認しています...")
             _enforce_outbound_guard(provider_impl.name, preview_docs)
 
-            # 進捗表示用 progress bar (chunking で文書ごとに更新)
-            _progress_bar = st.progress(0.0, text="")
-
             def _update_progress(idx: int, total: int, doc_name: str) -> None:
                 """課題 2 改修: chunking 進捗 callback。
                 Gemini プロバイダから文書処理ごとに呼び出される。
@@ -1475,12 +1584,12 @@ if preview_docs:
                 try:
                     fraction = min(1.0, idx / max(1, total))
                     if doc_name == "完了":
-                        _progress_bar.progress(1.0, text=f"✅ 全 {total} 文書のレビュー完了")
+                        review_progress.progress(100, text=f"✅ 全 {total} 文書のレビュー完了")
                     else:
                         # 文書名が長すぎると progress bar の text が見づらくなるので適度に切る
                         display_name = doc_name if len(doc_name) <= 50 else doc_name[:47] + "..."
-                        _progress_bar.progress(
-                            fraction,
+                        review_progress.progress(
+                            int(45 + fraction * 45),
                             text=f"📄 {idx}/{total} 処理中: {display_name}",
                         )
                 except Exception:  # noqa: BLE001
@@ -1498,9 +1607,6 @@ if preview_docs:
                     progress_callback=_update_progress,
                 )
             review_progress.progress(100, text="レビューが完了しました。")
-
-            # progress bar をクリア (結果表示の邪魔にならないように)
-            _progress_bar.empty()
 
             st.session_state.review_result = review
         except LocalUrlError as exc:
@@ -1681,8 +1787,11 @@ if review is not None:
         st.container(height=800) if _step4_use_scroll else st.container()
     )
 
-    # 深堀結果 (文書名 -> [ReviewResult, ...]) を session_state から取得
-    _deep_results_all = st.session_state.get("deep_dive_results") or {}
+    # 深堀結果 (章キー -> [ReviewResult, ...]) を session_state から取得。
+    _chapter_deep_results_all = st.session_state.get("chapter_deep_dive_results") or {}
+    _deep_dive_notice = st.session_state.pop("deep_dive_notice", "")
+    if _deep_dive_notice:
+        st.info(_deep_dive_notice)
 
     with _step4_container:
         for _doc_name in _ordered_doc_names:
@@ -1749,6 +1858,11 @@ if review is not None:
                                 "<span class='decision-badge decision-mask'>深堀候補</span>"
                                 if _needs_deep else ""
                             )
+                            _chapter_key = _chapter_cache_key(_doc_name, _ch)
+                            _chapter_deep_results = _chapter_deep_results_all.get(
+                                _chapter_key, []
+                            )
+                            _pass_count = len(_chapter_deep_results)
 
                             with st.container(border=True):
                                 _ch_col1, _ch_col2 = st.columns([5, 2])
@@ -1764,23 +1878,77 @@ if review is not None:
                                     st.markdown(f"**概要レビュー**: {_overview_review}")
                                 with _ch_col2:
                                     _can_run_chapter = _ch_idx == 0
+                                    _can_deep_dive_more = (
+                                        _can_run_chapter
+                                        and _pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES
+                                    )
                                     _ch_btn_key = (
                                         "ch_deepdive_btn_"
                                         + hashlib.sha256(
                                             f"{_doc_name}|{_ch.chapter_id}|{_ch_idx}".encode("utf-8")
                                         ).hexdigest()[:12]
                                     )
+                                    _button_label = (
+                                        "🔬 この章を深堀"
+                                        if _pass_count == 0
+                                        else "🔎 未検出観点を追加深堀"
+                                    )
+                                    if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
+                                        _button_label = "✅ 深堀完了"
                                     _ch_clicked = st.button(
-                                        "🔬 この章を深堀",
+                                        _button_label,
                                         key=_ch_btn_key,
-                                        disabled=not _can_run_chapter,
+                                        disabled=not _can_deep_dive_more,
                                         help=(
-                                            f"{_ch.chapter_label} のみを対象に深堀りします。"
-                                            if _can_run_chapter
-                                            else "トークン制限対策として、現在は最初の章のみ深堀りできます。"
+                                            f"{_ch.chapter_label} を対象に深堀りします。"
+                                            if _can_deep_dive_more
+                                            else (
+                                                "この章は深堀り上限に到達しました。既存結果を確認してください。"
+                                                if _can_run_chapter
+                                                else "トークン制限対策として、現在は最初の章のみ深堀りできます。"
+                                            )
                                         ),
                                         width='stretch',
                                     )
+                                    if _pass_count:
+                                        st.caption(
+                                            f"深堀り済み: {_pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}"
+                                        )
+                                    elif not _can_run_chapter:
+                                        st.caption("深堀り対象外")
+                                if _chapter_deep_results:
+                                    with st.expander(
+                                        f"📌 この章の深堀結果 ({_pass_count} 回)",
+                                        expanded=True,
+                                    ):
+                                        for _pass_idx, _deep_review in enumerate(
+                                            _chapter_deep_results, 1
+                                        ):
+                                            st.markdown(f"**深堀パス {_pass_idx}**")
+                                            if _deep_review.summary:
+                                                st.markdown(
+                                                    f"**サマリ** — {_deep_review.summary}"
+                                                )
+                                            _sorted_deep_issues = sorted(
+                                                _deep_review.issues,
+                                                key=lambda i: severity_order.get(i.severity, 4),
+                                            )
+                                            if not _sorted_deep_issues:
+                                                st.info(
+                                                    "このパスでは新規指摘はありませんでした。"
+                                                )
+                                            for _deep_issue in _sorted_deep_issues:
+                                                if not getattr(_deep_issue, "section", ""):
+                                                    _deep_issue.section = _ch.chapter_label
+                                                _render_review_issue(
+                                                    _deep_issue,
+                                                    severity_order,
+                                                )
+                                        if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
+                                            st.success(
+                                                "この章は2段階の深堀りを完了しました。"
+                                                "追加LLM呼び出しより、既存指摘の対応判断へ進むことを推奨します。"
+                                            )
                                 if _ch_clicked:
                                     _run_chapter_deep_dive(
                                         _doc_name,
@@ -1807,6 +1975,8 @@ if review is not None:
 
             # 既存指摘の表示 (severity 順)
             for issue in _doc_issues:
+                if not getattr(issue, "section", ""):
+                    issue.section = _infer_issue_chapter(issue, _chapters)
                 severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
                 # B3: prefer structured display when issue has new fields (current_state,
                 # issue, impact, etc.); fall back to legacy details/recommendation only.
@@ -1837,6 +2007,10 @@ if review is not None:
                             f"<div style='margin-top:0.2rem;'>"
                             f"<b>影響:</b> {issue.impact}</div>"
                         )
+                    if not (issue.current_state or issue.issue or issue.impact) and issue.details:
+                        body_parts.append(
+                            f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
+                        )
                     if issue.recommendation:
                         body_parts.append(
                             f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
@@ -1863,77 +2037,6 @@ if review is not None:
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-
-            # R-Y: 深堀結果の表示 (この文書のもの、蓄積式)
-            _deep_for_this = _deep_results_all.get(_doc_name, [])
-            for _idx, _deep_review in enumerate(_deep_for_this, 1):
-                _label = (
-                    f"📌 深堀結果 (#{_idx})" if len(_deep_for_this) > 1
-                    else "📌 深堀結果"
-                )
-                with st.expander(_label, expanded=True):
-                    if _deep_review.summary:
-                        st.markdown(f"**深堀サマリ** — {_deep_review.summary}")
-                    _sorted_dd = sorted(
-                        _deep_review.issues,
-                        key=lambda i: severity_order.get(i.severity, 4),
-                    )
-                    if not _sorted_dd:
-                        st.info(
-                            "(深堀指摘なし。LLM が新規指摘を生成しませんでした。)"
-                        )
-                    for _ddissue in _sorted_dd:
-                        _sev_jp = SEVERITY_LABELS.get(
-                            _ddissue.severity, _ddissue.severity
-                        )
-                        if _ddissue.has_structured_fields():
-                            _idp = (
-                                f"<b>{_ddissue.issue_id}</b> · "
-                                if _ddissue.issue_id else ""
-                            )
-                            _ssfx = (
-                                f' · 章: {_ddissue.section}'
-                                if _ddissue.section else ''
-                            )
-                            _bp = []
-                            if _ddissue.current_state:
-                                _bp.append(
-                                    f"<div style='margin-top:0.3rem;'>"
-                                    f"<b>現状:</b> {_ddissue.current_state}</div>"
-                                )
-                            if _ddissue.issue:
-                                _bp.append(
-                                    f"<div style='margin-top:0.2rem;'>"
-                                    f"<b>問題点:</b> {_ddissue.issue}</div>"
-                                )
-                            if _ddissue.impact:
-                                _bp.append(
-                                    f"<div style='margin-top:0.2rem;'>"
-                                    f"<b>影響:</b> {_ddissue.impact}</div>"
-                                )
-                            if _ddissue.recommendation:
-                                _bp.append(
-                                    f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
-                                    f"<b>推奨対応:</b> {_ddissue.recommendation}</div>"
-                                )
-                            st.markdown(
-                                f"<div class='issue-row {_ddissue.severity}'>"
-                                f"{_idp}<b>[{_sev_jp}]</b> {_ddissue.title}"
-                                f'<span class="doc-meta">{_ssfx}</span>'
-                                + "".join(_bp)
-                                + "</div>",
-                                unsafe_allow_html=True,
-                            )
-                        else:
-                            st.markdown(
-                                f"<div class='issue-row {_ddissue.severity}'>"
-                                f"<b>[{_sev_jp}]</b> {_ddissue.title}<br/>"
-                                f"<div style='margin-top:0.3rem;'>{_ddissue.details}</div>"
-                                f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
-                                f"<b>推奨対応:</b> {_ddissue.recommendation}</div>"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
 
             # Phase 7 (2026-05-08): この文書のチェック項目評価表示。
             # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。

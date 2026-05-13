@@ -799,6 +799,27 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         self.assertIn("ALPHA_BODY", prompt)
         self.assertIn("BETA_BODY", prompt)
 
+    def test_chapter_deep_dive_prompt_requires_section_and_new_findings(self) -> None:
+        from secure_review.reviewer import build_prompt
+        from secure_review.rubric import ChapterSection
+
+        chapter = ChapterSection(
+            chapter_id="ch1",
+            chapter_label="第 1 章 はじめに",
+            detected_chapter_num=1,
+            text_start=0,
+            text_end=20,
+            extracted_text="第 1 章 はじめに\n目的\n範囲",
+        )
+        prompt = build_prompt(
+            [_doc(name="design.docx", text="第 1 章 はじめに\n目的\n範囲")],
+            deep_dive_target="design.docx",
+            existing_issues=[],
+            chapter=chapter,
+        )
+        self.assertIn("既存指摘と同じ内容は再掲せず", prompt)
+        self.assertIn("issues の section には対象章名を必ず入れてください", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

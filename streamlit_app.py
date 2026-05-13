@@ -256,7 +256,14 @@ DECISION_LABELS = {
     "safe": "安全",
     "mask_and_continue": "要確認",
     "block": "送信禁止",
-    "unknown": "不明",
+    "unknown": "未判定",
+}
+
+TOKEN_BUDGET_STATUS_LABELS = {
+    "mock": "外部消費なし",
+    "safe": "通常範囲",
+    "caution": "注意",
+    "split_recommended": "分割推奨",
 }
 
 SEVERITY_LABELS = {
@@ -473,7 +480,10 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
     return items
 
 
-def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None:
+def _render_anonymization_summary(
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+) -> None:
     counts = {"safe": 0, "mask_and_continue": 0, "block": 0, "unknown": 0}
     replacement_count = 0
     estimated_tokens = 0
@@ -501,6 +511,25 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
         f"LLM 送信対象の推定トークン数: {estimated_tokens:,}。"
         "送信されるのは匿名化済みテキストのみです。"
     )
+    try:
+        estimate = estimate_review_token_budget(
+            preview_docs,
+            document_profile_override,
+        )
+        status_label = TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
+        budget_message = (
+            f"{len(preview_docs)} ファイル合算の送信規模判定: **{status_label}** "
+            f"(予定 call 数 {estimate.call_count}、入力合計概算 {estimate.total_input_tokens:,} tokens、"
+            f"最大/1call {estimate.max_call_input_tokens:,} tokens)。"
+        )
+        if estimate.status == "split_recommended":
+            st.warning(budget_message)
+        elif estimate.status == "caution":
+            st.info(budget_message)
+        else:
+            st.success(budget_message)
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"合算トークン判定の作成に失敗しました: {exc}")
     if counts.get("unknown", 0):
         st.warning(
             "未判定の文書は安全扱いにせず、外部送信前に文書別承認を必須にします。"
@@ -525,12 +554,7 @@ def _render_token_budget_panel(
         st.warning(f"トークン予算の概算に失敗しました: {exc}")
         return
 
-    status_label = {
-        "mock": "外部消費なし",
-        "safe": "通常範囲",
-        "caution": "注意",
-        "split_recommended": "分割推奨",
-    }.get(estimate.status, estimate.status)
+    status_label = TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
 
     with st.expander("🧮 Gemma4送信前トークン予算（概算）", expanded=estimate.status != "safe"):
         metric_cols = st.columns(5)
@@ -1520,6 +1544,7 @@ if preview_clicked:
                                 sanitizer=sanitizer,
                                 ner_masker=ner_masker,
                                 hojin_lookup=hojin_lookup,
+                                base_sanitized=sdoc,
                             )
                             masking_states[sdoc.name] = state
                             # R-W-export (2026-05-08): ログダウンロード用に session_state に保存
@@ -1581,13 +1606,15 @@ if preview_docs:
 
     counts = {"safe": 0, "mask_and_continue": 0, "block": 0, "unknown": 0}
     for doc in preview_docs:
-        counts[doc.local_sensitivity_decision] = counts.get(doc.local_sensitivity_decision, 0) + 1
+        decision = doc.local_sensitivity_decision or "unknown"
+        counts[decision] = counts.get(decision, 0) + 1
 
-    summary_cols = st.columns(4)
+    summary_cols = st.columns(5)
     summary_cols[0].metric("文書数", len(preview_docs))
     summary_cols[1].metric("安全", counts.get("safe", 0))
     summary_cols[2].metric("要確認", counts.get("mask_and_continue", 0))
-    summary_cols[3].metric("送信禁止", counts.get("block", 0))
+    summary_cols[3].metric("未判定", counts.get("unknown", 0))
+    summary_cols[4].metric("送信禁止", counts.get("block", 0))
 
     warnings = st.session_state.get("preview_warnings", [])
     if warnings:
@@ -1747,7 +1774,7 @@ if preview_docs:
     if st.session_state.pop("anonymization_regenerated_message", False):
         st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
 
-    _render_anonymization_summary(preview_docs)
+    _render_anonymization_summary(preview_docs, document_profile_override)
     _render_token_budget_panel(preview_docs, document_profile_override)
     if st.session_state.get("anonymization_details_visible", False):
         _expand_anonymization_details = bool(

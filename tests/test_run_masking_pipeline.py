@@ -16,6 +16,8 @@ from unittest.mock import MagicMock
 from secure_review.models import (
     LookupResult,
     NerCandidate,
+    SanitizationRecord,
+    SanitizedDocument,
 )
 from secure_review.run_masking_pipeline import (
     apply_user_decisions,
@@ -401,6 +403,42 @@ class RunMaskingPipelineTests(unittest.TestCase):
             ("ZZZ_NOTREAL", "COMPANY"), state.confirmed_findings
         )
 
+    def test_base_sanitized_metadata_is_preserved(self) -> None:
+        """R-M 再生成後も既存の機密度判定を unknown に戻さない。"""
+        base = SanitizedDocument(
+            name="doc.txt",
+            original_excerpt="府中 DC の設計。",
+            sanitized_excerpt="府中 DC の設計。",
+            outbound_text="府中 DC の設計。",
+            estimated_input_tokens=10,
+            outbound_risk="low",
+            local_sensitivity_decision="safe",
+            local_sensitivity_reasons=["ローカル判定済み"],
+            local_sensitivity_provider="heuristic",
+        )
+        sanitizer = SensitiveDataSanitizer()
+        ner = FakeNerMasker(
+            candidates=[_candidate("府中", label="SITE", confirmed=False)]
+        )
+        state = run_masking_pipeline(
+            name="doc.txt",
+            text="府中 DC の設計。",
+            sanitizer=sanitizer,
+            ner_masker=ner,
+            hojin_lookup=None,
+            base_sanitized=base,
+        )
+
+        result = apply_user_decisions(
+            state=state,
+            user_decisions={"府中": True},
+            sanitizer=SensitiveDataSanitizer(),
+        )
+
+        self.assertEqual(result.local_sensitivity_decision, "safe")
+        self.assertEqual(result.local_sensitivity_provider, "heuristic")
+        self.assertEqual(result.local_sensitivity_reasons, ["ローカル判定済み"])
+
     def test_mixed_promotion_keeps_searchable_candidates_uncertain(self) -> None:
         """error あり/なしが混在する場合: error あり候補のみ昇格、
         error なし候補は uncertain に残る (PR-F)。
@@ -592,6 +630,47 @@ class ApplyUserDecisionsTests(unittest.TestCase):
         self.assertNotIn("AAA", result.outbound_text)
         self.assertIn("BBB", result.outbound_text)  # マスクされず残る
         self.assertNotIn("CCC", result.outbound_text)
+
+    def test_existing_placeholder_counter_is_seeded_before_ner_masks(self) -> None:
+        """既存 placeholder と R-M 追加 placeholder の番号衝突を避ける。"""
+        base = SanitizedDocument(
+            name="doc.txt",
+            original_excerpt="既存は [SITE_001]。府中へ接続。",
+            sanitized_excerpt="既存は [SITE_001]。府中へ接続。",
+            outbound_text="既存は [SITE_001]。府中へ接続。",
+            replacements=[
+                SanitizationRecord(
+                    placeholder="[SITE_001]",
+                    original="既存DC",
+                    category="site",
+                )
+            ],
+            estimated_input_tokens=10,
+            outbound_risk="low",
+            local_sensitivity_decision="safe",
+        )
+        state = run_masking_pipeline(
+            name="doc.txt",
+            text="既存は 既存DC。府中へ接続。",
+            sanitizer=SensitiveDataSanitizer(),
+            ner_masker=FakeNerMasker(
+                candidates=[_candidate("府中", label="SITE", confirmed=False)]
+            ),
+            hojin_lookup=None,
+            base_sanitized=base,
+        )
+
+        result = apply_user_decisions(
+            state=state,
+            user_decisions={"府中": True},
+            sanitizer=SensitiveDataSanitizer(),
+        )
+
+        self.assertIn("[SITE_002]", result.outbound_text)
+        self.assertEqual(
+            sorted(r.placeholder for r in result.replacements),
+            ["[SITE_001]", "[SITE_002]"],
+        )
 
 
 if __name__ == "__main__":

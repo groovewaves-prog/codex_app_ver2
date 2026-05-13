@@ -22,6 +22,7 @@ R-K の regex マスキング (sanitizer.py)、R-M Phase 1 の NER 候補抽出
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING, Optional
 
 from secure_review.models import (
@@ -50,6 +51,7 @@ def run_masking_pipeline(
     hojin_lookup: "Optional[HojinLookup]",
     *,
     auto_mask_on_lookup_error: bool = False,
+    base_sanitized: SanitizedDocument | None = None,
 ) -> MaskingPipelineState:
     """Phase 1+2 パイプラインを実行し、ユーザ判断前の中間状態を返す。
 
@@ -85,13 +87,21 @@ def run_masking_pipeline(
             昇格してしまいレビューが壊れる」事象 (R-O) への対策。
             旧 PR-F 挙動を保ちたいテストや運用シナリオは明示的に
             True を渡す。
+        base_sanitized: 既に機密度判定・ローカルサニタイザ結果まで反映済みの
+            SanitizedDocument。Streamlit 側では先に `_run_sanitization_pipeline`
+            で機密度判定を実施しているため、R-M の中間状態にも同じ判定結果を
+            引き継ぐ。未指定時は従来通り本関数内で regex sanitize から開始する。
 
     Returns:
         MaskingPipelineState: 不変な中間状態。``has_uncertain`` プロパティで
         ユーザ判断 UI を出すべきかが分かる。
     """
     # Step 1: 既存 regex マスキング
-    sanitized = sanitizer.sanitize(name, text)
+    sanitized = (
+        _clone_sanitized_document(base_sanitized)
+        if base_sanitized is not None
+        else sanitizer.sanitize(name, text)
+    )
 
     state = MaskingPipelineState(name=name, sanitized=sanitized)
 
@@ -219,6 +229,7 @@ def apply_user_decisions(
     outbound_text = state.sanitized.outbound_text
     replacements = list(state.sanitized.replacements)
     findings = list(state.sanitized.findings)
+    _seed_sanitizer_from_existing_records(sanitizer, replacements)
 
     # 同一 (text, label) は 1 度だけ処理 (NerCandidate 側で重複排除済みだが念のため)
     seen: set[tuple[str, str]] = set()
@@ -303,3 +314,55 @@ def apply_user_decisions(
         local_sensitivity_reasons=list(state.sanitized.local_sensitivity_reasons),
         local_sensitivity_provider=state.sanitized.local_sensitivity_provider,
     )
+
+
+def _clone_sanitized_document(document: SanitizedDocument) -> SanitizedDocument:
+    """Return a shallow-safe copy so R-M never mutates preview_docs in place."""
+    return SanitizedDocument(
+        name=document.name,
+        original_excerpt=document.original_excerpt,
+        sanitized_excerpt=document.sanitized_excerpt,
+        outbound_text=document.outbound_text,
+        replacements=list(document.replacements),
+        findings=list(document.findings),
+        estimated_input_tokens=document.estimated_input_tokens,
+        outbound_risk=document.outbound_risk,
+        local_sanitizer_provider=document.local_sanitizer_provider,
+        local_sensitivity_decision=document.local_sensitivity_decision,
+        local_sensitivity_reasons=list(document.local_sensitivity_reasons),
+        local_sensitivity_provider=document.local_sensitivity_provider,
+    )
+
+
+_PLACEHOLDER_RE = re.compile(r"^\[([A-Z][A-Z0-9_]*)_(\d{3,})\]$")
+
+
+def _seed_sanitizer_from_existing_records(
+    sanitizer: SensitiveDataSanitizer,
+    records: list[SanitizationRecord],
+) -> None:
+    """Prime placeholder counters before adding R-M masks.
+
+    Streamlit rebuilds the sanitizer instance when the user presses
+    "匿名化結果を再生成". Without seeding, a new NER mask can be assigned
+    `[SITE_001]` even when `[SITE_001]` already exists from regex masking.
+    That makes the replacement table ambiguous, so we restore the seen map and
+    counters from the current document before registering additional findings.
+    """
+    for record in records:
+        category = (record.category or "").strip().lower()
+        original = record.original
+        placeholder = record.placeholder
+        if not category or not original or not placeholder:
+            continue
+        try:
+            sanitizer._seen[(category, original)] = placeholder  # noqa: SLF001
+            match = _PLACEHOLDER_RE.match(placeholder)
+            if match:
+                number = int(match.group(2))
+                sanitizer._counters[category] = max(  # noqa: SLF001
+                    sanitizer._counters[category],
+                    number,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to seed sanitizer placeholder state: %s", exc)

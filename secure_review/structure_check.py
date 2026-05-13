@@ -25,6 +25,7 @@ class StructureFinding:
     item_name: str = ""
     source_document: str = ""
     expected_content: str = ""
+    suggested_content: str = ""
 
 
 @dataclass(frozen=True)
@@ -79,6 +80,36 @@ CRITICAL_ITEM_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+DESIGN_PLAIN_TEXT_TEMPLATE = """1. はじめに
+- 目的
+- 対象範囲 / 対象外範囲
+- 想定読者
+- 関係者・責任分担
+
+2. システム要件
+- 業務要件
+- 機能要件
+- 非機能要件（可用性、性能、セキュリティ、運用、コスト）
+- 前提条件・制約条件
+
+3. システム全体構成
+- 全体構成図または構成説明
+- 構成要素一覧
+- 環境構成（本番 / 検証 / 開発）
+
+4. セキュリティ・可用性・運用
+- 認証・認可
+- 暗号化・監査ログ
+- 冗長化・DR / バックアップ
+- 監視・アラート・ロールバック
+
+5. リスク・未決事項・参照文書
+- 既知リスクと対応方針
+- 未決事項
+- 改訂履歴
+- 参照文書"""
+
+
 def build_structure_check_result(
     documents: list[SanitizedDocument],
     document_profile: str,
@@ -110,9 +141,21 @@ def _build_design_structure_check(
                 kind="chapter_structure_missing",
                 severity="high",
                 message=(
-                    "標準章立てを検出できません。設計書として、第1章 はじめに、"
-                    "第2章 システム要件、第3章 システム全体構成などの章構成を明示してください。"
+                    "見出し構造を検出できません。レビューは全文を対象に実行できますが、"
+                    "設計書としては目的・要件・構成・セキュリティ・運用などの観点を"
+                    "見出しで分けて記載することを推奨します。"
                 ),
+            )
+        )
+        findings.append(
+            StructureFinding(
+                kind="structure_template_suggestion",
+                severity="info",
+                message=(
+                    "べた書きや箇条書きだけの文書は、以下の見出し例に沿って整理すると、"
+                    "レビュー観点の抜け漏れを確認しやすくなります。"
+                ),
+                suggested_content=DESIGN_PLAIN_TEXT_TEMPLATE,
             )
         )
         if not _has_purpose_text("\n".join(doc.outbound_text for doc in documents)):
@@ -124,7 +167,7 @@ def _build_design_structure_check(
                     chapter_name="はじめに",
                     item_id="1.1",
                     item_name="本書の目的",
-                    message="冒頭または第1章に、本書の目的が明確に記載されていません。",
+                    message="文書冒頭または「はじめに」相当の見出しに、本書の目的が明確に記載されていません。",
                     expected_content="構築目的、対象システム、想定読者、期待される成果",
                 )
             )
@@ -160,8 +203,8 @@ def _build_design_structure_check(
                         source_document=doc_name,
                         expected_content=item.expected_content,
                         message=(
-                            f"第{standard_chapter.chapter_id.removeprefix('ch')}章 "
-                            f"{standard_chapter.chapter_name} に必須要素「{item.item_name}」"
+                            f"不足観点「{standard_chapter.chapter_name}」で、"
+                            f"必須要素「{item.item_name}」"
                             "が明確に見当たりません。"
                         ),
                     )
@@ -203,7 +246,6 @@ def _missing_chapter_finding(
     standard_chapter: StandardChapter,
     severity: str,
 ) -> StructureFinding:
-    chapter_num = standard_chapter.chapter_id.removeprefix("ch")
     must_items = [
         item.item_name
         for item in standard_chapter.items
@@ -219,8 +261,8 @@ def _missing_chapter_finding(
         chapter_name=standard_chapter.chapter_name,
         expected_content=standard_chapter.purpose,
         message=(
-            f"第{chapter_num}章 {standard_chapter.chapter_name} が未検出です。"
-            f"本章では「{standard_chapter.purpose}」を扱います。"
+            f"不足観点「{standard_chapter.chapter_name}」が見当たりません。"
+            f"この観点では「{standard_chapter.purpose}」を確認します。"
             f"主な必須要素: {item_summary}。"
         ),
     )

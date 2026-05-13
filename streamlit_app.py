@@ -204,6 +204,34 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .structure-check-card.medium { border-left-color: var(--warn); background: #fffaf0; }
 .structure-check-card.info { border-left-color: var(--ink-soft); background: #fafaf6; }
 
+.status-flow {
+    display: flex;
+    gap: 0.25rem;
+    margin: 0.45rem 0 0.9rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+}
+.status-step {
+    flex: 1;
+    text-align: center;
+    padding: 0.42rem 0.35rem;
+    background: #e4e5e6;
+    color: #4a5549;
+    border-radius: 2px;
+}
+.status-step.done {
+    background: #d8ead8;
+    color: var(--accent);
+}
+.status-step.active {
+    background: #0f7b63;
+    color: white;
+}
+.status-step.blocked {
+    background: var(--danger-soft);
+    color: var(--danger);
+}
+
 .provider-line {
     font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
     font-size: 0.78rem;
@@ -608,8 +636,8 @@ def _infer_issue_chapter(issue, chapters: tuple) -> str:
 def _render_document_structure_check(result: StructureCheckResult) -> None:
     st.markdown("### 文書構成チェック")
     st.caption(
-        "業界標準・公的ガイドラインを反映した構造定義に照らし、"
-        "欠落章と章内の必須要素不足を先に確認します。"
+        "設計書に通常必要とされる観点が、今回アップロードされた文書群に含まれているかを確認します。"
+        "不足している観点は、レビュー結果の前提として先に確認してください。"
     )
 
     findings = list(result.findings or ())
@@ -630,8 +658,8 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         return
 
     st.warning(
-        "以下の構成不足が検出されました。LLM の自由記述サマリとは別に、"
-        "構造定義に基づく明示的なチェック結果として確認してください。"
+        "以下の不足観点が見つかりました。レビュー対象の文書群に、設計書として通常確認したい"
+        "目的・要件・構成・セキュリティ・運用などの観点が含まれているか確認してください。"
     )
 
     severity_order = {"high": 0, "medium": 1, "info": 2}
@@ -639,9 +667,9 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         findings,
         key=lambda f: (
             severity_order.get(f.severity, 9),
+            _chapter_sort_value(f.chapter_id),
             f.kind,
-            f.chapter_id,
-            f.item_id,
+            _item_sort_value(f.item_id),
         ),
     )
     container = st.container(height=360) if len(sorted_findings) >= 6 else st.container()
@@ -653,26 +681,38 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
                 "info": "情報",
             }.get(finding.severity, finding.severity)
             source = (
-                f"<div class='doc-meta'>対象: {finding.source_document}</div>"
+                f"<div class='doc-meta'>対象: {html.escape(finding.source_document)}</div>"
                 if finding.source_document else ""
             )
             expected = (
                 f"<div style='margin-top:0.25rem;color:#4a5549;'>"
-                f"<b>本来必要な内容:</b> {finding.expected_content}</div>"
+                f"<b>本来必要な内容:</b> {html.escape(finding.expected_content)}</div>"
                 if finding.expected_content else ""
             )
             title_parts = [severity_label]
-            if finding.chapter_id:
-                title_parts.append(finding.chapter_id)
-            if finding.item_id:
-                title_parts.append(finding.item_id)
+            if finding.kind == "structure_template_suggestion":
+                title_parts.append("章立てテンプレート案")
+            elif finding.chapter_name:
+                title_parts.append(f"不足観点: {finding.chapter_name}")
+            if finding.item_name:
+                title_parts.append(f"必須要素: {finding.item_name}")
             title = " · ".join(title_parts)
+            suggested = ""
+            if finding.suggested_content:
+                suggested = (
+                    "<div style='margin-top:0.35rem;color:#4a5549;'>"
+                    "<b>見出し例:</b></div>"
+                    "<pre class='sanitized' style='max-height:260px;'>"
+                    f"{html.escape(finding.suggested_content)}"
+                    "</pre>"
+                )
             st.markdown(
                 f"<div class='structure-check-card {finding.severity}'>"
-                f"<b>{title}</b><br/>"
-                f"{finding.message}"
+                f"<b>{html.escape(title)}</b><br/>"
+                f"{html.escape(finding.message)}"
                 f"{source}"
                 f"{expected}"
+                f"{suggested}"
                 f"</div>",
                 unsafe_allow_html=True,
             )
@@ -684,12 +724,52 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         )
 
 
+def _chapter_sort_value(chapter_id: str) -> int:
+    match = re.search(r"\d+", chapter_id or "")
+    return int(match.group(0)) if match else 999
+
+
+def _item_sort_value(item_id: str) -> tuple[int, int]:
+    match = re.match(r"(\d+)(?:\.(\d+))?", item_id or "")
+    if not match:
+        return (999, 999)
+    return (int(match.group(1)), int(match.group(2) or 0))
+
+
 def _render_compact_field(label: str, value: str) -> None:
     if not value:
         return
     st.markdown(
         f"<div class='review-compact'><b>{html.escape(label)}</b>: "
         f"{html.escape(str(value))}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_review_status_bar(active_status: str) -> None:
+    steps = [
+        "新規",
+        "匿名化済み",
+        "確認待ち",
+        "送信準備完了",
+        "レビュー中",
+        "レビュー完了",
+    ]
+    active_index = steps.index(active_status) if active_status in steps else -1
+    parts = []
+    for index, label in enumerate(steps):
+        css = "status-step"
+        if active_status == "送信不可" and label == "確認待ち":
+            css += " blocked"
+        elif index < active_index:
+            css += " done"
+        elif index == active_index:
+            css += " active"
+        parts.append(f"<div class='{css}'>{label}</div>")
+    if active_status == "送信不可":
+        parts.append("<div class='status-step blocked'>送信不可</div>")
+    st.markdown(
+        "<div class='status-flow'>" + "".join(parts) + "</div>",
         unsafe_allow_html=True,
     )
 
@@ -1232,7 +1312,7 @@ st.file_uploader(
 col1, col2 = st.columns([1, 5])
 with col1:
     preview_clicked = st.button(
-        "匿名化結果を確認",
+        "匿名化してプレビュー",
         type="primary",
         disabled=not _get_uploads(),  # R-X-1: 動的 uploader_key 経由
         width='stretch',
@@ -1372,7 +1452,7 @@ if preview_error:
     st.error(preview_error)
     st.info(
         "匿名化結果が作成されなかったため、ステップ 3 には進めません。"
-        "設定やローカル Ollama の起動状態を確認してから、もう一度「匿名化結果を確認」を押してください。"
+        "設定やローカル Ollama の起動状態を確認してから、もう一度「匿名化してプレビュー」を押してください。"
     )
     if st.session_state.get("preview_trace"):
         with st.expander("詳細トレース"):
@@ -1450,15 +1530,7 @@ if preview_docs:
 
             st.markdown("</div>", unsafe_allow_html=True)
 
-    # -- Step 3: Confirmation gate ----------------------------------------
-
     # PR-I-FIX: 承認を要求する文書の判定基準を 2 系統に拡張する。
-    # (a) ローカル機密度判定が mask_and_continue (既存): 機密ブロッカー検出
-    # (b) R-M で uncertain 候補が残っている (新規): spaCy NER で検出された
-    #     企業名・人名等のうち、ユーザがまだ意思決定していない候補がある
-    # どちらか一方でもあれば、外部送信前にユーザの明示的な承認を必須にする。
-    # 元実装は (a) のみだったため、機密ゲートが safe を返した文書については
-    # R-M uncertain があっても承認なしで送信できてしまっていた。
     _masking_states_for_gate = st.session_state.get("masking_states", {}) or {}
 
     def _has_uncertain_candidates(name: str) -> bool:
@@ -1488,127 +1560,18 @@ if preview_docs:
         if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
     ]
 
-    st.markdown('<div class="step-header">ステップ 3 — 確認 & 送信</div>', unsafe_allow_html=True)
+    check_clicked = st.button(
+        "📋 匿名化結果を再生成",
+        type="secondary",
+        disabled=not bool(preview_docs),
+        help=(
+            "マスク候補の判断を反映し、匿名化済みテキストを再生成します。"
+            "この操作では外部 LLM には送信しません。"
+        ),
+        key="doc_check_button",
+    )
 
-    if blocked_docs:
-        st.error(
-            "次のファイルは外部レビューへの送信が禁止されています: "
-            + ", ".join(doc.name for doc in blocked_docs)
-            + "。より厳密に匿名化したコピーを準備してから再試行してください。"
-        )
-
-    confirmations: dict[str, bool] = {}
-    if mask_docs and not blocked_docs:
-        st.warning(
-            f"{len(mask_docs)} 件の文書は外部送信前に明示的な確認が必要です。"
-            "上記の匿名化後の抜粋を確認し、各文書について承認してください。"
-        )
-        # PR-J: 4 件以上の場合、承認チェックボックス群を高さ 400px の
-        # スクロール可能コンテナで包む。11 ファイル前後を承認する際に
-        # 画面が縦に長く伸びすぎる問題への対処。
-        _step3_use_scroll = len(mask_docs) >= 4
-        _step3_container = (
-            st.container(height=400) if _step3_use_scroll else st.container()
-        )
-        with _step3_container:
-            for doc in mask_docs:
-                # PR-I-FIX: R-M uncertain がある場合は、文言で何を確認すべきかを補足
-                _decision = doc.local_sensitivity_decision or "unknown"
-                if _decision == "unknown":
-                    _label_suffix = "(未判定の確認 + 匿名化結果の確認)"
-                elif _decision != "mask_and_continue" and _has_uncertain_candidates(doc.name):
-                    _label_suffix = "(マスク候補の確認 + 匿名化結果の確認)"
-                else:
-                    _label_suffix = "(匿名化後の抜粋の確認)"
-                confirmations[doc.name] = st.checkbox(
-                    f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。 {_label_suffix}",
-                    key=f"confirm_{doc.name}",
-                )
-    elif not blocked_docs:
-        st.success(
-            "追加承認が必要な文書はありません。"
-            "匿名化結果を確認したうえで、このまま外部レビューへ送信できます。"
-        )
-
-    send_approved = False
-    if not blocked_docs:
-        st.markdown("**LLM 送信前の最終承認**")
-        send_approved = st.checkbox(
-            "ステップ 2 の匿名化結果、マスク候補、送信対象ログを確認し、"
-            "匿名化済みテキストを外部 LLM レビューに送信することを承認します。",
-            key="send_approval",
-        )
-
-    all_confirmed = (not mask_docs) or all(confirmations.get(doc.name) for doc in mask_docs)
-    can_send = bool(preview_docs) and not blocked_docs and all_confirmed and send_approved
-
-    # Phase 7 段階 1.5 (2026-05-08): docs_checked ガード廃止 + ボタン改名
-    # ユーザフィードバック: 「匿名化してプレビュー」直後にサマリは既に見えているため、
-    # 「文書チェック」ボタンを押す手順は冗長だった。
-    #
-    # 1. 「📋 匿名化結果を確認」(secondary, 旧「文書チェック」) — オプション操作
-    #    ユーザ判断 (uncertain candidate) を反映して preview_docs を再生成。
-    #    押さなくても先に進める (ガードではなくオプション)。
-    # 2. 「レビューに送信」(primary) — preview_docs があれば常時有効
-    #    各文書の承認 (all_confirmed) と送信禁止 (blocked_docs) のチェックは継続。
-    can_check = bool(preview_docs) and not blocked_docs and all_confirmed
-    can_send = bool(preview_docs) and not blocked_docs and all_confirmed and send_approved
-
-    check_col, send_col, status_col = st.columns([1.5, 1.5, 4])
-    with check_col:
-        check_clicked = st.button(
-            "📋 匿名化結果を確認",
-            type="secondary",
-            disabled=not can_check,
-            width='stretch',
-            help=(
-                "マスク判断を反映し、preview_docs を再生成します (オプション操作)。"
-                " このステップでは LLM には何も送信されません。"
-                " 押さなくても「レビューに送信」で先に進めますが、uncertain candidate を"
-                " 修正した場合や、最新の匿名化結果を確認したい場合に使用します。"
-            ),
-            key="doc_check_button",
-        )
-    with send_col:
-        send_clicked = st.button(
-            "レビューに送信",
-            type="primary",
-            disabled=not can_send,
-            width='stretch',
-            help=(
-                "LLM プロバイダに匿名化済みテキストを送信し、レビュー結果を取得します。"
-            ),
-            key="send_review_button",
-        )
-    with status_col:
-        if blocked_docs:
-            st.markdown(
-                '<div class="muted">送信禁止の文書があるため、送信できません。</div>',
-                unsafe_allow_html=True,
-            )
-        elif mask_docs and not all_confirmed:
-            st.markdown(
-                '<div class="muted">送信ボタンを有効にするには、上記の各文書を確認・承認してください。</div>',
-                unsafe_allow_html=True,
-            )
-        elif not send_approved:
-            st.markdown(
-                '<div class="muted">送信ボタンを有効にするには、LLM 送信前の最終承認をチェックしてください。</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<div class="muted">✅ 送信準備完了。設定された LLM プロバイダには'
-                '匿名化済みのテキストのみが送信されます。</div>',
-                unsafe_allow_html=True,
-            )
-
-    # Phase 7 段階 1.5 (2026-05-08): 「📋 匿名化結果を確認」押下時の処理
-    # 旧「文書チェック」のロジックを温存しつつ、docs_checked ガードを撤廃。
-    # ローカル処理のみ (LLM 送信なし):
-    #   - ユーザ判断を反映して preview_docs を再生成
-    #   - session_state.preview_docs を更新
-    # 押さなくても先に進める (オプション操作)。
+    # Phase 7 段階 1.5 (2026-05-08): 「📋 匿名化結果を再生成」押下時の処理
     if check_clicked:
         try:
             _states = st.session_state.get("masking_states", {})
@@ -1643,8 +1606,6 @@ if preview_docs:
                 preview_docs = rebuilt
                 st.session_state.preview_docs = preview_docs
 
-            # Phase 7 段階 1.5: docs_checked フラグ廃止 (オプション操作のためガード不要)
-            # 古いレビュー結果が残っていればクリア (新しい判断には合わないため)
             st.session_state.pop("review_result", None)
             st.session_state.pop("deep_dive_results", None)
             st.session_state.pop("chapter_deep_dive_results", None)
@@ -1652,36 +1613,113 @@ if preview_docs:
             st.session_state.pop("send_approval", None)
             st.session_state.anonymization_details_visible = True
             st.session_state.anonymization_details_expand_once = True
-            # Phase 7 段階 2-C: outbound_text が変わると章境界が変わる可能性
             st.session_state.pop("chapter_sections_cache", None)
-            st.success(
-                "✅ 匿名化結果を再生成しました。下記サマリで確認できます。"
-                " 「レビューに送信」で LLM レビューを実行できます。"
-            )
+            st.session_state.anonymization_regenerated_message = True
+            st.rerun()
         except Exception as exc:  # noqa: BLE001
             _request_id = uuid.uuid4().hex[:8]
             st.error(f"匿名化結果の再生成に失敗しました ({_request_id})。")
             with st.expander("詳細トレース"):
                 st.code(traceback.format_exc())
 
-    # Phase 7 段階 1.5 (2026-05-08): preview_docs があれば常時表示
-    # docs_checked ガードを廃止し、プレビュー直後からサマリと DL ボタンが見えるように。
-    # ユーザフィードバック: 「匿名化してプレビュー」直後にサマリは既に見えていたほうが
-    # 自然な UX (「文書チェック」を押すまで見えない、は不自然だった)。
-    if preview_docs:
-        _render_anonymization_summary(preview_docs)
-        if st.session_state.get("anonymization_details_visible", False):
-            _expand_anonymization_details = bool(
-                st.session_state.pop("anonymization_details_expand_once", False)
+    if st.session_state.pop("anonymization_regenerated_message", False):
+        st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
+
+    _render_anonymization_summary(preview_docs)
+    if st.session_state.get("anonymization_details_visible", False):
+        _expand_anonymization_details = bool(
+            st.session_state.pop("anonymization_details_expand_once", False)
+        )
+        _render_anonymization_detail_panel(
+            preview_docs,
+            expanded=_expand_anonymization_details,
+        )
+    render_session_summary()
+    render_log_export_button()
+
+    # -- Step 3: Confirmation gate ----------------------------------------
+
+    st.markdown('<div class="step-header">ステップ 3 — 確認 & 送信</div>', unsafe_allow_html=True)
+
+    if blocked_docs:
+        st.error(
+            "次のファイルは外部レビューへの送信が禁止されています: "
+            + ", ".join(doc.name for doc in blocked_docs)
+            + "。より厳密に匿名化したコピーを準備してから再試行してください。"
+        )
+
+    if mask_docs and not blocked_docs:
+        st.warning(
+            f"{len(mask_docs)} 件の文書に未判定または要確認の項目があります。"
+            "ステップ2の匿名化結果とマスク候補を確認したうえで、下の最終承認に進んでください。"
+        )
+        with st.expander("確認が必要な文書", expanded=False):
+            for doc in mask_docs:
+                reasons = []
+                decision = doc.local_sensitivity_decision or "unknown"
+                if decision == "unknown":
+                    reasons.append("未判定")
+                if decision == "mask_and_continue":
+                    reasons.append("要確認")
+                if _has_uncertain_candidates(doc.name):
+                    reasons.append("マスク候補あり")
+                st.markdown(f"- **{doc.name}**: {', '.join(reasons) or '要確認'}")
+    elif not blocked_docs:
+        st.success(
+            "送信禁止または追加確認が必要な文書はありません。"
+            "匿名化結果を確認したうえで、このまま外部レビューへ送信できます。"
+        )
+
+    send_approved = False
+    if not blocked_docs:
+        st.markdown("**LLM 送信前の最終承認**")
+        send_approved = st.checkbox(
+            "ステップ 2 の匿名化結果、マスク候補、送信対象ログを確認しました。"
+            "匿名化済みテキストを外部 LLM レビューに送信することを承認します。",
+            key="send_approval",
+        )
+
+    can_send = bool(preview_docs) and not blocked_docs and send_approved
+
+    if blocked_docs:
+        active_status = "送信不可"
+    elif st.session_state.get("review_result") is not None:
+        active_status = "レビュー完了"
+    elif send_approved:
+        active_status = "送信準備完了"
+    else:
+        active_status = "確認待ち"
+    _render_review_status_bar(active_status)
+
+    send_col, status_col = st.columns([1.6, 4])
+    with send_col:
+        send_clicked = st.button(
+            "レビューに送信",
+            type="primary",
+            disabled=not can_send,
+            width='stretch',
+            help=(
+                "LLM プロバイダに匿名化済みテキストを送信し、レビュー結果を取得します。"
+            ),
+            key="send_review_button",
+        )
+    with status_col:
+        if blocked_docs:
+            st.markdown(
+                '<div class="muted">送信禁止の文書があるため、送信できません。</div>',
+                unsafe_allow_html=True,
             )
-            _render_anonymization_detail_panel(
-                preview_docs,
-                expanded=_expand_anonymization_details,
+        elif not send_approved:
+            st.markdown(
+                '<div class="muted">送信ボタンを有効にするには、最終承認をチェックしてください。</div>',
+                unsafe_allow_html=True,
             )
-        # R-W-2 (2026-05-08): 本セッションのマスク判断サマリ
-        render_session_summary()
-        # R-W-export (2026-05-08): 結果ログのダウンロードボタン
-        render_log_export_button()
+        else:
+            st.markdown(
+                '<div class="muted">✅ 送信準備完了。設定された LLM プロバイダには'
+                '匿名化済みのテキストのみが送信されます。</div>',
+                unsafe_allow_html=True,
+            )
 
     # Q12 (2026-05-08): 「レビューに送信」押下時の処理
     # LLM 送信のみ (文書チェック後の preview_docs を使用)。
@@ -2092,8 +2130,13 @@ if review is not None:
                                         ):
                                             st.markdown(f"**深堀パス {_pass_idx}**")
                                             if _deep_review.summary:
+                                                _summary_label = (
+                                                    "サマリ"
+                                                    if _pass_idx == 1
+                                                    else "追加確認結果"
+                                                )
                                                 st.markdown(
-                                                    f"**サマリ** — {_deep_review.summary}"
+                                                    f"**{_summary_label}** — {_deep_review.summary}"
                                                 )
                                             _sorted_deep_issues = sorted(
                                                 _deep_review.issues,

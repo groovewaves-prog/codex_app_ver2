@@ -40,6 +40,9 @@ class StructureCheckTests(unittest.TestCase):
         self.assertNotIn("ch3", missing_ids)
         self.assertNotIn("ch4", missing_ids)
         self.assertIn("ch10", missing_ids)
+        messages = "\n".join(finding.message for finding in result.findings)
+        self.assertIn("不足観点", messages)
+        self.assertNotIn("第10章", messages)
 
     def test_design_purpose_gap_is_reported_as_required_item_gap(self) -> None:
         docs = [
@@ -57,6 +60,31 @@ class StructureCheckTests(unittest.TestCase):
             if finding.kind == "required_item_gap"
         }
         self.assertIn("1.1", item_ids)
+        messages = "\n".join(finding.message for finding in result.findings)
+        self.assertIn("不足観点「はじめに」", messages)
+
+    def test_design_plain_text_gets_template_suggestion(self) -> None:
+        result = build_structure_check_result(
+            [
+                _doc(
+                    "flat_design.txt",
+                    "HikariAuth の認証方式をSAMLにする。MFAを使う。AWSで動かす。",
+                )
+            ],
+            "design",
+        )
+        kinds = {finding.kind for finding in result.findings}
+        self.assertIn("chapter_structure_missing", kinds)
+        self.assertIn("structure_template_suggestion", kinds)
+        template = next(
+            finding.suggested_content
+            for finding in result.findings
+            if finding.kind == "structure_template_suggestion"
+        )
+        self.assertIn("目的", template)
+        self.assertIn("非機能要件", template)
+        messages = "\n".join(finding.message for finding in result.findings)
+        self.assertNotIn("第1章", messages)
 
     def test_generic_profile_checks_purpose_at_beginning(self) -> None:
         result = build_structure_check_result(

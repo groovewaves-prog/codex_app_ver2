@@ -52,7 +52,6 @@ from secure_review.ui_viewmodel import (
     NextAction,
     document_attention_reasons,
     next_action_for_preview,
-    sort_documents_by_attention,
     sort_issues_by_importance,
     structure_fix_guidance,
 )
@@ -253,6 +252,26 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .next-action-card.block { border-left-color: var(--danger); background: var(--danger-soft); }
 .next-action-card.active { border-left-color: #0f7b63; background: #e5f2ee; }
 .next-action-card.success { border-left-color: var(--accent); background: var(--accent-soft); }
+
+.task-sticky-panel {
+    position: sticky;
+    top: 0.35rem;
+    z-index: 100;
+    background: rgba(244, 239, 230, 0.96);
+    backdrop-filter: blur(6px);
+    border: 1px solid var(--rule);
+    padding: 0.35rem 0.55rem 0.15rem;
+    margin: 0.3rem 0 0.9rem;
+    box-shadow: 0 3px 12px rgba(40, 32, 20, 0.08);
+}
+.task-sticky-panel .next-action-card {
+    margin: 0.15rem 0 0.45rem;
+}
+.height-control {
+    color: var(--ink-soft);
+    font-size: 0.82rem;
+    margin-top: 0.25rem;
+}
 
 .bundle-card {
     border: 1px solid var(--rule);
@@ -662,6 +681,52 @@ def _render_next_action_card(action) -> None:
     )
 
 
+def _active_status_for_preview(
+    *,
+    blocked_docs: list[SanitizedDocument],
+    send_approved: bool,
+) -> str:
+    if blocked_docs:
+        return "送信不可"
+    if st.session_state.get("review_in_progress"):
+        return "レビュー中"
+    if st.session_state.get("review_result") is not None:
+        return "レビュー完了"
+    if send_approved:
+        return "送信準備完了"
+    return "確認待ち"
+
+
+def _render_sticky_task_panel(action: NextAction, active_status: str) -> None:
+    st.markdown("<div class='task-sticky-panel'>", unsafe_allow_html=True)
+    _render_next_action_card(action)
+    _render_review_status_bar(active_status)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
+def _scroll_height_control(
+    label: str,
+    *,
+    key: str,
+    default: int,
+    min_value: int = 320,
+    max_value: int = 1000,
+) -> int:
+    st.markdown(
+        f"<div class='height-control'>{html.escape(label)}を調整できます。</div>",
+        unsafe_allow_html=True,
+    )
+    return st.slider(
+        label,
+        min_value=min_value,
+        max_value=max_value,
+        value=int(st.session_state.get(key, default)),
+        step=40,
+        key=key,
+        label_visibility="collapsed",
+    )
+
+
 def _render_review_bundle_overview(
     preview_docs: list[SanitizedDocument],
     blocked_docs: list[SanitizedDocument],
@@ -687,7 +752,13 @@ def _render_review_bundle_overview(
         review_in_progress=bool(st.session_state.get("review_in_progress")),
         review_done=st.session_state.get("review_result") is not None,
     )
-    _render_next_action_card(action)
+    _render_sticky_task_panel(
+        action,
+        _active_status_for_preview(
+            blocked_docs=blocked_docs,
+            send_approved=send_approved,
+        ),
+    )
 
     st.markdown("<div class='bundle-card'>", unsafe_allow_html=True)
     st.markdown("<div class='bundle-kicker'>Review Bundle</div>", unsafe_allow_html=True)
@@ -898,7 +969,20 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
             _item_sort_value(f.item_id),
         ),
     )
-    container = st.container(height=360) if len(sorted_findings) >= 6 else st.container()
+    _structure_height = (
+        _scroll_height_control(
+            "文書構成チェックの表示高さ",
+            key="structure_check_scroll_height",
+            default=360,
+            min_value=280,
+            max_value=760,
+        )
+        if len(sorted_findings) >= 6 else None
+    )
+    container = (
+        st.container(height=_structure_height)
+        if _structure_height is not None else st.container()
+    )
     with container:
         for finding in sorted_findings:
             severity_label = {
@@ -1229,7 +1313,20 @@ def _render_priority_issue_list(issues: list, severity_order: dict[str, int]) ->
     ]
     if not priority_issues:
         priority_issues = sort_issues_by_importance(issues)[:8]
-    container = st.container(height=420) if len(priority_issues) >= 4 else st.container()
+    _priority_height = (
+        _scroll_height_control(
+            "重要指摘リストの表示高さ",
+            key="priority_issue_scroll_height",
+            default=420,
+            min_value=320,
+            max_value=900,
+        )
+        if len(priority_issues) >= 4 else None
+    )
+    container = (
+        st.container(height=_priority_height)
+        if _priority_height is not None else st.container()
+    )
     with container:
         for issue in priority_issues:
             _render_review_issue(issue, severity_order)
@@ -1761,7 +1858,7 @@ if preview_clicked:
         st.session_state.preview_docs = sanitized
         st.session_state.preview_warnings = warnings
         st.session_state.anonymization_details_visible = True
-        st.session_state.anonymization_details_expand_once = True
+        st.session_state.anonymization_details_expand_once = False
         st.session_state.pop("review_result", None)
 
         # ----- R-M (PR-D2): 未確定候補抽出と gBizINFO 検索 -----
@@ -1891,20 +1988,27 @@ if preview_docs:
     # 11 ファイル前後を読み込んだ際に画面が縦に長く伸びすぎる問題への対処。
     # 3 件以下の場合は従来通りスクロールなし (画面圧迫の心配がないため)。
     _step2_use_scroll = len(preview_docs) >= 4
+    _step2_height = (
+        _scroll_height_control(
+            "匿名化結果一覧の表示高さ",
+            key="step2_scroll_height",
+            default=600,
+            min_value=360,
+            max_value=1100,
+        )
+        if _step2_use_scroll else None
+    )
     _step2_container = (
-        st.container(height=600) if _step2_use_scroll else st.container()
+        st.container(height=_step2_height) if _step2_use_scroll else st.container()
     )
     _uncertain_doc_names = {
         name
         for name, state in (_masking_states_for_gate or {}).items()
         if bool(getattr(state, "uncertain_candidates", None))
     }
-    _display_docs = sort_documents_by_attention(
-        preview_docs,
-        names_with_uncertain_candidates=_uncertain_doc_names,
-    )
+    _display_docs = list(preview_docs)
     if len(_display_docs) >= 2:
-        st.caption("注意が必要な文書、未判定、置換ありの文書を上に並べています。安全な文書は下段にまとまります。")
+        st.caption("ファイル名の章番号順で表示します。注意が必要な文書はバッジで示します。")
     with _step2_container:
         for doc in _display_docs:
             card_class = _doc_card_class(doc.local_sensitivity_decision)
@@ -2016,7 +2120,7 @@ if preview_docs:
             st.session_state.pop("deep_dive_notice", None)
             st.session_state.pop("send_approval", None)
             st.session_state.anonymization_details_visible = True
-            st.session_state.anonymization_details_expand_once = True
+            st.session_state.anonymization_details_expand_once = False
             st.session_state.pop("chapter_sections_cache", None)
             st.session_state.anonymization_regenerated_message = True
             st.rerun()
@@ -2034,10 +2138,14 @@ if preview_docs:
         _expand_anonymization_details = bool(
             st.session_state.pop("anonymization_details_expand_once", False)
         )
-        _render_anonymization_detail_panel(
-            preview_docs,
+        with st.expander(
+            "匿名化後テキスト確認（必要なときだけ開く）",
             expanded=_expand_anonymization_details,
-        )
+        ):
+            _render_anonymization_detail_panel(
+                preview_docs,
+                expanded=False,
+            )
     render_session_summary()
     render_log_export_button()
 
@@ -2423,8 +2531,18 @@ if review is not None:
     # 出る際に、画面が縦に長く伸びすぎる問題への対処。プロンプトプレビュー
     # と生レスポンスはコンテナの外に置き、デバッグ時は通常通り展開できる。
     _step4_use_scroll = len(review.issues) >= 4
+    _step4_height = (
+        _scroll_height_control(
+            "文書別レビュー結果の表示高さ",
+            key="step4_scroll_height",
+            default=800,
+            min_value=440,
+            max_value=1200,
+        )
+        if _step4_use_scroll else None
+    )
     _step4_container = (
-        st.container(height=800) if _step4_use_scroll else st.container()
+        st.container(height=_step4_height) if _step4_use_scroll else st.container()
     )
 
     # 深堀結果 (章キー -> [ReviewResult, ...]) を session_state から取得。
@@ -2516,8 +2634,20 @@ if review is not None:
                             f"深堀り実行は最初の深堀候補章（{_chapters[_enabled_deep_idx].chapter_label}）"
                             "のみ有効です。"
                         )
+                    _chapter_height = (
+                        _scroll_height_control(
+                            f"{_doc_name} の章別概要表示高さ",
+                            key="chapter_overview_scroll_height_"
+                            + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:10],
+                            default=640,
+                            min_value=360,
+                            max_value=1100,
+                        )
+                        if len(_chapters) >= 4 else None
+                    )
                     _chapter_container = (
-                        st.container(height=640) if len(_chapters) >= 4 else st.container()
+                        st.container(height=_chapter_height)
+                        if _chapter_height is not None else st.container()
                     )
                     with _chapter_container:
                         for _ch_idx, _ch in enumerate(_chapters):

@@ -129,6 +129,27 @@ STYLE = """
 
 h1, h2, h3 { font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', 'Times New Roman', serif; color: var(--ink); letter-spacing: -0.01em; }
 
+div.stButton > button[kind="primary"],
+button[data-testid="stBaseButton-primary"] {
+    background: #2f6d3a !important;
+    border: 1px solid #265b32 !important;
+    color: #ffffff !important;
+    box-shadow: 0 2px 0 rgba(31, 42, 29, 0.14);
+}
+div.stButton > button[kind="primary"]:hover,
+button[data-testid="stBaseButton-primary"]:hover {
+    background: #265b32 !important;
+    border-color: #1f4f2a !important;
+    color: #ffffff !important;
+}
+div.stButton > button[kind="primary"]:disabled,
+button[data-testid="stBaseButton-primary"]:disabled {
+    background: #e7e1d6 !important;
+    border-color: var(--rule) !important;
+    color: #8a8377 !important;
+    box-shadow: none;
+}
+
 .decision-badge {
     display: inline-block;
     padding: 0.18rem 0.7rem;
@@ -214,26 +235,27 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 
 .status-flow {
     display: flex;
-    gap: 0.25rem;
-    margin: 0.45rem 0 0.9rem;
-    font-size: 0.78rem;
+    gap: 0.18rem;
+    margin: 0.35rem 0 0.65rem;
+    font-size: 0.72rem;
     font-weight: 600;
 }
 .status-step {
     flex: 1;
     text-align: center;
-    padding: 0.42rem 0.35rem;
-    background: #e4e5e6;
-    color: #4a5549;
+    padding: 0.32rem 0.3rem;
+    background: #e8e5dc;
+    color: #6f746c;
     border-radius: 2px;
 }
 .status-step.done {
-    background: #d8ead8;
+    background: #dfeada;
     color: var(--accent);
 }
 .status-step.active {
-    background: #0f7b63;
-    color: white;
+    background: #edf3e8;
+    color: var(--accent);
+    box-shadow: inset 0 -2px 0 var(--accent);
 }
 .status-step.blocked {
     background: var(--danger-soft);
@@ -289,10 +311,11 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     display: grid;
     grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.7fr);
     gap: 0.85rem;
-    border: 1px solid var(--rule);
-    background: linear-gradient(135deg, #fffdf7 0%, #f5efe3 100%);
+    border: 1px solid #d6c9b5;
+    background: linear-gradient(135deg, #fffdf7 0%, #f2ebdd 100%);
     padding: 1rem;
     margin: 0.7rem 0 0.9rem;
+    box-shadow: 0 6px 20px rgba(38, 32, 22, 0.06);
 }
 .readiness-main {
     border-left: 5px solid var(--accent);
@@ -326,8 +349,8 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     gap: 0.65rem;
 }
 .readiness-card {
-    background: rgba(255,255,255,0.7);
-    border: 1px solid var(--rule);
+    background: rgba(255,255,255,0.78);
+    border: 1px solid rgba(217, 209, 192, 0.72);
     padding: 0.65rem 0.75rem;
     min-height: 92px;
 }
@@ -354,9 +377,9 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     margin: 0.45rem 0 0.65rem;
 }
 .summary-chip {
-    border: 1px solid var(--rule);
-    background: rgba(255,255,255,0.66);
-    padding: 0.35rem 0.55rem;
+    border: 1px solid rgba(217, 209, 192, 0.72);
+    background: rgba(255,255,255,0.72);
+    padding: 0.3rem 0.5rem;
     font-size: 0.82rem;
 }
 .summary-chip b {
@@ -1835,11 +1858,6 @@ with st.sidebar:
     st.caption("通常は自動判定で問題ありません。誤判定時のみ手動で変更します。")
 
     st.markdown("---")
-
-    # R-V (2026-05-08): マスク辞書プロファイル selector
-    render_customer_selector(sidebar=False)
-
-    st.markdown("---")
     if st.button("セッションをリセット", width='stretch'):
         _reset_state()
         # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、
@@ -1855,31 +1873,57 @@ with st.sidebar:
         "本セッション中のメモリ上のみで処理されます。"
     )
 
-    # ----------------------------------------------------------------
-    # 開発者モード (2026-05-08 追加)
-    # 実務ユーザの画面をすっきり保つため、デバッグ・実験 UI を分離する。
-    # OFF (デフォルト): 実務機能のみ表示
-    # ON: プロンプトプレビュー / LLM 生レスポンス / NER Diagnostics /
-    #     gBizINFO Diagnostics などの実験・診断 UI が追加表示される
-    # 環境変数 DEVELOPER_MODE_DEFAULT=true で初期値を ON にできる。
-    # ----------------------------------------------------------------
     st.markdown("---")
-    _developer_mode_default = (
-        os.getenv("DEVELOPER_MODE_DEFAULT", "false").strip().lower() == "true"
-    )
-    if "developer_mode" not in st.session_state:
-        st.session_state.developer_mode = _developer_mode_default
+    with st.expander("⚙️ 詳細設定（必要なときだけ開く）", expanded=False):
+        st.caption(
+            "通常操作では変更不要です。プロジェクト固有のマスク辞書、R-M、"
+            "開発者向け表示を切り替える場合だけ使います。"
+        )
 
-    st.session_state.developer_mode = st.toggle(
-        "⚙️ 開発者モード",
-        value=st.session_state.developer_mode,
-        help=(
-            "OFF (デフォルト): 実務機能のみ表示。"
-            "ON: プロンプトプレビュー、LLM 生レスポンス、NER Diagnostics、"
-            "gBizINFO Diagnostics などの実装検証用 UI が追加表示されます。"
-            " 環境変数 DEVELOPER_MODE_DEFAULT=true で初期値を ON にできます。"
-        ),
-    )
+        # R-V (2026-05-08): マスク辞書プロファイル selector
+        render_customer_selector(sidebar=False)
+
+        st.markdown("---")
+        if _is_rm_enabled():
+            st.markdown("##### R-M（固有名詞候補の追加検知）")
+            rm_enabled_user = st.checkbox(
+                "R-M を使う（推奨: ON）",
+                value=True,
+                key="rm_enabled_user",
+                help=(
+                    "OFF にすると、既存の正規表現マスキングのみで処理します。"
+                    "シード辞書ヒットや gBizINFO 検索は行いません。"
+                ),
+            )
+            try:
+                _rm_token = st.secrets.get("GBIZINFO_API_TOKEN", "")
+            except Exception:
+                _rm_token = ""
+            if _rm_token:
+                st.caption("✅ GBIZINFO_API_TOKEN は設定済みです。")
+            else:
+                st.caption(
+                    "⚠️ GBIZINFO_API_TOKEN は未設定です。"
+                    "シード辞書 + spaCy NER のみで動作します。"
+                )
+        else:
+            rm_enabled_user = False
+
+        st.markdown("---")
+        _developer_mode_default = (
+            os.getenv("DEVELOPER_MODE_DEFAULT", "false").strip().lower() == "true"
+        )
+        if "developer_mode" not in st.session_state:
+            st.session_state.developer_mode = _developer_mode_default
+
+        st.session_state.developer_mode = st.toggle(
+            "開発者モード",
+            value=st.session_state.developer_mode,
+            help=(
+                "OFF: 実務機能のみ表示。ON: プロンプトプレビュー、LLM 生レスポンス、"
+                "NER Diagnostics、gBizINFO Diagnostics などの実装検証用 UI を表示します。"
+            ),
+        )
 
     # ----------------------------------------------------------------
     # 採用規格セクション (2026-05-08 追加)
@@ -1929,50 +1973,6 @@ st.markdown(
     '構成・品質・リスクをレビューします。</p>',
     unsafe_allow_html=True,
 )
-
-
-# ----------------------------------------------------------------------
-# R-M (PR-D2) 設定セクション
-# ----------------------------------------------------------------------
-
-if _is_rm_enabled():
-    with st.expander(
-        "🔧 R-M (カスタム辞書 + 法人名検索) 設定",
-        expanded=False,
-    ):
-        st.caption(
-            "R-M Phase 1+2: 既存の正規表現マスキングに加え、spaCy NER と "
-            "EntityRuler によるシード辞書、gBizINFO による法人名検索を統合し、"
-            "未確定の固有名詞についてユーザに判断を委ねる機能。"
-        )
-
-        # 機能 ON/OFF (デフォルト ON)
-        rm_enabled_user = st.checkbox(
-            "この機能を使う (推奨: ON)",
-            value=True,
-            key="rm_enabled_user",
-            help=(
-                "OFF にすると、既存の正規表現マスキングのみで処理します。"
-                "シード辞書ヒットや gBizINFO 検索は行いません。"
-            ),
-        )
-
-        # gBizINFO トークン状態の透明性表示
-        try:
-            _rm_token = st.secrets.get("GBIZINFO_API_TOKEN", "")
-        except Exception:
-            _rm_token = ""
-        if _rm_token:
-            st.caption("✅ GBIZINFO_API_TOKEN は設定済みです (gBizINFO 検索が有効)")
-        else:
-            st.caption(
-                "⚠️ GBIZINFO_API_TOKEN は未設定です。"
-                "シード辞書 + spaCy NER のみで動作し、未確定候補に対する"
-                "gBizINFO 検索結果は表示されません。"
-            )
-else:
-    rm_enabled_user = False
-
 
 # -- Step 1: Upload --------------------------------------------------------
 

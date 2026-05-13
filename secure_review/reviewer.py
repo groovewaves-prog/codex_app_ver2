@@ -22,6 +22,10 @@ from secure_review.models import (
     SanitizedDocument,
 )
 from secure_review.network_guard import UpstreamHttpError, post_json_safely
+from secure_review.network_config import (
+    analyze_network_config,
+    render_network_config_analysis_for_prompt,
+)
 from secure_review.rubric import (
     ChapterSection,
     DESIGN_DOC_STRUCTURE_V0_2,
@@ -309,6 +313,36 @@ class MockReviewProvider(ReviewProvider):
             lowered = text.lower()
             beginning = lowered[:800]
 
+            if rubric.document_profile == "network_config":
+                analysis = analyze_network_config(text)
+                for finding in analysis.findings:
+                    issues.append(
+                        ReviewIssue(
+                            severity=finding.severity,
+                            title=finding.title,
+                            details=finding.details,
+                            recommendation=finding.recommendation,
+                            source_document=document.name,
+                        )
+                    )
+                if not analysis.findings:
+                    issues.append(
+                        ReviewIssue(
+                            severity="info",
+                            title="Config概要解析",
+                            details=(
+                                "Cisco/Fortinet Configとして概要解析しましたが、"
+                                "強い注意候補は検出されませんでした。"
+                            ),
+                            recommendation=(
+                                "正式なConfig監査ではなく概要解析のため、設計書・構成図・"
+                                "運用標準との突き合わせを行ってください。"
+                            ),
+                            source_document=document.name,
+                        )
+                    )
+                continue
+
             if rubric.document_profile == "source_code":
                 if _has_hardcoded_secret(lowered):
                     issues.append(
@@ -513,6 +547,7 @@ class MockReviewProvider(ReviewProvider):
                 )
             )
 
+        _assign_issue_ids(issues, rubric.document_profile)
         return _build_review_result(
             summary=f"Reviewed {len(documents)} document(s) and produced {len(issues)} issue(s).",
             issues=issues,
@@ -1258,6 +1293,21 @@ def _build_deep_dive_prompt(
             ]
         )
 
+    network_config_lines = _render_network_config_findings_for_prompt(
+        [target_doc],
+        rubric.document_profile,
+    )
+    if network_config_lines:
+        sections.extend(
+            [
+                "",
+                "## ネットワーク機器Configの機械解析",
+                *network_config_lines,
+                "",
+                "上記は正式なConfig監査ではなく概要解析です。断定しすぎず、設計書との突合観点として扱ってください。",
+            ]
+        )
+
     if is_chapter_mode:
         # Phase 7 段階 2-B: 章モード時は章本文のみ + 該当章のチェックリスト
         sections.append(f"## 対象章の本文")
@@ -1307,6 +1357,24 @@ STRUCTURE_FINDING_KIND_LABELS = {
     "chapter_structure_missing": "構成整理の提案",
     "structure_template_suggestion": "章立てテンプレート案",
 }
+
+
+def _render_network_config_findings_for_prompt(
+    documents: list[SanitizedDocument],
+    document_profile: str,
+) -> list[str]:
+    """Render deterministic Cisco/Fortinet config hints for LLM review."""
+    if document_profile != "network_config":
+        return []
+
+    lines: list[str] = []
+    for document in documents:
+        analysis = analyze_network_config(document.outbound_text)
+        if analysis.vendor == "unknown" and not analysis.findings:
+            continue
+        lines.append(f"## {document.name}")
+        lines.extend(render_network_config_analysis_for_prompt(analysis))
+    return lines
 
 
 def _render_structure_findings_for_prompt(
@@ -1495,6 +1563,27 @@ def build_prompt(
         "出力は JSON のみ。詳細はシステムプロンプトの指定に従ってください。",
     ]
 
+    if rubric.document_profile == "design":
+        sections.extend(
+            [
+                "",
+                "# 詳細設計書・コード/Config抜粋が含まれる場合の補足観点",
+                "- インターフェース仕様、データ項目、例外処理、状態遷移を確認してください。",
+                "- 文書本文とコード/SQL/ネットワーク機器Config抜粋の説明が矛盾していないか確認してください。",
+                "- コードやConfigの評価は概要解析であり、正式な静的解析・Config監査とは断定しないでください。",
+            ]
+        )
+    elif rubric.document_profile == "network_config":
+        sections.extend(
+            [
+                "",
+                "# ネットワーク機器Configレビューの注意",
+                "- Cisco IOS / IOS XE と Fortinet FortiOS を主な対象として概要解析してください。",
+                "- このレビューは正式なConfig監査ではなく、Configの概要、注意候補、設計書との突合観点を出すものです。",
+                "- ACL、Firewall Policy、NAT、VRF、route-map、VPN は文脈依存が強いため、断定より確認観点として整理してください。",
+            ]
+        )
+
     # R-Q-1b (2026-05-06): 全文書数を先頭にサマリ、各文書には「K/N」を付与。
     # これによりモデルは
     #   (a) 全部で何文書を読まされているか
@@ -1534,6 +1623,19 @@ def build_prompt(
                 "",
                 "# 文書構成チェックとの整合指示",
                 *structure_lines,
+            ]
+        )
+
+    network_config_lines = _render_network_config_findings_for_prompt(
+        documents,
+        rubric.document_profile,
+    )
+    if network_config_lines:
+        sections.extend(
+            [
+                "",
+                "# ネットワーク機器Configの機械解析",
+                *network_config_lines,
             ]
         )
 
@@ -1775,6 +1877,7 @@ _PROFILE_ID_PREFIX = {
     "proposal": "P",
     "change_runbook": "CR",
     "operations_runbook": "OR",
+    "network_config": "NC",
     "source_code": "SC",
 }
 

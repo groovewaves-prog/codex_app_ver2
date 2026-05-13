@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass, field
 
 from secure_review.models import SanitizedDocument
+from secure_review.network_config import looks_like_network_config
 
 
 @dataclass(frozen=True)
@@ -294,6 +295,13 @@ BODY_OPERATIONS_STRONG_SIGNALS: tuple[str, ...] = (
 )
 
 
+NETWORK_CONFIG_EXTENSIONS = {
+    ".cfg",
+    ".conf",
+    ".config",
+}
+
+
 SOURCE_CODE_EXTENSIONS = {
     ".py",
     ".ps1",
@@ -337,6 +345,7 @@ RUBRICS = {
                     "対象機器、役割、接続先、外部依存先が分かる",
                     "前提条件、制約条件、対象外範囲が記載されている",
                     "機能一覧と各機能の処理概要・入出力・異常系が確認できる",
+                    "詳細設計書では、インターフェース仕様、データ項目、状態遷移、例外処理が確認できる",
                     "移行・切替方式の概要が記載されている(詳細手順は別途で可)",
                     "現状課題や期待効果が背景・目的セクションで把握できる",
                 ),
@@ -356,6 +365,7 @@ RUBRICS = {
                     "IPアドレス、IF名、ホスト名、リージョン名に矛盾がない",
                     "章間の参照(例: 詳細はX章参照)の参照先が実在する",
                     "設計内容と試験観点・運用観点の対応が取れている",
+                    "本文の設計説明と、挿入されたコード・SQL・機器Config例が矛盾していない",
                 ),
                 fail_conditions=(
                     "機器名やIP体系に矛盾がある",
@@ -411,6 +421,7 @@ RUBRICS = {
                     "非機能要件(可用性・性能・セキュリティ)の確認方法が考えられている",
                     "期待結果が具体的に書かれている、または書ける程度に設計が具体的",
                     "異常系・切替試験・DR切替試験が考慮されている",
+                    "詳細設計書では、インターフェース境界値、例外系、状態遷移、データ制約から試験観点を導出できる",
                     "試験環境(本番/検証)の差異が試験計画に反映可能",
                 ),
                 fail_conditions=(
@@ -424,6 +435,8 @@ RUBRICS = {
             "構成図などの構成情報が無い場合は高リスクとして扱うこと。",
             "セキュリティ事項(特に認証情報の取り扱い)は他の指摘より重く扱うこと。",
             "未決事項・他社作業依存は『リスク・課題の明示』MC で確認すること。",
+            "詳細設計書では、インターフェース仕様、データ項目、例外処理、状態遷移、コード/Config抜粋との整合を確認すること。",
+            "文書内のコードや機器Configは概要解析として扱い、正式な静的解析・Config監査と断定しないこと。",
             "指摘は blocking / required / recommended の厳しさを意識して記述すること。",
             "指摘は感情的・主観的表現を避け、事実ベースで客観的に記述すること。",
         ),
@@ -718,6 +731,100 @@ RUBRICS = {
             "WBSが存在する場合は整合性を確認すること。無くても指摘しない。",
         ),
     ),
+    "network_config": ReviewRubric(
+        rubric_id="network_config_review_v1",
+        rubric_name="ネットワーク機器Config概要レビュー基準",
+        document_profile="network_config",
+        target_documents=("Cisco IOS / IOS XE Config", "Fortinet FortiGate / FortiOS Config"),
+        mandatory_checks=(
+            MandatoryCheck(
+                id="config_scope",
+                name="Configの対象と役割の把握",
+                requirement="Configから機器種別、想定役割、対象インターフェース、主要機能を概要把握できること。",
+                check_points=(
+                    "Cisco IOS/IOS XE または FortiOS などの構文種別が推定できる",
+                    "主要インターフェース、ルーティング、ポリシー、VPN、管理系設定の有無が把握できる",
+                    "設計書と突き合わせるべき確認観点が整理できる",
+                ),
+                fail_conditions=("構文種別や主要機能が判別できない",),
+            ),
+            MandatoryCheck(
+                id="config_management_access",
+                name="管理アクセスの安全性",
+                requirement="管理アクセスが暗号化され、送信元や認証方式が適切に制限されていること。",
+                check_points=(
+                    "Telnet/HTTP管理が不要に有効化されていない",
+                    "SSH/HTTPS/AAA/管理元制限の考え方が確認できる",
+                    "特権認証、管理者アカウント、監査ログの扱いが確認できる",
+                ),
+                fail_conditions=("TelnetやHTTP管理が許可されている", "管理元制限や認証方式が不明"),
+            ),
+            MandatoryCheck(
+                id="config_policy_routing",
+                name="通信制御・経路制御の確認",
+                requirement="ACL/Firewall Policy/NAT/Route/VPN が最小権限・設計意図に沿っているか確認できること。",
+                check_points=(
+                    "permit any any / all-to-all 許可など広すぎる通信許可を確認する",
+                    "NAT/VIP/VPN/route-map 等の文脈依存設定は断定せず確認観点として扱う",
+                    "経路制御やポリシーが設計書の通信要件と整合しているかを確認する",
+                ),
+                fail_conditions=("広すぎる通信許可が理由なく残っている", "経路やNATの意図が不明"),
+            ),
+        ),
+        evaluation_axes=(
+            EvaluationAxis(
+                id="overview_accuracy",
+                name="概要把握",
+                weight=25,
+                purpose="Configの役割と主要構成を過不足なく要約できるか",
+                checkpoints=(
+                    "ベンダ/構文種別を推定できる",
+                    "interface、routing、policy、VPN、管理系の有無を整理できる",
+                    "Config単体で断定できない点を明示できる",
+                ),
+            ),
+            EvaluationAxis(
+                id="security",
+                name="セキュリティ",
+                weight=30,
+                purpose="管理アクセス、認証、SNMP、広すぎる通信許可などの注意候補を抽出できるか",
+                checkpoints=(
+                    "Telnet/HTTP/SNMP community などの注意候補を確認する",
+                    "Firewall Policy / ACL の広すぎる許可を確認する",
+                    "秘密情報らしき値は匿名化済みである前提でも、保存・運用方針を確認する",
+                ),
+                fail_conditions=("明らかな危険候補を見落としている",),
+            ),
+            EvaluationAxis(
+                id="operability",
+                name="運用性",
+                weight=20,
+                purpose="ログ、NTP、監視、description など運用時に必要な情報が確認できるか",
+                checkpoints=(
+                    "Syslog/ログ転送、NTP、SNMP/監視設定の有無を確認する",
+                    "interface description やポリシー名から運用者が意図を追えるか確認する",
+                    "HA/冗長化の有無は要件に応じて確認観点として扱う",
+                ),
+            ),
+            EvaluationAxis(
+                id="design_consistency",
+                name="設計書との整合",
+                weight=25,
+                purpose="Config例が設計書本文・構成図・通信要件と矛盾していないか",
+                checkpoints=(
+                    "設計書内のConfig抜粋であれば、本文の説明と設定例が矛盾していないか確認する",
+                    "単体Configであれば、設計書と突き合わせるべきインターフェース、経路、ポリシーを整理する",
+                    "画像や構成図の情報がある場合も、OCR/画像理解だけで断定せず確認観点として扱う",
+                ),
+            ),
+        ),
+        review_policy=(
+            "このプロファイルはConfig監査ではなく、概要解析と確認観点の抽出であることを明示すること。",
+            "Cisco IOS/IOS XE と Fortinet FortiOS を主対象とし、それ以外の構文は推定として扱うこと。",
+            "ACL、Firewall Policy、NAT、VRF、route-map、VPN は文脈依存が強いため、断定ではなく設計書との突合観点を示すこと。",
+            "Telnet、HTTP管理、SNMP community、広すぎる許可、ログ/NTP不足は優先的に確認すること。",
+        ),
+    ),
     "source_code": ReviewRubric(
         rubric_id="source_code_review_v1",
         rubric_name="ソースコード・スクリプトレビュー基準",
@@ -885,7 +992,7 @@ def detect_document_profile(documents: list[SanitizedDocument]) -> ReviewClassif
 
     # Conflict case 1: multiple distinct profiles hit in filenames.
     if len(name_profiles_hit) >= 2:
-        priority = ("design", "proposal", "change_runbook", "operations_runbook")
+        priority = ("design", "proposal", "network_config", "change_runbook", "operations_runbook")
         provisional = max(
             priority,
             key=lambda p: (name_signals[p], -priority.index(p)),
@@ -912,7 +1019,7 @@ def detect_document_profile(documents: list[SanitizedDocument]) -> ReviewClassif
                 reason=(
                     f"ファイル名は '{name_profile}' を示唆していますが、"
                     f"本文には '{body_profile}' の強い signal "
-                    "(タイムチャート/切戻し/エスカレーション等) が含まれています。"
+                    "(Config構文/タイムチャート/切戻し/エスカレーション等) が含まれています。"
                     f"暫定的に '{name_profile}' を選択しています。"
                     "サイドバーから手動で選択することを推奨します。"
                 ),
@@ -1000,14 +1107,15 @@ def _collect_filename_signals(
 ) -> dict[str, int]:
     """Count how many documents matched each profile signal by filename.
 
-    Returns a dict with keys "design", "proposal", "change_runbook",
+    Returns a dict with keys "design", "proposal", "network_config", "change_runbook",
     "operations_runbook" and integer counts. Each document contributes to at
     most one profile (first match wins, in priority order: design ->
-    proposal -> change_runbook -> operations_runbook).
+    proposal -> network_config -> change_runbook -> operations_runbook).
     """
     counts: dict[str, int] = {
         "design": 0,
         "proposal": 0,
+        "network_config": 0,
         "change_runbook": 0,
         "operations_runbook": 0,
     }
@@ -1021,6 +1129,9 @@ def _collect_filename_signals(
         if any(keyword in name for keyword in FILENAME_PROPOSAL_KEYWORDS):
             counts["proposal"] += 1
             continue
+        if _filename_network_config_hit(name, _suffix_of(document.name or "")):
+            counts["network_config"] += 1
+            continue
         if any(keyword in name for keyword in FILENAME_CHANGE_RUNBOOK_KEYWORDS):
             counts["change_runbook"] += 1
             continue
@@ -1031,12 +1142,13 @@ def _collect_filename_signals(
 
 
 def _collect_body_strong_signals(corpus: str) -> dict[str, bool]:
-    """Detect strong runbook signals in the combined body corpus.
+    """Detect strong body signals in the combined body corpus.
 
     The corpus is expected to be already lower-cased by the caller.
-    Returns a dict like {"change_runbook": True, "operations_runbook": False}.
+    Returns a dict like {"network_config": True, "change_runbook": False}.
     """
     return {
+        "network_config": looks_like_network_config(corpus),
         "change_runbook": any(
             keyword in corpus for keyword in BODY_CHANGE_RUNBOOK_STRONG_SIGNALS
         ),
@@ -1051,6 +1163,44 @@ def _suffix_of(name: str) -> str:
     if "." not in lower_name:
         return ""
     return "." + lower_name.rsplit(".", 1)[1]
+
+
+def _filename_network_config_hit(name: str, suffix: str) -> bool:
+    strong_terms = (
+        "running-config",
+        "startup-config",
+        "show running",
+        "show_run",
+        "show-run",
+        "コンフィグ",
+        "機器config",
+        "機器設定",
+    )
+    if any(term in name for term in strong_terms):
+        return True
+
+    platform_terms = (
+        "cisco",
+        "ios",
+        "ios-xe",
+        "iosxe",
+        "fortigate",
+        "fortinet",
+        "fortios",
+        "router",
+        "switch",
+        "firewall",
+        "fw",
+    )
+    config_terms = ("config", "cfg", "conf", "設定")
+    if any(platform in name for platform in platform_terms) and any(
+        term in name for term in config_terms
+    ):
+        return True
+
+    return suffix in NETWORK_CONFIG_EXTENSIONS and any(
+        platform in name for platform in platform_terms
+    )
 
 
 def _looks_like_source_code(text: str) -> bool:

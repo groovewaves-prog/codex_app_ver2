@@ -15,6 +15,8 @@ import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
+from secure_review.network_diagram import render_diagram_ocr_summary
+
 
 LOGGER = logging.getLogger("secure_review.extractor")
 
@@ -415,12 +417,22 @@ def _extract_pdf_via_binary(binary: bytes, name: str, warnings: list[str]) -> st
 def _extract_image(binary: bytes, name: str, warnings: list[str]) -> str:
     ocr_text = _run_local_ocr(binary, name, warnings)
     if ocr_text:
-        return f"# Image: {name}\nOCR text:\n{ocr_text}"
+        return _format_image_ocr_text(name, ocr_text)
 
     warnings.append(
         f"{name}: Local OCR is unavailable, so only the file presence was recorded. Install Tesseract for image text extraction."
     )
     return f"# Image: {name}\nImage detected. OCR text was not available in the current environment."
+
+
+def _format_image_ocr_text(name: str, ocr_text: str) -> str:
+    diagram_summary = render_diagram_ocr_summary(ocr_text)
+    return (
+        f"# Image: {name}\n"
+        f"{diagram_summary}\n\n"
+        "## OCR text\n"
+        f"{ocr_text}"
+    )
 
 
 def _collect_xml_text(binary: bytes) -> str:
@@ -523,7 +535,12 @@ def _extract_embedded_images(
         image_binary = archive.read(media_path)
         ocr_text = _run_local_ocr(image_binary, f"{name}:{Path(media_path).name}", warnings)
         if ocr_text:
-            image_sections.append(f"Image OCR [{Path(media_path).name}]\n{ocr_text}")
+            image_sections.append(
+                f"Image OCR [{Path(media_path).name}]\n"
+                f"{render_diagram_ocr_summary(ocr_text)}\n\n"
+                "OCR text:\n"
+                f"{ocr_text}"
+            )
         else:
             image_sections.append(
                 f"Image OCR [{Path(media_path).name}]\nOCR text was not available in the current environment."

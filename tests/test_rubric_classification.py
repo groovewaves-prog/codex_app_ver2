@@ -139,6 +139,34 @@ class BackwardCompatibilityTests(unittest.TestCase):
         # syntax-based detection picks high or medium depending on _looks_like_source_code.
         self.assertIn(result.confidence, ("high", "medium"))
 
+    def test_cisco_ios_config_body_detected(self) -> None:
+        """Cisco IOS style config body → network_config / medium."""
+        result = detect_document_profile(
+            [
+                _doc(
+                    "router.txt",
+                    "interface GigabitEthernet0/1\n ip address 10.0.0.1 255.255.255.0\n"
+                    "line vty 0 4\n transport input ssh\nrouter ospf 1",
+                )
+            ]
+        )
+        self.assertEqual(result.document_profile, "network_config")
+        self.assertEqual(result.confidence, "medium")
+
+    def test_fortios_config_filename_and_body_detected(self) -> None:
+        """FortiGate config file → network_config / high."""
+        result = detect_document_profile(
+            [
+                _doc(
+                    "fortigate_config.conf",
+                    "config system interface\n edit \"port1\"\n set allowaccess ping ssh\n next\nend\n"
+                    "config firewall policy\n edit 1\n set srcintf \"port1\"\n set dstintf \"port2\"\n next\nend",
+                )
+            ]
+        )
+        self.assertEqual(result.document_profile, "network_config")
+        self.assertEqual(result.confidence, "high")
+
     def test_forced_profile_overrides_all(self) -> None:
         """forced_profile bypasses content-based detection entirely."""
         # Filename strongly suggests design, but caller forces operations_runbook.
@@ -228,6 +256,32 @@ class ProposalProfileTests(unittest.TestCase):
         proposal = RUBRICS["proposal"]
         total = sum(ax.weight for ax in proposal.evaluation_axes)
         self.assertEqual(total, 100)
+
+
+class NetworkConfigProfileTests(unittest.TestCase):
+    """Cisco/Fortinet Config profile is available as a bounded overview mode."""
+
+    def test_network_config_rubric_exists(self) -> None:
+        from secure_review.rubric import RUBRICS
+        self.assertIn("network_config", RUBRICS)
+
+    def test_network_config_evaluation_axes_weight_sum_is_100(self) -> None:
+        from secure_review.rubric import RUBRICS
+        rubric = RUBRICS["network_config"]
+        total = sum(axis.weight for axis in rubric.evaluation_axes)
+        self.assertEqual(total, 100)
+
+    def test_design_rubric_contains_detailed_design_viewpoints(self) -> None:
+        from secure_review.rubric import RUBRICS
+        design = RUBRICS["design"]
+        all_checkpoints = "\n".join(
+            checkpoint
+            for axis in design.evaluation_axes
+            for checkpoint in axis.checkpoints
+        )
+        self.assertIn("インターフェース仕様", all_checkpoints)
+        self.assertIn("状態遷移", all_checkpoints)
+        self.assertIn("コード・SQL・機器Config", all_checkpoints)
 
 
 class ProposalFilenameSignalTests(unittest.TestCase):

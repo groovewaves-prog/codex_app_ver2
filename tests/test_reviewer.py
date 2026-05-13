@@ -934,5 +934,61 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         self.assertNotIn("FIRST_ONLY_ISSUE", prompt)
 
 
+class NetworkConfigReviewTests(unittest.TestCase):
+    def test_network_config_prompt_contains_machine_analysis(self) -> None:
+        from secure_review.reviewer import build_prompt
+        from secure_review.rubric import choose_rubric
+
+        document = _doc(
+            name="fortigate_config.conf",
+            text=(
+                "config system interface\n"
+                " edit \"port1\"\n"
+                "  set allowaccess ping http ssh\n"
+                " next\n"
+                "end\n"
+                "config firewall policy\n"
+                " edit 1\n"
+                "  set srcintf \"port1\"\n"
+                "  set dstintf \"port2\"\n"
+                "  set srcaddr \"all\"\n"
+                "  set dstaddr \"all\"\n"
+                "  set service \"ALL\"\n"
+                "  set action accept\n"
+                " next\n"
+                "end\n"
+            ),
+        )
+        prompt = build_prompt(
+            [document],
+            rubric=choose_rubric([document], "network_config"),
+        )
+        self.assertIn("ネットワーク機器Configの機械解析", prompt)
+        self.assertIn("正式なConfig監査ではなく", prompt)
+        self.assertIn("広すぎるFirewall Policy", prompt)
+
+    def test_mock_network_config_gets_nc_prefix(self) -> None:
+        from secure_review.reviewer import MockReviewProvider
+
+        document = _doc(
+            name="router_config.txt",
+            text=(
+                "interface GigabitEthernet0/1\n"
+                " ip address 10.0.0.1 255.255.255.0\n"
+                "line vty 0 4\n"
+                " transport input telnet ssh\n"
+                "snmp-server community public RO\n"
+            ),
+        )
+        result = MockReviewProvider().review(
+            [document],
+            document_profile_override="network_config",
+        )
+        self.assertEqual(result.document_profile, "network_config")
+        self.assertTrue(result.issues)
+        self.assertTrue(result.issues[0].issue_id.startswith("NC-"))
+        self.assertTrue(any("Telnet" in issue.title for issue in result.issues))
+
+
 if __name__ == "__main__":
     unittest.main()

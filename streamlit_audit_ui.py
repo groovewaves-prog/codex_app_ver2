@@ -4,7 +4,7 @@
 - セッション内のマスク判断サマリ表示 (R-W-2)
 - 「永続化する」ボタン → user_seeds.yaml / user_allowlist.yaml 追記 (R-W-3)
 - 全期間の判断履歴と推奨エンジン表示 (R-W-4)
-- 顧客 PJ セレクタ (R-V)
+- マスク辞書プロファイル セレクタ (R-V)
 
 streamlit_app.py からの呼び出しは:
     from streamlit_audit_ui import (
@@ -68,7 +68,7 @@ def get_customer_id() -> str:
 
 
 # ============================================================
-# 顧客 PJ セレクタ (R-V)
+# マスク辞書プロファイル セレクタ (R-V)
 # ============================================================
 
 def _list_customers() -> list[str]:
@@ -84,7 +84,7 @@ def _list_customers() -> list[str]:
 
 
 def render_customer_selector(*, sidebar: bool = True) -> str:
-    """顧客 PJ セレクタを描画する (サイドバー or 本文)。
+    """マスク辞書プロファイル selector を描画する (サイドバー or 本文)。
 
     Returns:
         選択された customer_id (st.session_state.customer_id にも反映)。
@@ -99,14 +99,18 @@ def render_customer_selector(*, sidebar: bool = True) -> str:
         default_idx = 0
 
     selected = container.selectbox(
-        "👤 顧客 PJ",
+        "🧩 マスク辞書プロファイル",
         options=candidates,
         index=default_idx,
         key="customer_id_selector",
         help=(
-            "顧客 PJ ごとに seed dict / allowlist / audit log を分離します。"
-            " 新規 PJ は data/customers/<id>/ ディレクトリを作成すれば追加されます。"
+            "NER の seed dict / allowlist / マスク判断履歴を分離する単位です。"
+            "通常は既定値のままで問題ありません。"
+            " 新規プロファイルは data/customers/<id>/ ディレクトリを作成すれば追加されます。"
         ),
+    )
+    container.caption(
+        "通常は変更不要です。プロジェクト固有のマスク辞書や判断履歴を分けたい場合だけ切り替えます。"
     )
     if selected != st.session_state.customer_id:
         # R-W-ε (2026-05-08): 切り替え警告。マスク判断中だった場合は確認を求める。
@@ -115,7 +119,7 @@ def render_customer_selector(*, sidebar: bool = True) -> str:
         has_pending = bool(st.session_state.get("preview_docs"))
         if has_pending:
             container.warning(
-                f"⚠️ 顧客 PJ を **{st.session_state.customer_id}** から "
+                f"⚠️ マスク辞書プロファイルを **{st.session_state.customer_id}** から "
                 f"**{selected}** に切り替えると、"
                 "現在のセッションの判断履歴が新セッションに分離されます。"
                 " 進行中の判断は失われませんが、サマリ画面で別セッションとして集計されます。"
@@ -506,14 +510,15 @@ def render_history_panel() -> None:
     agg = aggregate_decisions(customer_id=customer_id)
 
     with st.expander(
-        f"📈 全期間のマスク判断履歴と推奨 (顧客: {customer_id}, 語 {len(agg)} 種類)",
+        f"📈 全期間のマスク判断履歴と推奨 (辞書プロファイル: {customer_id}, 語 {len(agg)} 種類)",
         expanded=False,
     ):
         if not agg:
             st.info(
                 "まだ判断履歴がありません。"
-                " 文書をレビューに送信すると、ここに過去の判断パターンと"
-                " seed dict / allowlist 昇格推奨が蓄積されていきます。"
+                " 未確定マスク候補をユーザが判断し、匿名化結果を再生成した場合のみ、"
+                "ここに過去の判断パターンと seed dict / allowlist 昇格推奨が蓄積されます。"
+                "安全判定で候補がない文書では履歴は増えません。"
             )
             return
 

@@ -2,6 +2,7 @@ import base64
 import io
 import unittest
 import zipfile
+from unittest.mock import patch
 
 from secure_review.extractor import extract_text
 
@@ -122,6 +123,23 @@ class ExtractorTests(unittest.TestCase):
 
         self.assertIn("Image detected", text)
         self.assertTrue(any("OCR" in warning for warning in warnings))
+
+    def test_image_ocr_adds_local_diagram_summary(self) -> None:
+        ocr_text = "Internet\nFortiGate-01\nFortiGate-02\nHA\nDMZ\nVLAN 100\n10.0.0.0/24"
+        with patch("secure_review.extractor._run_local_ocr", return_value=ocr_text):
+            text, warnings = extract_text(
+                "diagram.png",
+                base64.b64encode(b"fake-image").decode("ascii"),
+                "image/png",
+                "base64",
+            )
+
+        self.assertEqual(warnings, [])
+        self.assertIn("構成図OCRサマリ", text)
+        self.assertIn("画像そのものは外部LLMへ送信せず", text)
+        self.assertIn("接続線・矢印・配置関係は確定解析していない", text)
+        self.assertIn("## OCR text", text)
+        self.assertIn("FortiGate-01", text)
 
 
 if __name__ == "__main__":

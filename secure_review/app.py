@@ -161,7 +161,7 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         review = provider.review(sanitized_documents, document_profile_override)
         if review.classification_confidence == "low":
             extraction_warnings.append(
-                "Document classification confidence is low. Consider specifying documentProfile explicitly if the review focus should be source_code, design, change_runbook, or operations_runbook."
+                "Document classification confidence is low. Consider specifying documentProfile explicitly if the review focus should be source_code, network_config, design, proposal, change_runbook, or operations_runbook."
             )
 
         response = {

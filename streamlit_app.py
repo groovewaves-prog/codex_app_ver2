@@ -47,6 +47,7 @@ from secure_review.structure_check import (
     StructureCheckResult,
     build_structure_check_result,
 )
+from secure_review.token_budget import estimate_review_token_budget
 
 # R-W-2/3/4 (2026-05-08): マスク判断履歴 UI モジュール
 from streamlit_audit_ui import (
@@ -87,8 +88,8 @@ if "env_loaded" not in st.session_state:
 
 
 st.set_page_config(
-    page_title="セキュアレビュー",
-    page_icon="🛡",
+    page_title="技術文書レビュー支援ツール",
+    page_icon="📄",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -270,6 +271,7 @@ PROFILE_LABELS = {
     "proposal": "企画書",
     "change_runbook": "変更・切替手順書",
     "operations_runbook": "保守・運用手順書",
+    "network_config": "ネットワーク機器Config",
     "source_code": "ソースコード",
 }
 
@@ -278,6 +280,7 @@ ISSUE_ID_PREFIX_HELP = {
     "proposal": "P = Proposal（企画書）",
     "change_runbook": "CR = Change Runbook（変更・切替手順書）",
     "operations_runbook": "OR = Operations Runbook（保守・運用手順書）",
+    "network_config": "NC = Network Config（ネットワーク機器Config）",
     "source_code": "SC = Source Code（ソースコード）",
 }
 
@@ -503,6 +506,63 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
             "未判定の文書は安全扱いにせず、外部送信前に文書別承認を必須にします。"
             "匿名化結果を確認し、必要に応じてマスク判断を見直してください。"
         )
+
+
+def _render_token_budget_panel(
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+) -> None:
+    """Render a pre-send estimate of Gemma/Gemini token impact."""
+    if not preview_docs:
+        return
+
+    try:
+        estimate = estimate_review_token_budget(
+            preview_docs,
+            document_profile_override,
+        )
+    except Exception as exc:  # noqa: BLE001
+        st.warning(f"トークン予算の概算に失敗しました: {exc}")
+        return
+
+    status_label = {
+        "mock": "外部消費なし",
+        "safe": "通常範囲",
+        "caution": "注意",
+        "split_recommended": "分割推奨",
+    }.get(estimate.status, estimate.status)
+
+    with st.expander("🧮 Gemma4送信前トークン予算（概算）", expanded=estimate.status != "safe"):
+        metric_cols = st.columns(5)
+        metric_cols[0].metric("予定call数", estimate.call_count)
+        metric_cols[1].metric("本文推定", f"{estimate.body_tokens:,}")
+        metric_cols[2].metric("最大/1call", f"{estimate.max_call_input_tokens:,}")
+        metric_cols[3].metric("入力合計", f"{estimate.total_input_tokens:,}")
+        metric_cols[4].metric("判定", status_label)
+
+        st.caption(
+            "本文推定に加え、システムプロンプト、レビュー指示、Config/OCRサマリ等を含めた概算です。"
+            "実際の課金・消費トークンとは完全一致しません。"
+        )
+        st.caption(
+            f"出力上限の設定: {estimate.max_output_tokens_per_call:,} tokens/call "
+            f"(最大予約枠の概算: {estimate.estimated_output_token_cap:,})。"
+            "深堀ボタンを押すと追加callが発生します。"
+        )
+
+        for reason in estimate.reasons:
+            if estimate.status == "split_recommended":
+                st.warning(reason)
+            elif estimate.status == "caution":
+                st.info(reason)
+            else:
+                st.success(reason)
+
+        if estimate.status in {"caution", "split_recommended"}:
+            st.markdown(
+                "- 普段使いの長い手順書では、章単位に分ける、別紙ログを外す、"
+                "画像OCR結果を確認して不要行を削る、といった運用を推奨します。"
+            )
 
 
 def _has_regeneratable_mask_candidates(masking_states: dict) -> bool:
@@ -979,7 +1039,7 @@ def _get_ner_masker():
     try:
         from secure_review.ner_masker import NerMasker
 
-        # R-V (2026-05-08): customer_id を渡して顧客 PJ 固有 seed dict もロード
+        # R-V (2026-05-08): customer_id を渡してプロファイル固有 seed dict もロード
         return NerMasker(
             seed_yaml_path="data/ner_seeds.yaml",
             customer_id=st.session_state.get("customer_id", "kddi_mail_relay"),
@@ -1167,8 +1227,8 @@ def _render_uncertain_candidates_card(
 # ------------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.markdown("### 🛡 セキュアレビュー")
-    st.caption("外部 LLM へ送信する前に、ローカル環境で匿名化を実施します。")
+    st.markdown("### 📄 技術文書レビュー支援ツール")
+    st.caption("匿名化した文書をもとに、構成・品質・リスクをレビューします。")
     st.markdown("---")
 
     provider = os.getenv("REVIEW_PROVIDER", "mock")
@@ -1184,25 +1244,31 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown("##### レビュー対象プロファイル")
+    st.markdown("##### 文書種別")
     profile_options = [
         ("(自動判定)", None),
         ("設計書", "design"),
         ("変更・切替手順書", "change_runbook"),
         ("保守・運用手順書", "operations_runbook"),
+        ("ネットワーク機器Config", "network_config"),
         ("ソースコード", "source_code"),
     ]
     profile_label = st.selectbox(
-        "プロファイル指定",
+        "文書種別",
         [label for label, _ in profile_options],
         index=0,
         label_visibility="collapsed",
+        help=(
+            "通常は自動判定のままで利用します。"
+            "自動判定が実際の文書種別と異なる場合だけ、手動で上書きしてください。"
+        ),
     )
     document_profile_override = dict(profile_options)[profile_label]
+    st.caption("通常は自動判定で問題ありません。誤判定時のみ手動で変更します。")
 
     st.markdown("---")
 
-    # R-V (2026-05-08): 顧客 PJ セレクタ
+    # R-V (2026-05-08): マスク辞書プロファイル selector
     render_customer_selector(sidebar=False)
 
     st.markdown("---")
@@ -1289,10 +1355,10 @@ with st.sidebar:
 
 # --------------------------------------------------------------------- main
 
-st.markdown("## セキュアレビュー")
+st.markdown("## 技術文書レビュー支援ツール")
 st.markdown(
-    '<p class="muted">外部に文書が送信される前に、ローカル匿名化と機密度判定で'
-    'レビュー対象を確認します。</p>',
+    '<p class="muted">アップロード文書を匿名化し、業界標準に基づいて'
+    '構成・品質・リスクをレビューします。</p>',
     unsafe_allow_html=True,
 )
 
@@ -1682,6 +1748,7 @@ if preview_docs:
         st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
 
     _render_anonymization_summary(preview_docs)
+    _render_token_budget_panel(preview_docs, document_profile_override)
     if st.session_state.get("anonymization_details_visible", False):
         _expand_anonymization_details = bool(
             st.session_state.pop("anonymization_details_expand_once", False)
@@ -1737,15 +1804,7 @@ if preview_docs:
 
     can_send = bool(preview_docs) and not blocked_docs and send_approved
 
-    if blocked_docs:
-        active_status = "送信不可"
-    elif st.session_state.get("review_result") is not None:
-        active_status = "レビュー完了"
-    elif send_approved:
-        active_status = "送信準備完了"
-    else:
-        active_status = "確認待ち"
-    _render_review_status_bar(active_status)
+    status_bar_slot = st.empty()
 
     send_col, status_col = st.columns([1.6, 4])
     with send_col:
@@ -1777,6 +1836,19 @@ if preview_docs:
                 unsafe_allow_html=True,
             )
 
+    if blocked_docs:
+        active_status = "送信不可"
+    elif send_clicked or st.session_state.get("review_in_progress"):
+        active_status = "レビュー中"
+    elif st.session_state.get("review_result") is not None:
+        active_status = "レビュー完了"
+    elif send_approved:
+        active_status = "送信準備完了"
+    else:
+        active_status = "確認待ち"
+    with status_bar_slot.container():
+        _render_review_status_bar(active_status)
+
     # Q12 (2026-05-08): 「レビューに送信」押下時の処理
     # LLM 送信のみ (文書チェック後の preview_docs を使用)。
     #
@@ -1785,6 +1857,7 @@ if preview_docs:
     # st.progress と st.status で進捗を可視化する。
     # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
+        st.session_state.review_in_progress = True
         review_progress = st.progress(0.0, text="送信前チェックを開始しています...")
         # 課題 1 拡張 (2026-05-08): ボタン押下時に「本セッションのマスク判断サマリ」を
         # 折りたたむ。Streamlit の st.expander は開閉状態を session_state に自動
@@ -1831,18 +1904,38 @@ if preview_docs:
             review_progress.progress(100, text="レビューが完了しました。")
 
             st.session_state.review_result = review
+            st.session_state.review_in_progress = False
+            status_bar_slot.empty()
+            with status_bar_slot.container():
+                _render_review_status_bar("レビュー完了")
         except LocalUrlError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
+            st.session_state.review_in_progress = False
+            status_bar_slot.empty()
+            with status_bar_slot.container():
+                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
             st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
         except ValueError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
+            st.session_state.review_in_progress = False
+            status_bar_slot.empty()
+            with status_bar_slot.container():
+                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
             st.error(str(exc))
         except RuntimeError as exc:
             # Gemini quota and similar user-actionable errors come through here.
             review_progress.progress(100, text="レビュー処理で停止しました。")
+            st.session_state.review_in_progress = False
+            status_bar_slot.empty()
+            with status_bar_slot.container():
+                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             review_progress.progress(100, text="レビュー処理で停止しました。")
+            st.session_state.review_in_progress = False
+            status_bar_slot.empty()
+            with status_bar_slot.container():
+                _render_review_status_bar("送信準備完了" if send_approved else "確認待ち")
             request_id = uuid.uuid4().hex[:8]
             st.error(f"レビューに失敗しました ({request_id})。詳細はサーバログを確認してください。")
             with st.expander("詳細トレース"):
@@ -2065,6 +2158,9 @@ if review is not None:
                 )
 
                 with st.expander(f"🧭 章別概要レビュー ({len(_chapters)} 章)", expanded=True):
+                    _developer_deep_dive_all = bool(
+                        st.session_state.get("developer_mode", False)
+                    )
                     _deep_candidate_indices = [
                         _idx
                         for _idx, _candidate_ch in enumerate(_chapters)
@@ -2084,9 +2180,16 @@ if review is not None:
                         )
                     ]
                     _enabled_deep_idx = (
-                        _deep_candidate_indices[0] if _deep_candidate_indices else None
+                        None
+                        if _developer_deep_dive_all
+                        else (_deep_candidate_indices[0] if _deep_candidate_indices else None)
                     )
-                    if _enabled_deep_idx is None:
+                    if _developer_deep_dive_all:
+                        st.caption(
+                            "概要レビューは全章を表示します。開発者モード ON のため、"
+                            "検証用に全章の深堀りボタンを有効化しています。"
+                        )
+                    elif _enabled_deep_idx is None:
                         st.caption(
                             "概要レビューは全章を表示します。深堀候補がないため、"
                             "章単位の深堀りボタンは無効です。"
@@ -2126,7 +2229,12 @@ if review is not None:
                                 )
                             _deep_badge = (
                                 "<span class='decision-badge decision-mask'>深堀候補</span>"
-                                if _needs_deep else ""
+                                if _needs_deep
+                                else (
+                                    "<span class='decision-badge decision-safe'>開発者深堀可</span>"
+                                    if _developer_deep_dive_all
+                                    else ""
+                                )
                             )
                             _is_enabled_deep_candidate = _ch_idx == _enabled_deep_idx
                             _chapter_key = _chapter_cache_key(_doc_name, _ch)
@@ -2153,7 +2261,10 @@ if review is not None:
                                             f"{len(_structure_ch_findings)}件の重要/要確認あり",
                                         )
                                 with _ch_col2:
-                                    _can_run_chapter = _is_enabled_deep_candidate
+                                    _can_run_chapter = (
+                                        _developer_deep_dive_all
+                                        or _is_enabled_deep_candidate
+                                    )
                                     _can_deep_dive_more = (
                                         _can_run_chapter
                                         and _pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES

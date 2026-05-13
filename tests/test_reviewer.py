@@ -819,6 +819,63 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         )
         self.assertIn("既存指摘と同じ内容は再掲せず", prompt)
         self.assertIn("issues の section には対象章名を必ず入れてください", prompt)
+        self.assertIn("概要レビューと異なる結論になる場合", prompt)
+
+    def test_chapter_overview_prompt_defines_suitable_criteria(self) -> None:
+        from secure_review.reviewer import build_prompt
+
+        prompt = build_prompt([
+            _doc(
+                name="design.docx",
+                text=(
+                    "第 1 章 はじめに\n目的と範囲\n"
+                    "第 2 章 システム要件\n機能要件\n"
+                    "第 3 章 システム構成\n構成概要"
+                ),
+            )
+        ])
+        self.assertIn("review で「適切」と書けるのは", prompt)
+        self.assertIn("needs_deep_dive=true", prompt)
+
+    def test_chapter_deep_dive_prompt_filters_unrelated_existing_issues(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import build_prompt
+        from secure_review.rubric import ChapterSection
+
+        chapter = ChapterSection(
+            chapter_id="ch2",
+            chapter_label="第 2 章 システム要件",
+            detected_chapter_num=2,
+            text_start=0,
+            text_end=20,
+            extracted_text="第 2 章 システム要件\n機能要件\n非機能要件",
+        )
+        issues = [
+            ReviewIssue(
+                severity="high",
+                title="FIRST_ONLY_ISSUE",
+                details="first details",
+                recommendation="first recommendation",
+                source_document="design.docx",
+                section="第 1 章 はじめに",
+            ),
+            ReviewIssue(
+                severity="medium",
+                title="SECOND_ONLY_ISSUE",
+                details="second details",
+                recommendation="second recommendation",
+                source_document="design.docx",
+                section="第 2 章 システム要件",
+            ),
+        ]
+        prompt = build_prompt(
+            [_doc(name="design.docx", text="第 2 章 システム要件\n機能要件")],
+            deep_dive_target="design.docx",
+            existing_issues=issues,
+            chapter=chapter,
+        )
+        self.assertIn("SECOND_ONLY_ISSUE", prompt)
+        self.assertNotIn("FIRST_ONLY_ISSUE", prompt)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import threading
 from http.server import ThreadingHTTPServer
 
 from secure_review.app import ReviewRequestHandler
+from secure_review.models import SanitizedDocument
 
 
 def _start_test_server():
@@ -110,6 +111,25 @@ class AppIntegrationTests(unittest.TestCase):
         self.assertEqual(code, HTTPStatus.CONFLICT)
         self.assertEqual(body["status"], "confirmation_required")
         self.assertIn("runbook.md", body["documents_requiring_confirmation"])
+
+    def test_review_requires_confirmation_for_unknown_sensitivity(self) -> None:
+        """Unknown sensitivity must not be treated as safe."""
+        sanitized = SanitizedDocument(
+            name="unknown.md",
+            original_excerpt="content",
+            sanitized_excerpt="content",
+            outbound_text="content",
+            local_sensitivity_decision="unknown",
+        )
+        with patch.dict(os.environ, {"REVIEW_PROVIDER": "mock"}, clear=True), \
+             patch("secure_review.app._run_sanitization_pipeline", return_value=([sanitized], [])):
+            code, body = _post(
+                self.base + "/api/review",
+                {"documents": [_doc("unknown.md", "content")]},
+            )
+        self.assertEqual(code, HTTPStatus.CONFLICT)
+        self.assertEqual(body["status"], "confirmation_required")
+        self.assertIn("unknown.md", body["documents_requiring_confirmation"])
 
     def test_review_proceeds_after_confirmation(self) -> None:
         with patch.dict(os.environ, {"REVIEW_PROVIDER": "mock"}, clear=True):

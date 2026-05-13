@@ -81,6 +81,12 @@ JSON オブジェクトのみを返してください。コードブロックや
 - section には、指摘が属する章・節が分かる場合は「第 4 章 ネットワーク構成」のように章名を入れてください。
 - 指摘がない場合は issues を空配列 [] にしてください。
 - 章が提示されている場合、chapter_overviews には提示された全章を漏れなく含めてください。
+- chapter_overviews の review で「適切」「問題なし」と評価してよいのは、その章に high/medium 相当の不足、
+  未解決の前提、追加確認が必要な論点がない場合に限ります。
+- ある章に high/medium の issues を出す場合、同じ章の chapter_overviews.needs_deep_dive は true とし、
+  review には深堀りが必要な理由を短く書いてください。「適切」と矛盾する表現は避けてください。
+- low/info 程度の改善提案のみであれば、review は「概ね適切。ただし〜」のように留保付きで書き、
+  needs_deep_dive は原則 false としてください。
 - 事実ベースで客観的に。「不適切である」より「〜のリスクがある」「〜の改善余地がある」を好む。
 """
 
@@ -1103,6 +1109,26 @@ class GeminiFreeTierProvider(GeminiApiReviewProvider):
     default_model = "gemini-2.0-flash"
 
 
+def _issue_mentions_chapter(issue: ReviewIssue, chapter: ChapterSection) -> bool:
+    """Return True when an existing issue is explicitly tied to a chapter."""
+    fields = (
+        "issue_id",
+        "section",
+        "title",
+        "current_state",
+        "issue",
+        "impact",
+        "details",
+        "recommendation",
+    )
+    text = " ".join(str(getattr(issue, field, "") or "") for field in fields)
+    chapter_num = str(getattr(chapter, "detected_chapter_num", "") or "").strip()
+    patterns = [chapter.chapter_id, chapter.chapter_label]
+    if chapter_num:
+        patterns.extend([f"第 {chapter_num} 章", f"第{chapter_num}章"])
+    return any(pattern and pattern in text for pattern in patterns)
+
+
 def _build_deep_dive_prompt(
     documents: list[SanitizedDocument],
     rubric: ReviewRubric,
@@ -1140,6 +1166,11 @@ def _build_deep_dive_prompt(
     # Phase 7 段階 2-B (2026-05-08): 章単位深堀りモード判定
     is_chapter_mode = chapter is not None
     chapter_label = chapter.chapter_label if is_chapter_mode else ""
+    if is_chapter_mode:
+        related_issues = [
+            issue for issue in related_issues
+            if _issue_mentions_chapter(issue, chapter)
+        ]
 
     if is_chapter_mode:
         sections = [
@@ -1150,6 +1181,8 @@ def _build_deep_dive_prompt(
             "この章を、構造定義書 v0.2 の該当チェック項目に基づいて詳細に評価してください。",
             "**章本文は文書全体の一部** ですが、評価はこの章単独の品質を見てください。",
             "(他の章との連携は、ファイル全体の深堀りで別途評価されます。)",
+            "この深堀レビューは、概要レビューで deep_dive が必要と判断された章にだけ実行されます。",
+            "概要レビューと異なる結論になる場合は、summary に差分理由を明示してください。",
             "既存指摘と同じ内容は再掲せず、この章の未検出リスク、前提条件、対応手順の具体化に集中してください。",
             "issues の section には対象章名を必ず入れてください。",
             "",
@@ -1159,7 +1192,7 @@ def _build_deep_dive_prompt(
             "JSON の構造はシステムプロンプトで指定した形式に従ってください。",
             "missing_chapters は **空配列 []** を返してください (章単位では判定不要)。",
             "",
-            "## 既存のレビュー指摘 (この文書全体に対するもの、章別ではない)",
+            "## 既存のレビュー指摘 (対象章に紐づくもののみ)",
             "",
         ]
     else:
@@ -1325,6 +1358,9 @@ def build_prompt(
                 "上記文書から検出された章は以下です。",
                 "chapter_overviews には、以下の全章について 1 件ずつ、章の要約と概要レベルの評価を返してください。",
                 "重大な指摘は issues にも分離し、chapter_overviews は全章の俯瞰に使ってください。",
+                "review で「適切」と書けるのは、その章に high/medium 相当の不足や未解決の前提がない場合だけです。",
+                "その章に high/medium の issues を出す場合は needs_deep_dive=true とし、review には深堀り理由を書いてください。",
+                "low/info 程度の改善提案のみなら「概ね適切。ただし〜」のように留保付きで書き、needs_deep_dive は原則 false にしてください。",
                 *detected_chapter_lines,
             ]
         )

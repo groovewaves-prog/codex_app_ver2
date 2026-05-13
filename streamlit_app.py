@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import html
 import io
 import json
 import os
@@ -41,6 +42,10 @@ from secure_review.rubric import ChapterSection, extract_chapters_from_text
 from secure_review.run_masking_pipeline import (
     apply_user_decisions,
     run_masking_pipeline,
+)
+from secure_review.structure_check import (
+    StructureCheckResult,
+    build_structure_check_result,
 )
 
 # R-W-2/3/4 (2026-05-08): マスク判断履歴 UI モジュール
@@ -174,11 +179,30 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     padding: 0.4rem 0.9rem;
     margin-bottom: 0.5rem;
     background: var(--bg-card);
+    font-size: 0.92rem;
+    line-height: 1.5;
 }
 .issue-row.high   { border-left-color: var(--danger); }
 .issue-row.medium { border-left-color: var(--warn); }
 .issue-row.low    { border-left-color: var(--accent); }
 .issue-row.info   { border-left-color: var(--ink-soft); }
+
+.review-compact {
+    font-size: 0.92rem;
+    line-height: 1.55;
+}
+
+.structure-check-card {
+    border-left: 3px solid var(--rule);
+    background: var(--bg-card);
+    padding: 0.45rem 0.75rem;
+    margin: 0.35rem 0;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+.structure-check-card.high { border-left-color: var(--danger); background: #fff7f6; }
+.structure-check-card.medium { border-left-color: var(--warn); background: #fffaf0; }
+.structure-check-card.info { border-left-color: var(--ink-soft); background: #fafaf6; }
 
 .provider-line {
     font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
@@ -268,7 +292,7 @@ def _decision_badge(decision: str) -> str:
 def _doc_card_class(decision: str) -> str:
     if decision == "block":
         return "doc-card block"
-    if decision == "mask_and_continue":
+    if decision in {"mask_and_continue", "unknown"}:
         return "doc-card mask"
     return "doc-card"
 
@@ -425,7 +449,8 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
     uncertain_count = 0
     masking_states = st.session_state.get("masking_states", {}) or {}
     for doc in preview_docs:
-        counts[doc.local_sensitivity_decision] = counts.get(doc.local_sensitivity_decision, 0) + 1
+        decision = doc.local_sensitivity_decision or "unknown"
+        counts[decision] = counts.get(decision, 0) + 1
         replacement_count += len(getattr(doc, "replacements", []) or [])
         estimated_tokens += int(getattr(doc, "estimated_input_tokens", 0) or 0)
         state = masking_states.get(doc.name)
@@ -433,17 +458,23 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
             uncertain_count += len(getattr(state, "uncertain_candidates", []) or [])
 
     st.markdown("#### 匿名化結果サマリ")
-    cols = st.columns(6)
+    cols = st.columns(7)
     cols[0].metric("文書数", len(preview_docs))
     cols[1].metric("安全", counts.get("safe", 0))
     cols[2].metric("要確認", counts.get("mask_and_continue", 0))
-    cols[3].metric("送信禁止", counts.get("block", 0))
-    cols[4].metric("置換数", replacement_count)
-    cols[5].metric("未確定候補", uncertain_count)
+    cols[3].metric("未判定", counts.get("unknown", 0))
+    cols[4].metric("送信禁止", counts.get("block", 0))
+    cols[5].metric("置換数", replacement_count)
+    cols[6].metric("未確定候補", uncertain_count)
     st.caption(
         f"LLM 送信対象の推定トークン数: {estimated_tokens:,}。"
         "送信されるのは匿名化済みテキストのみです。"
     )
+    if counts.get("unknown", 0):
+        st.warning(
+            "未判定の文書は安全扱いにせず、外部送信前に文書別承認を必須にします。"
+            "匿名化結果を確認し、必要に応じてマスク判断を見直してください。"
+        )
 
 
 def _render_anonymization_detail_panel(
@@ -471,6 +502,7 @@ def _render_anonymization_detail_panel(
                     "safe": "安全",
                     "mask_and_continue": "要確認",
                     "block": "送信禁止",
+                    "unknown": "未判定",
                 }.get(doc.local_sensitivity_decision, doc.local_sensitivity_decision),
             )
             tabs = st.tabs(["LLM送信対象テキスト", "匿名化後の抜粋", "置換一覧"])
@@ -571,6 +603,95 @@ def _infer_issue_chapter(issue, chapters: tuple) -> str:
             best_score = score
             best_label = chapter.chapter_label
     return best_label if best_score >= 2 else ""
+
+
+def _render_document_structure_check(result: StructureCheckResult) -> None:
+    st.markdown("### 文書構成チェック")
+    st.caption(
+        "業界標準・公的ガイドラインを反映した構造定義に照らし、"
+        "欠落章と章内の必須要素不足を先に確認します。"
+    )
+
+    findings = list(result.findings or ())
+    high_findings = [f for f in findings if f.severity == "high"]
+    medium_findings = [f for f in findings if f.severity == "medium"]
+    missing_chapters = [f for f in findings if f.kind == "missing_chapter"]
+    item_gaps = [f for f in findings if f.kind == "required_item_gap"]
+
+    cols = st.columns(5)
+    cols[0].metric("対象文書", result.document_count)
+    cols[1].metric("検出章", result.detected_chapter_count)
+    cols[2].metric("重要不足", len(high_findings))
+    cols[3].metric("要確認", len(medium_findings))
+    cols[4].metric("不足章", len(missing_chapters))
+
+    if not findings:
+        st.success("標準構成上の明確な欠落章・必須要素不足は検出されませんでした。")
+        return
+
+    st.warning(
+        "以下の構成不足が検出されました。LLM の自由記述サマリとは別に、"
+        "構造定義に基づく明示的なチェック結果として確認してください。"
+    )
+
+    severity_order = {"high": 0, "medium": 1, "info": 2}
+    sorted_findings = sorted(
+        findings,
+        key=lambda f: (
+            severity_order.get(f.severity, 9),
+            f.kind,
+            f.chapter_id,
+            f.item_id,
+        ),
+    )
+    container = st.container(height=360) if len(sorted_findings) >= 6 else st.container()
+    with container:
+        for finding in sorted_findings:
+            severity_label = {
+                "high": "重要不足",
+                "medium": "要確認",
+                "info": "情報",
+            }.get(finding.severity, finding.severity)
+            source = (
+                f"<div class='doc-meta'>対象: {finding.source_document}</div>"
+                if finding.source_document else ""
+            )
+            expected = (
+                f"<div style='margin-top:0.25rem;color:#4a5549;'>"
+                f"<b>本来必要な内容:</b> {finding.expected_content}</div>"
+                if finding.expected_content else ""
+            )
+            title_parts = [severity_label]
+            if finding.chapter_id:
+                title_parts.append(finding.chapter_id)
+            if finding.item_id:
+                title_parts.append(finding.item_id)
+            title = " · ".join(title_parts)
+            st.markdown(
+                f"<div class='structure-check-card {finding.severity}'>"
+                f"<b>{title}</b><br/>"
+                f"{finding.message}"
+                f"{source}"
+                f"{expected}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+    if item_gaps:
+        st.caption(
+            "章内必須要素不足はキーワード検出による一次判定です。"
+            "表現ゆれで検出できない場合があるため、最終判断では本文も確認してください。"
+        )
+
+
+def _render_compact_field(label: str, value: str) -> None:
+    if not value:
+        return
+    st.markdown(
+        f"<div class='review-compact'><b>{html.escape(label)}</b>: "
+        f"{html.escape(str(value))}</div>",
+        unsafe_allow_html=True,
+    )
 
 
 def _render_review_issue(issue, severity_order: dict[str, int]) -> None:
@@ -1346,11 +1467,20 @@ if preview_docs:
             return False
         return bool(getattr(state, "uncertain_candidates", None))
 
+    def _requires_manual_confirmation(doc: SanitizedDocument) -> bool:
+        decision = doc.local_sensitivity_decision or "unknown"
+        if decision == "block":
+            return False
+        return (
+            decision in {"mask_and_continue", "unknown"}
+            or decision not in {"safe", "mask_and_continue", "block", "unknown"}
+            or _has_uncertain_candidates(doc.name)
+        )
+
     mask_docs = [
         doc
         for doc in preview_docs
-        if doc.local_sensitivity_decision == "mask_and_continue"
-        or _has_uncertain_candidates(doc.name)
+        if _requires_manual_confirmation(doc)
     ]
     blocked_docs = [
         doc
@@ -1383,15 +1513,13 @@ if preview_docs:
         with _step3_container:
             for doc in mask_docs:
                 # PR-I-FIX: R-M uncertain がある場合は、文言で何を確認すべきかを補足
-                _is_rm_only = (
-                    doc.local_sensitivity_decision != "mask_and_continue"
-                    and _has_uncertain_candidates(doc.name)
-                )
-                _label_suffix = (
-                    "(マスク候補の確認 + 匿名化結果の確認)"
-                    if _is_rm_only
-                    else "(匿名化後の抜粋の確認)"
-                )
+                _decision = doc.local_sensitivity_decision or "unknown"
+                if _decision == "unknown":
+                    _label_suffix = "(未判定の確認 + 匿名化結果の確認)"
+                elif _decision != "mask_and_continue" and _has_uncertain_candidates(doc.name):
+                    _label_suffix = "(マスク候補の確認 + 匿名化結果の確認)"
+                else:
+                    _label_suffix = "(匿名化後の抜粋の確認)"
                 confirmations[doc.name] = st.checkbox(
                     f"**{doc.name}** の匿名化後の抜粋を確認し、外部レビューに送信して安全であることを承認します。 {_label_suffix}",
                     key=f"confirm_{doc.name}",
@@ -1737,20 +1865,28 @@ if review is not None:
             unsafe_allow_html=True,
         )
 
+    _preview_docs_for_structure = st.session_state.get("preview_docs") or []
+    if _preview_docs_for_structure:
+        _structure_result = build_structure_check_result(
+            _preview_docs_for_structure,
+            review.document_profile or "",
+        )
+        _render_document_structure_check(_structure_result)
+
     st.markdown("### 文書全体の概要")
     _summary_struct = review.summary_structured
     with st.container(border=True):
         if not _summary_struct.is_empty():
             if _summary_struct.purpose:
-                st.markdown(f"**目的**: {_summary_struct.purpose}")
+                _render_compact_field("目的", _summary_struct.purpose)
             if _summary_struct.content_outline:
-                st.markdown(f"**内容要約**: {_summary_struct.content_outline}")
+                _render_compact_field("内容要約", _summary_struct.content_outline)
             if _summary_struct.overall_evaluation:
-                st.markdown(f"**全体評価**: {_summary_struct.overall_evaluation}")
+                _render_compact_field("全体評価", _summary_struct.overall_evaluation)
             if _summary_struct.verdict:
                 st.markdown(f"**総合判定**: {_verdict_badge(_summary_struct.verdict)}", unsafe_allow_html=True)
         elif review.summary:
-            st.markdown(review.summary)
+            _render_compact_field("サマリ", review.summary)
         else:
             st.info("LLM から文書全体の概要は返りませんでした。結果ログの生レスポンスを確認してください。")
 
@@ -1829,15 +1965,36 @@ if review is not None:
                     f"<div style='margin-top:0.6rem;padding:0.5rem 0.8rem;"
                     f"background:#f5f5f0;border-left:3px solid #888;'>"
                     f"📖 <b>このファイルから {len(_chapters)} 章を検出しました。</b> "
-                    f"章ごとに深堀りできます。</div>",
+                    f"章ごとの概要と深堀候補を確認できます。</div>",
                     unsafe_allow_html=True,
                 )
 
                 with st.expander(f"🧭 章別概要レビュー ({len(_chapters)} 章)", expanded=True):
-                    st.caption(
-                        "概要レビューは全章を表示します。トークン消費を抑えるため、"
-                        "深堀り実行は開発者モードでも最初の章のみ有効です。"
+                    _deep_candidate_indices = [
+                        _idx
+                        for _idx, _candidate_ch in enumerate(_chapters)
+                        if bool(
+                            getattr(
+                                _find_chapter_overview(review, _doc_name, _candidate_ch),
+                                "needs_deep_dive",
+                                False,
+                            )
+                        )
+                    ]
+                    _enabled_deep_idx = (
+                        _deep_candidate_indices[0] if _deep_candidate_indices else None
                     )
+                    if _enabled_deep_idx is None:
+                        st.caption(
+                            "概要レビューは全章を表示します。深堀候補がないため、"
+                            "章単位の深堀りボタンは無効です。"
+                        )
+                    else:
+                        st.caption(
+                            "概要レビューは全章を表示します。トークン消費と判定矛盾を抑えるため、"
+                            f"深堀り実行は最初の深堀候補章（{_chapters[_enabled_deep_idx].chapter_label}）"
+                            "のみ有効です。"
+                        )
                     _chapter_container = (
                         st.container(height=640) if len(_chapters) >= 4 else st.container()
                     )
@@ -1858,6 +2015,7 @@ if review is not None:
                                 "<span class='decision-badge decision-mask'>深堀候補</span>"
                                 if _needs_deep else ""
                             )
+                            _is_enabled_deep_candidate = _ch_idx == _enabled_deep_idx
                             _chapter_key = _chapter_cache_key(_doc_name, _ch)
                             _chapter_deep_results = _chapter_deep_results_all.get(
                                 _chapter_key, []
@@ -1874,10 +2032,10 @@ if review is not None:
                                         f"{_deep_badge}",
                                         unsafe_allow_html=True,
                                     )
-                                    st.markdown(f"**章の概要**: {_summary}")
-                                    st.markdown(f"**概要レビュー**: {_overview_review}")
+                                    _render_compact_field("章の概要", _summary)
+                                    _render_compact_field("概要レビュー", _overview_review)
                                 with _ch_col2:
-                                    _can_run_chapter = _ch_idx == 0
+                                    _can_run_chapter = _is_enabled_deep_candidate
                                     _can_deep_dive_more = (
                                         _can_run_chapter
                                         and _pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES
@@ -1905,7 +2063,11 @@ if review is not None:
                                             else (
                                                 "この章は深堀り上限に到達しました。既存結果を確認してください。"
                                                 if _can_run_chapter
-                                                else "トークン制限対策として、現在は最初の章のみ深堀りできます。"
+                                                else (
+                                                    "この章は概要レビューで深堀候補ではないため、深堀り対象外です。"
+                                                    if not _needs_deep
+                                                    else "トークン制限対策として、最初の深堀候補章のみ深堀りできます。"
+                                                )
                                             )
                                         ),
                                         width='stretch',
@@ -1915,7 +2077,11 @@ if review is not None:
                                             f"深堀り済み: {_pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}"
                                         )
                                     elif not _can_run_chapter:
-                                        st.caption("深堀り対象外")
+                                        st.caption(
+                                            "深堀り対象外"
+                                            if not _needs_deep
+                                            else "後続候補（現在は無効）"
+                                        )
                                 if _chapter_deep_results:
                                     with st.expander(
                                         f"📌 この章の深堀結果 ({_pass_count} 回)",

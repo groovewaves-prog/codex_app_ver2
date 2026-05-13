@@ -130,12 +130,12 @@ class ReviewRequestHandler(BaseHTTPRequestHandler):
         # Always refuse block.
         self._enforce_block_gate(sanitized_documents)
 
-        # mask_and_continue requires explicit confirmation.
+        # Anything other than an explicit safe/block decision requires confirmation.
         if REQUIRE_MASK_AND_CONTINUE_CONFIRM:
             needs_confirm = [
                 document.name
                 for document in sanitized_documents
-                if document.local_sensitivity_decision == "mask_and_continue"
+                if _requires_confirmation(document)
                 and not (confirm_flag or bool(doc_confirmations.get(document.name)))
             ]
             if needs_confirm:
@@ -298,9 +298,14 @@ def _status_for(sanitized_documents: list[SanitizedDocument]) -> str:
     decisions = {doc.local_sensitivity_decision for doc in sanitized_documents}
     if "block" in decisions or any(doc.outbound_risk == "high" for doc in sanitized_documents):
         return "blocked"
-    if "mask_and_continue" in decisions:
+    if any(_requires_confirmation(doc) for doc in sanitized_documents):
         return "confirmation_required"
     return "safe"
+
+
+def _requires_confirmation(document: SanitizedDocument) -> bool:
+    decision = document.local_sensitivity_decision or "unknown"
+    return decision != "safe" and decision != "block"
 
 
 def _security_summary(sanitized_documents: list[SanitizedDocument]) -> dict[str, Any]:

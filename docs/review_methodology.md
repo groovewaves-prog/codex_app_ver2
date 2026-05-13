@@ -8,12 +8,16 @@ The tool uses a bounded, evidence-preserving review flow:
    the main issue list.
 2. A chapter deep dive is treated as a recorded inspection pass, not as an
    unbounded retry button.
-3. The first deep-dive pass evaluates the selected chapter against the
+3. Only the first chapter marked as needing deep dive in the overview is
+   enabled by default. Chapters judged suitable at overview level are not
+   deep-dived, because "suitable" means no high/medium risk or unresolved
+   premise was found at the overview pass.
+4. The first deep-dive pass evaluates the selected chapter against the
    applicable checklist and records concrete issues.
-4. A second pass is allowed only to search for residual issues that were not
+5. A second pass is allowed only to search for residual issues that were not
    already found. Existing issues are passed back into the prompt so the model
    is instructed not to repeat them.
-5. After two passes, the UI stops further LLM calls and recommends acting on
+6. After two passes, the UI stops further LLM calls and recommends acting on
    the recorded findings. This avoids nondeterministic repeated reviews and
    keeps token cost bounded.
 
@@ -24,4 +28,3 @@ This policy follows three principles from established review practice:
   than rediscovered repeatedly.
 - Different review passes should add coverage by changing perspective or
   objective, not by asking the same question again.
-

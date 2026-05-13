@@ -505,6 +505,16 @@ def _render_anonymization_summary(preview_docs: list[SanitizedDocument]) -> None
         )
 
 
+def _has_regeneratable_mask_candidates(masking_states: dict) -> bool:
+    """Return True when the regenerate button can actually change output."""
+    for state in (masking_states or {}).values():
+        confirmed = getattr(state, "confirmed_findings", None) or []
+        uncertain = getattr(state, "uncertain_candidates", None) or []
+        if confirmed or uncertain:
+            return True
+    return False
+
+
 def _render_anonymization_detail_panel(
     preview_docs: list[SanitizedDocument],
     *,
@@ -1571,15 +1581,24 @@ if preview_docs:
         for doc in preview_docs
         if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
     ]
+    can_regenerate_anonymization = _has_regeneratable_mask_candidates(
+        _masking_states_for_gate
+    )
+    regenerate_help = (
+        "マスク候補の判断を反映し、匿名化済みテキストを再生成します。"
+        "この操作では外部 LLM には送信しません。"
+        if can_regenerate_anonymization
+        else (
+            "再生成が必要なマスク候補はありません。"
+            "安全判定で未確定候補もない場合は、このまま確認・送信できます。"
+        )
+    )
 
     check_clicked = st.button(
         "📋 匿名化結果を再生成",
         type="secondary",
-        disabled=not bool(preview_docs),
-        help=(
-            "マスク候補の判断を反映し、匿名化済みテキストを再生成します。"
-            "この操作では外部 LLM には送信しません。"
-        ),
+        disabled=not bool(preview_docs) or not can_regenerate_anonymization,
+        help=regenerate_help,
         key="doc_check_button",
     )
 

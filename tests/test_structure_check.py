@@ -86,6 +86,35 @@ class StructureCheckTests(unittest.TestCase):
         messages = "\n".join(finding.message for finding in result.findings)
         self.assertNotIn("第1章", messages)
 
+    def test_design_embedded_viewpoint_is_structure_suggestion(self) -> None:
+        result = build_structure_check_result(
+            [
+                _doc(
+                    "mixed_design.docx",
+                    "第 1 章 はじめに\n本書の目的と対象範囲を示す。\n"
+                    "第 2 章 システム要件\n機能要件と非機能要件を定義する。\n"
+                    "セキュリティは脅威モデル、暗号化、監査ログを検討する。\n"
+                    "運用は監視、アラート、バックアップを検討する。\n"
+                    "第 3 章 システム全体構成\n全体構成図と構成要素を示す。",
+                )
+            ],
+            "design",
+        )
+        organization_ids = {
+            finding.chapter_id
+            for finding in result.findings
+            if finding.kind == "structure_organization_suggestion"
+        }
+        missing_ids = {
+            finding.chapter_id
+            for finding in result.findings
+            if finding.kind == "missing_chapter"
+        }
+        self.assertIn("ch10", organization_ids)
+        self.assertIn("ch11", organization_ids)
+        self.assertNotIn("ch10", missing_ids)
+        self.assertNotIn("ch11", missing_ids)
+
     def test_generic_profile_checks_purpose_at_beginning(self) -> None:
         result = build_structure_check_result(
             [_doc("runbook.md", "手順\n1. 作業を開始する。")],

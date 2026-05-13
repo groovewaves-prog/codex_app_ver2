@@ -645,21 +645,29 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
     medium_findings = [f for f in findings if f.severity == "medium"]
     missing_chapters = [f for f in findings if f.kind == "missing_chapter"]
     item_gaps = [f for f in findings if f.kind == "required_item_gap"]
+    organization_suggestions = [
+        f
+        for f in findings
+        if f.kind in {"chapter_structure_missing", "structure_template_suggestion", "structure_organization_suggestion"}
+    ]
 
-    cols = st.columns(5)
+    cols = st.columns(6)
     cols[0].metric("対象文書", result.document_count)
     cols[1].metric("検出章", result.detected_chapter_count)
     cols[2].metric("重要不足", len(high_findings))
     cols[3].metric("要確認", len(medium_findings))
-    cols[4].metric("不足章", len(missing_chapters))
+    cols[4].metric("不足観点", len(missing_chapters))
+    cols[5].metric("整理提案", len(organization_suggestions))
 
     if not findings:
         st.success("標準構成上の明確な欠落章・必須要素不足は検出されませんでした。")
         return
 
     st.warning(
-        "以下の不足観点が見つかりました。レビュー対象の文書群に、設計書として通常確認したい"
-        "目的・要件・構成・セキュリティ・運用などの観点が含まれているか確認してください。"
+        "文書の構成で確認したい点があります。"
+        "「不足観点」は該当する記述が見当たらないもの、"
+        "「必須要素不足」は記述はあるものの中身が足りないもの、"
+        "「構成整理の提案」は記述はあるものの見出し・章・粒度を整理した方がよいものです。"
     )
 
     severity_order = {"high": 0, "medium": 1, "info": 2}
@@ -692,6 +700,10 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
             title_parts = [severity_label]
             if finding.kind == "structure_template_suggestion":
                 title_parts.append("章立てテンプレート案")
+            elif finding.kind in {"chapter_structure_missing", "structure_organization_suggestion"}:
+                title_parts.append("構成整理の提案")
+                if finding.chapter_name:
+                    title_parts.append(f"対象観点: {finding.chapter_name}")
             elif finding.chapter_name:
                 title_parts.append(f"不足観点: {finding.chapter_name}")
             if finding.item_name:

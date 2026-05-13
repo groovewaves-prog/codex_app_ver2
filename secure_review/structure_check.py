@@ -80,6 +80,20 @@ CRITICAL_ITEM_KEYWORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+VIEWPOINT_KEYWORDS_BY_CHAPTER: dict[str, tuple[str, ...]] = {
+    "ch1": ("目的", "背景", "スコープ", "対象範囲", "対象外", "関係者", "責任分担"),
+    "ch2": ("業務要件", "機能要件", "非機能要件", "NFR", "制約条件", "前提条件"),
+    "ch3": ("全体構成", "構成図", "構成要素", "コンポーネント", "環境構成"),
+    "ch4": ("ネットワーク", "VPC", "サブネット", "IP", "ルーティング", "VPN", "DNS"),
+    "ch5": ("認証", "認可", "アカウント", "権限", "MFA", "SSO"),
+    "ch8": ("可用性", "冗長", "稼働率", "SLO", "SLA", "DR", "RPO", "RTO"),
+    "ch10": ("セキュリティ", "脅威", "脆弱性", "暗号", "KMS", "監査ログ", "インシデント"),
+    "ch11": ("運用", "監視", "アラート", "バックアップ", "デプロイ", "リリース", "ロールバック"),
+    "ch14": ("移行", "切戻し", "ロールバック", "移行手順", "判定基準"),
+    "ch15": ("リスク", "前提", "未決", "課題", "参照文書", "改訂履歴"),
+}
+
+
 DESIGN_PLAIN_TEXT_TEMPLATE = """1. はじめに
 - 目的
 - 対象範囲 / 対象外範囲
@@ -123,6 +137,7 @@ def build_structure_check_result(
 def _build_design_structure_check(
     documents: list[SanitizedDocument],
 ) -> StructureCheckResult:
+    combined_text = "\n".join(doc.outbound_text for doc in documents)
     chapters_by_doc: dict[str, tuple[ChapterSection, ...]] = {
         doc.name: extract_chapters_from_text(doc.outbound_text)
         for doc in documents
@@ -158,7 +173,7 @@ def _build_design_structure_check(
                 suggested_content=DESIGN_PLAIN_TEXT_TEMPLATE,
             )
         )
-        if not _has_purpose_text("\n".join(doc.outbound_text for doc in documents)):
+        if not _has_purpose_text(combined_text):
             findings.append(
                 StructureFinding(
                     kind="required_item_gap",
@@ -173,8 +188,38 @@ def _build_design_structure_check(
             )
         return StructureCheckResult("design", len(documents), 0, tuple(findings))
 
+    organization_suggested_ids: set[str] = set()
+
+    for doc_name, chapter in all_chapters:
+        current_standard_chapter = _standard_chapter_for(chapter.chapter_id)
+        if current_standard_chapter is None:
+            continue
+        for standard_chapter in DESIGN_DOC_STRUCTURE_V0_2:
+            if standard_chapter.chapter_id in detected_ids:
+                continue
+            if standard_chapter.chapter_id == current_standard_chapter.chapter_id:
+                continue
+            if standard_chapter.chapter_id in organization_suggested_ids:
+                continue
+            if not _has_viewpoint_content(chapter.extracted_text, standard_chapter.chapter_id):
+                continue
+            findings.append(
+                _organization_suggestion_finding(
+                    standard_chapter,
+                    source_document=doc_name,
+                    source_chapter=current_standard_chapter.chapter_name,
+                )
+            )
+            organization_suggested_ids.add(standard_chapter.chapter_id)
+
     for standard_chapter in DESIGN_DOC_STRUCTURE_V0_2:
         if standard_chapter.chapter_id not in detected_ids:
+            if standard_chapter.chapter_id in organization_suggested_ids:
+                continue
+            if _has_viewpoint_content(combined_text, standard_chapter.chapter_id):
+                findings.append(_organization_suggestion_finding(standard_chapter))
+                organization_suggested_ids.add(standard_chapter.chapter_id)
+                continue
             severity = (
                 "high"
                 if standard_chapter.chapter_id in CRITICAL_DESIGN_CHAPTER_IDS
@@ -242,6 +287,32 @@ def _build_generic_structure_check(
     )
 
 
+def _organization_suggestion_finding(
+    standard_chapter: StandardChapter,
+    source_document: str = "",
+    source_chapter: str = "",
+) -> StructureFinding:
+    location = (
+        f"「{source_chapter}」内に"
+        if source_chapter
+        else "本文中に"
+    )
+    return StructureFinding(
+        kind="structure_organization_suggestion",
+        severity="medium",
+        chapter_id=standard_chapter.chapter_id,
+        chapter_name=standard_chapter.chapter_name,
+        source_document=source_document,
+        expected_content=standard_chapter.purpose,
+        message=(
+            f"{location}「{standard_chapter.chapter_name}」に関係する記述がありますが、"
+            "独立した見出し・章として整理されていません。"
+            "読み手がレビュー観点を追いやすいよう、見出しを分けるか、"
+            "該当章へ移動することを推奨します。"
+        ),
+    )
+
+
 def _missing_chapter_finding(
     standard_chapter: StandardChapter,
     severity: str,
@@ -282,6 +353,21 @@ def _item_is_covered(text: str, item_id: str) -> bool:
 
 def _has_purpose_text(text: str) -> bool:
     return _contains_any(text, CRITICAL_ITEM_KEYWORDS["1.1"])
+
+
+def _has_viewpoint_content(text: str, chapter_id: str) -> bool:
+    keywords = VIEWPOINT_KEYWORDS_BY_CHAPTER.get(chapter_id, ())
+    hits = _viewpoint_hits(text, keywords)
+    return len(hits) >= 2
+
+
+def _viewpoint_hits(text: str, keywords: tuple[str, ...]) -> tuple[str, ...]:
+    normalized = _normalize(text)
+    return tuple(
+        keyword
+        for keyword in keywords
+        if _normalize(keyword) in normalized
+    )
 
 
 def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:

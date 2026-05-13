@@ -48,6 +48,14 @@ from secure_review.structure_check import (
     build_structure_check_result,
 )
 from secure_review.token_budget import estimate_review_token_budget
+from secure_review.ui_viewmodel import (
+    NextAction,
+    document_attention_reasons,
+    next_action_for_preview,
+    sort_documents_by_attention,
+    sort_issues_by_importance,
+    structure_fix_guidance,
+)
 
 # R-W-2/3/4 (2026-05-08): マスク判断履歴 UI モジュール
 from streamlit_audit_ui import (
@@ -231,6 +239,40 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .status-step.blocked {
     background: var(--danger-soft);
     color: var(--danger);
+}
+
+.next-action-card {
+    border: 1px solid var(--rule);
+    border-left: 5px solid var(--accent);
+    background: #fbfaf4;
+    padding: 0.75rem 1rem;
+    margin: 0.65rem 0 0.85rem;
+    line-height: 1.5;
+}
+.next-action-card.warn { border-left-color: var(--warn); background: var(--warn-soft); }
+.next-action-card.block { border-left-color: var(--danger); background: var(--danger-soft); }
+.next-action-card.active { border-left-color: #0f7b63; background: #e5f2ee; }
+.next-action-card.success { border-left-color: var(--accent); background: var(--accent-soft); }
+
+.bundle-card {
+    border: 1px solid var(--rule);
+    background: #fffdf7;
+    padding: 0.75rem 0.9rem;
+    margin: 0.6rem 0;
+}
+.bundle-kicker {
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+}
+.fix-guide {
+    margin-top: 0.35rem;
+    padding: 0.35rem 0.55rem;
+    background: #fbfaf4;
+    border-left: 3px solid var(--accent);
+    color: var(--ink-soft);
+    font-size: 0.86rem;
 }
 
 .provider-line {
@@ -589,6 +631,86 @@ def _render_token_budget_panel(
             )
 
 
+def _has_uncertain_candidates_for_doc(masking_states: dict, name: str) -> bool:
+    state = (masking_states or {}).get(name)
+    if state is None:
+        return False
+    return bool(getattr(state, "uncertain_candidates", None))
+
+
+def _requires_manual_confirmation_for_doc(
+    doc: SanitizedDocument,
+    masking_states: dict,
+) -> bool:
+    decision = doc.local_sensitivity_decision or "unknown"
+    if decision == "block":
+        return False
+    return (
+        decision in {"mask_and_continue", "unknown"}
+        or decision not in {"safe", "mask_and_continue", "block", "unknown"}
+        or _has_uncertain_candidates_for_doc(masking_states, doc.name)
+    )
+
+
+def _render_next_action_card(action) -> None:
+    st.markdown(
+        f"<div class='next-action-card {html.escape(action.tone)}'>"
+        f"<b>{html.escape(action.title)}</b><br/>"
+        f"<span>{html.escape(action.detail)}</span>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_review_bundle_overview(
+    preview_docs: list[SanitizedDocument],
+    blocked_docs: list[SanitizedDocument],
+    confirmation_docs: list[SanitizedDocument],
+    *,
+    document_profile_override: str | None,
+    send_approved: bool,
+) -> None:
+    """Show the current upload set as one logical review bundle."""
+    if not preview_docs:
+        return
+    estimate = None
+    try:
+        estimate = estimate_review_token_budget(preview_docs, document_profile_override)
+    except Exception:
+        estimate = None
+
+    action = next_action_for_preview(
+        has_preview_docs=bool(preview_docs),
+        blocked_count=len(blocked_docs),
+        confirmation_count=len(confirmation_docs),
+        send_approved=send_approved,
+        review_in_progress=bool(st.session_state.get("review_in_progress")),
+        review_done=st.session_state.get("review_result") is not None,
+    )
+    _render_next_action_card(action)
+
+    st.markdown("<div class='bundle-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='bundle-kicker'>Review Bundle</div>", unsafe_allow_html=True)
+    bundle_cols = st.columns(5)
+    bundle_cols[0].metric("レビュー束", f"{len(preview_docs)} ファイル")
+    bundle_cols[1].metric("要確認", len(confirmation_docs))
+    bundle_cols[2].metric("送信禁止", len(blocked_docs))
+    if estimate is not None:
+        status_label = TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
+        bundle_cols[3].metric("送信規模", status_label)
+        bundle_cols[4].metric("予定 call", estimate.call_count)
+        st.caption(
+            f"合算入力概算: {estimate.total_input_tokens:,} tokens "
+            f"(本文 {estimate.body_tokens:,} / 最大1call {estimate.max_call_input_tokens:,})。"
+            "複数PDFは1つのレビュー対象として扱いますが、Gemma/Gemini側では分割callになる場合があります。"
+        )
+    else:
+        bundle_cols[3].metric("送信規模", "概算不可")
+        bundle_cols[4].metric("予定 call", "-")
+        st.caption("トークン概算を作成できませんでした。匿名化済みテキストの内容を確認してください。")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+
 def _has_regeneratable_mask_candidates(masking_states: dict) -> bool:
     """Return True when the regenerate button can actually change output."""
     for state in (masking_states or {}).values():
@@ -793,6 +915,15 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
                 f"<b>本来必要な内容:</b> {html.escape(finding.expected_content)}</div>"
                 if finding.expected_content else ""
             )
+            fix_guide = structure_fix_guidance(
+                finding.kind,
+                item_name=finding.item_name,
+                chapter_name=finding.chapter_name,
+            )
+            fix_guide_html = (
+                f"<div class='fix-guide'><b>直し方:</b> "
+                f"{html.escape(fix_guide)}</div>"
+            )
             title_parts = [severity_label]
             if finding.kind == "structure_template_suggestion":
                 title_parts.append("章立てテンプレート案")
@@ -824,6 +955,7 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
                 f"{html.escape(finding.message)}"
                 f"{source}"
                 f"{expected}"
+                f"{fix_guide_html}"
                 f"{suggested}"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -1022,6 +1154,126 @@ def _run_chapter_deep_dive(
         st.error(f"章単位深堀りに失敗しました ({request_id})。")
         with st.expander("詳細トレース"):
             st.code(traceback.format_exc())
+
+
+def _collect_deep_dive_candidates(
+    review,
+    preview_docs: list[SanitizedDocument],
+    structure_result: StructureCheckResult | None,
+) -> list[tuple[str, ChapterSection, str]]:
+    """Collect chapter candidates that deserve attention before users scroll."""
+    candidates: list[tuple[str, ChapterSection, str]] = []
+    if "chapter_sections_cache" not in st.session_state:
+        st.session_state.chapter_sections_cache = {}
+    cache = st.session_state.chapter_sections_cache
+    for doc in preview_docs:
+        if doc.name not in cache:
+            cache[doc.name] = extract_chapters_from_text(doc.outbound_text)
+        chapters = cache.get(doc.name) or ()
+        for chapter in chapters:
+            overview = _find_chapter_overview(review, doc.name, chapter)
+            structure_findings = _structure_findings_for_chapter(
+                structure_result,
+                doc.name,
+                chapter,
+            )
+            if bool(getattr(overview, "needs_deep_dive", False)):
+                reason = getattr(overview, "review", "") or "概要レビューで深堀候補と判定されました。"
+                candidates.append((doc.name, chapter, reason))
+            elif structure_findings:
+                candidates.append(
+                    (
+                        doc.name,
+                        chapter,
+                        f"文書構成チェックで {len(structure_findings)} 件の追加確認点があります。",
+                    )
+                )
+    return candidates
+
+
+def _render_deep_dive_candidate_summary(
+    candidates: list[tuple[str, ChapterSection, str]],
+) -> None:
+    if not candidates:
+        st.success("深堀候補として優先表示すべき章は検出されていません。必要に応じて章順表示から確認できます。")
+        return
+    with st.container(border=True):
+        st.markdown("#### 次に見るべき深堀候補")
+        st.caption(
+            "概要レビューまたは文書構成チェックで追加確認が必要そうな章です。"
+            "通常モードでは最初の候補だけ深堀ボタンが有効になります。"
+        )
+        for idx, (doc_name, chapter, reason) in enumerate(candidates[:5], 1):
+            st.markdown(
+                f"<div class='issue-row medium'>"
+                f"<b>{idx}. {html.escape(chapter.chapter_label)}</b> "
+                f"<span class='doc-meta'> · {html.escape(doc_name)}</span><br/>"
+                f"{html.escape(reason[:220])}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+        if len(candidates) > 5:
+            st.caption(f"ほか {len(candidates) - 5} 件の候補があります。章順表示で確認できます。")
+
+
+def _render_priority_issue_list(issues: list, severity_order: dict[str, int]) -> None:
+    if not issues:
+        st.info("重要指摘として優先表示する項目はありません。章別概要や構成チェックを確認してください。")
+        return
+    st.markdown("#### 重要指摘から見る")
+    st.caption("高・中の指摘を先に確認できるよう、重要度順に並べています。")
+    priority_issues = [
+        issue
+        for issue in sort_issues_by_importance(issues)
+        if getattr(issue, "severity", "") in {"high", "medium"}
+    ]
+    if not priority_issues:
+        priority_issues = sort_issues_by_importance(issues)[:8]
+    container = st.container(height=420) if len(priority_issues) >= 4 else st.container()
+    with container:
+        for issue in priority_issues:
+            _render_review_issue(issue, severity_order)
+
+
+def _render_review_result_dashboard(
+    review,
+    preview_docs: list[SanitizedDocument],
+    structure_result: StructureCheckResult | None,
+    deep_candidates: list[tuple[str, ChapterSection, str]],
+) -> None:
+    high_count = sum(1 for issue in review.issues if issue.severity == "high")
+    medium_count = sum(1 for issue in review.issues if issue.severity == "medium")
+    structure_high = sum(
+        1
+        for finding in getattr(structure_result, "findings", ()) or ()
+        if finding.severity == "high"
+    )
+    tokens = sum(int(getattr(doc, "estimated_input_tokens", 0) or 0) for doc in preview_docs)
+    if high_count or structure_high:
+        action = "次: 高重要度指摘と構成不足を先に確認してください"
+        tone = "block"
+    elif medium_count or deep_candidates:
+        action = "次: 深堀候補と中重要度指摘を確認してください"
+        tone = "warn"
+    else:
+        action = "次: レビュー結果を保存し、必要に応じて関係者へ共有してください"
+        tone = "success"
+    _render_next_action_card(
+        NextAction(
+            action,
+            "章順表示と重要度順表示を切り替えながら、対応が必要な箇所から確認できます。",
+            tone,
+        )
+    )
+    st.markdown("<div class='bundle-card'>", unsafe_allow_html=True)
+    st.markdown("<div class='bundle-kicker'>Review Result</div>", unsafe_allow_html=True)
+    cols = st.columns(5)
+    cols[0].metric("対象ファイル", len(preview_docs))
+    cols[1].metric("高重要度", high_count + structure_high)
+    cols[2].metric("中重要度", medium_count)
+    cols[3].metric("深堀候補", len(deep_candidates))
+    cols[4].metric("本文トークン", f"{tokens:,}")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
@@ -1604,23 +1856,35 @@ if st.session_state.get("preview_attempted") and not preview_error and not previ
 if preview_docs:
     st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
 
-    counts = {"safe": 0, "mask_and_continue": 0, "block": 0, "unknown": 0}
-    for doc in preview_docs:
-        decision = doc.local_sensitivity_decision or "unknown"
-        counts[decision] = counts.get(decision, 0) + 1
-
-    summary_cols = st.columns(5)
-    summary_cols[0].metric("文書数", len(preview_docs))
-    summary_cols[1].metric("安全", counts.get("safe", 0))
-    summary_cols[2].metric("要確認", counts.get("mask_and_continue", 0))
-    summary_cols[3].metric("未判定", counts.get("unknown", 0))
-    summary_cols[4].metric("送信禁止", counts.get("block", 0))
-
     warnings = st.session_state.get("preview_warnings", [])
     if warnings:
         with st.expander(f"抽出・パイプライン警告 ({len(warnings)} 件)"):
             for warning in warnings:
                 st.markdown(f"- {warning}")
+
+    _masking_states_for_gate = st.session_state.get("masking_states", {}) or {}
+    mask_docs = [
+        doc
+        for doc in preview_docs
+        if _requires_manual_confirmation_for_doc(doc, _masking_states_for_gate)
+    ]
+    blocked_docs = [
+        doc
+        for doc in preview_docs
+        if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
+    ]
+    can_regenerate_anonymization = _has_regeneratable_mask_candidates(
+        _masking_states_for_gate
+    )
+
+    _render_review_bundle_overview(
+        preview_docs,
+        blocked_docs,
+        mask_docs,
+        document_profile_override=document_profile_override,
+        send_approved=bool(st.session_state.get("send_approval")),
+    )
+    _render_anonymization_summary(preview_docs, document_profile_override)
 
     # PR-J: 文書数が 4 件以上の場合、ステップ 2 の各文書カードを
     # 高さ 600px のスクロール可能コンテナで包む。本文+別紙の構成で
@@ -1630,8 +1894,19 @@ if preview_docs:
     _step2_container = (
         st.container(height=600) if _step2_use_scroll else st.container()
     )
+    _uncertain_doc_names = {
+        name
+        for name, state in (_masking_states_for_gate or {}).items()
+        if bool(getattr(state, "uncertain_candidates", None))
+    }
+    _display_docs = sort_documents_by_attention(
+        preview_docs,
+        names_with_uncertain_candidates=_uncertain_doc_names,
+    )
+    if len(_display_docs) >= 2:
+        st.caption("注意が必要な文書、未判定、置換ありの文書を上に並べています。安全な文書は下段にまとまります。")
     with _step2_container:
-        for doc in preview_docs:
+        for doc in _display_docs:
             card_class = _doc_card_class(doc.local_sensitivity_decision)
             st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
 
@@ -1640,11 +1915,24 @@ if preview_docs:
                 f'<span class="doc-meta"> · {doc.estimated_input_tokens} トークン '
                 f"· 外部送信リスク: {doc.outbound_risk}</span>"
             )
+            _attention_reasons = document_attention_reasons(
+                doc,
+                has_uncertain_candidates=doc.name in _uncertain_doc_names,
+            )
+            _attention_html = (
+                "<div style='margin-top:0.35rem;'>"
+                + " ".join(
+                    f"<span class='decision-badge decision-mask'>{html.escape(reason)}</span>"
+                    for reason in _attention_reasons
+                )
+                + "</div>"
+                if _attention_reasons else ""
+            )
             st.markdown(
                 f'<div style="display:flex;justify-content:space-between;align-items:center;">'
                 f'<div>{header_left}</div>'
                 f"<div>{_decision_badge(doc.local_sensitivity_decision)}</div>"
-                f"</div>",
+                f"</div>{_attention_html}",
                 unsafe_allow_html=True,
             )
 
@@ -1669,39 +1957,6 @@ if preview_docs:
                 )
 
             st.markdown("</div>", unsafe_allow_html=True)
-
-    # PR-I-FIX: 承認を要求する文書の判定基準を 2 系統に拡張する。
-    _masking_states_for_gate = st.session_state.get("masking_states", {}) or {}
-
-    def _has_uncertain_candidates(name: str) -> bool:
-        state = _masking_states_for_gate.get(name)
-        if state is None:
-            return False
-        return bool(getattr(state, "uncertain_candidates", None))
-
-    def _requires_manual_confirmation(doc: SanitizedDocument) -> bool:
-        decision = doc.local_sensitivity_decision or "unknown"
-        if decision == "block":
-            return False
-        return (
-            decision in {"mask_and_continue", "unknown"}
-            or decision not in {"safe", "mask_and_continue", "block", "unknown"}
-            or _has_uncertain_candidates(doc.name)
-        )
-
-    mask_docs = [
-        doc
-        for doc in preview_docs
-        if _requires_manual_confirmation(doc)
-    ]
-    blocked_docs = [
-        doc
-        for doc in preview_docs
-        if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
-    ]
-    can_regenerate_anonymization = _has_regeneratable_mask_candidates(
-        _masking_states_for_gate
-    )
     regenerate_help = (
         "マスク候補の判断を反映し、匿名化済みテキストを再生成します。"
         "この操作では外部 LLM には送信しません。"
@@ -1774,7 +2029,6 @@ if preview_docs:
     if st.session_state.pop("anonymization_regenerated_message", False):
         st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
 
-    _render_anonymization_summary(preview_docs, document_profile_override)
     _render_token_budget_panel(preview_docs, document_profile_override)
     if st.session_state.get("anonymization_details_visible", False):
         _expand_anonymization_details = bool(
@@ -1811,7 +2065,7 @@ if preview_docs:
                     reasons.append("未判定")
                 if decision == "mask_and_continue":
                     reasons.append("要確認")
-                if _has_uncertain_candidates(doc.name):
+                if _has_uncertain_candidates_for_doc(_masking_states_for_gate, doc.name):
                     reasons.append("マスク候補あり")
                 st.markdown(f"- **{doc.name}**: {', '.join(reasons) or '要確認'}")
     elif not blocked_docs:
@@ -2088,6 +2342,19 @@ if review is not None:
         )
         _render_document_structure_check(_structure_result_for_review)
 
+    _deep_dive_candidates = _collect_deep_dive_candidates(
+        review,
+        _preview_docs_for_structure,
+        _structure_result_for_review,
+    )
+    _render_review_result_dashboard(
+        review,
+        _preview_docs_for_structure,
+        _structure_result_for_review,
+        _deep_dive_candidates,
+    )
+    _render_deep_dive_candidate_summary(_deep_dive_candidates)
+
     st.markdown("### 文書全体の概要")
     _summary_struct = review.summary_structured
     with st.container(border=True):
@@ -2128,6 +2395,28 @@ if review is not None:
     for _n in issues_by_doc:
         if _n not in _ordered_doc_names:
             _ordered_doc_names.append(_n)
+
+    _review_display_mode = st.radio(
+        "レビュー結果の見方",
+        ["章順で見る", "重要指摘から見る"],
+        horizontal=True,
+        key="review_result_display_mode",
+        help="章順は文書の流れを確認する見方、重要指摘は対応優先度から確認する見方です。",
+    )
+    if _review_display_mode == "重要指摘から見る":
+        _render_priority_issue_list(list(review.issues or []), severity_order)
+
+        def _doc_priority(name: str) -> tuple[int, str]:
+            doc_issues = issues_by_doc.get(name, [])
+            if not doc_issues:
+                return (99, name)
+            return (
+                min(severity_order.get(getattr(issue, "severity", ""), 9) for issue in doc_issues),
+                name,
+            )
+
+        _ordered_doc_names = sorted(_ordered_doc_names, key=_doc_priority)
+        st.caption("下の文書別表示も、重要指摘がある文書を上に並べ替えています。")
 
     # PR-J: 4 件以上の指摘がある場合、ステップ 4 の指摘リストを高さ 800px の
     # スクロール可能コンテナで包む。複数文書の総合レビューで指摘が 8-15 件

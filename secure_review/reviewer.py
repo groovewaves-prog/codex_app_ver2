@@ -33,6 +33,10 @@ from secure_review.rubric import (
     render_chapter_checklist_for_prompt,
     render_rubric_for_prompt,
 )
+from secure_review.structure_check import (
+    StructureFinding,
+    build_structure_check_result,
+)
 
 
 LOGGER = logging.getLogger("secure_review.reviewer")
@@ -1237,6 +1241,23 @@ def _build_deep_dive_prompt(
                     sections.append(f"- {label}: {val}")
             sections.append("")
 
+    structure_lines = _render_structure_findings_for_prompt(
+        documents,
+        rubric.document_profile,
+        target_doc_name=target_doc_name,
+        chapter=chapter,
+    )
+    if structure_lines:
+        sections.extend(
+            [
+                "",
+                "## 文書構成チェックの関連指摘",
+                *structure_lines,
+                "",
+                "上記と矛盾しないよう、深堀レビューの summary / issues を作成してください。",
+            ]
+        )
+
     if is_chapter_mode:
         # Phase 7 段階 2-B: 章モード時は章本文のみ + 該当章のチェックリスト
         sections.append(f"## 対象章の本文")
@@ -1277,6 +1298,159 @@ def _build_deep_dive_prompt(
         sections.append(target_doc.outbound_text)
 
     return "\n".join(sections)
+
+
+STRUCTURE_FINDING_KIND_LABELS = {
+    "missing_chapter": "不足観点",
+    "required_item_gap": "必須要素不足",
+    "structure_organization_suggestion": "構成整理の提案",
+    "chapter_structure_missing": "構成整理の提案",
+    "structure_template_suggestion": "章立てテンプレート案",
+}
+
+
+def _render_structure_findings_for_prompt(
+    documents: list[SanitizedDocument],
+    document_profile: str,
+    *,
+    target_doc_name: str = "",
+    chapter: ChapterSection | None = None,
+) -> list[str]:
+    """Render deterministic structure findings for LLM consistency."""
+    if document_profile != "design":
+        return []
+    result = build_structure_check_result(documents, document_profile)
+    findings = [
+        finding
+        for finding in result.findings
+        if finding.severity in {"high", "medium"}
+        and _structure_finding_matches_context(
+            finding,
+            target_doc_name=target_doc_name,
+            chapter=chapter,
+        )
+    ]
+    if not findings:
+        return []
+
+    lines = [
+        "以下はレビュー前に機械的に検出した構成上の確認点です。",
+        "chapter_overviews と issues は、この内容と矛盾しないようにしてください。",
+        "同じ確認範囲の章に high/medium の確認点がある場合、review で「適切」とだけ書かず、必要に応じて needs_deep_dive=true にしてください。",
+        "確認範囲が「文書全体」のものは、特定章へ無理に紐付けず summary または issues で扱ってください。",
+    ]
+    for finding in findings[:20]:
+        lines.append(_format_structure_finding_for_prompt(finding))
+    if len(findings) > 20:
+        lines.append(f"- ほか {len(findings) - 20} 件の構成チェック指摘があります。")
+    return lines
+
+
+def _structure_finding_matches_context(
+    finding: StructureFinding,
+    *,
+    target_doc_name: str = "",
+    chapter: ChapterSection | None = None,
+) -> bool:
+    if target_doc_name and finding.source_document and finding.source_document != target_doc_name:
+        return False
+    if chapter is not None:
+        if not finding.chapter_id:
+            return False
+        return finding.chapter_id == chapter.chapter_id
+    return True
+
+
+def _format_structure_finding_for_prompt(finding: StructureFinding) -> str:
+    kind = STRUCTURE_FINDING_KIND_LABELS.get(finding.kind, finding.kind)
+    scope = finding.chapter_name or "文書全体"
+    parts = [
+        f"severity={finding.severity}",
+        f"kind={kind}",
+        f"scope={scope}",
+    ]
+    if finding.item_name:
+        parts.append(f"item={finding.item_name}")
+    if finding.source_document:
+        parts.append(f"source_document={finding.source_document}")
+    if finding.expected_content:
+        parts.append(f"expected={finding.expected_content}")
+    parts.append(f"message={finding.message}")
+    return "- " + " / ".join(parts)
+
+
+def _reconcile_chapter_overviews_with_structure_check(
+    chapter_overviews: tuple[ChapterOverview, ...],
+    documents: list[SanitizedDocument],
+    document_profile: str,
+) -> tuple[ChapterOverview, ...]:
+    """Keep LLM chapter overviews consistent with deterministic findings."""
+    if document_profile != "design" or not chapter_overviews:
+        return chapter_overviews
+
+    structure_result = build_structure_check_result(documents, document_profile)
+    structure_findings = [
+        finding
+        for finding in structure_result.findings
+        if finding.severity in {"high", "medium"} and finding.chapter_id
+    ]
+    if not structure_findings:
+        return chapter_overviews
+
+    reconciled: list[ChapterOverview] = []
+    for overview in chapter_overviews:
+        chapter_id = overview.chapter_id or _chapter_id_from_label(overview.chapter_label)
+        related = [
+            finding
+            for finding in structure_findings
+            if finding.chapter_id == chapter_id
+            and (
+                not finding.source_document
+                or not overview.source_document
+                or finding.source_document == overview.source_document
+            )
+        ]
+        if not related:
+            reconciled.append(overview)
+            continue
+
+        review_text = overview.review.strip()
+        structure_note = _structure_findings_review_note(related)
+        if not review_text:
+            review_text = structure_note
+        elif "文書構成チェック" not in review_text:
+            review_text = f"{review_text}。{structure_note}"
+
+        reconciled.append(
+            ChapterOverview(
+                source_document=overview.source_document,
+                chapter_id=overview.chapter_id,
+                chapter_label=overview.chapter_label,
+                summary=overview.summary,
+                review=review_text,
+                needs_deep_dive=True,
+            )
+        )
+    return tuple(reconciled)
+
+
+def _chapter_id_from_label(label: str) -> str:
+    match = re.search(r"第\s*(\d+)\s*章", label or "")
+    return f"ch{int(match.group(1))}" if match else ""
+
+
+def _structure_findings_review_note(findings: list[StructureFinding]) -> str:
+    labels: list[str] = []
+    for finding in findings[:3]:
+        kind = STRUCTURE_FINDING_KIND_LABELS.get(finding.kind, finding.kind)
+        target = finding.item_name or finding.chapter_name or finding.expected_content
+        labels.append(f"{kind}: {target}" if target else kind)
+    suffix = "" if len(findings) <= 3 else f" ほか{len(findings) - 3}件"
+    return (
+        "文書構成チェックで追加確認点があります"
+        f"（{', '.join(labels)}{suffix}）。"
+        "概要レビューでは深堀候補として扱います。"
+    )
 
 
 def build_prompt(
@@ -1350,6 +1524,19 @@ def build_prompt(
                     f"chapter_label={chapter_item.chapter_label}"
                 )
 
+    structure_lines = _render_structure_findings_for_prompt(
+        documents,
+        rubric.document_profile,
+    )
+    if structure_lines:
+        sections.extend(
+            [
+                "",
+                "# 文書構成チェックとの整合指示",
+                *structure_lines,
+            ]
+        )
+
     if detected_chapter_lines:
         sections.extend(
             [
@@ -1400,6 +1587,12 @@ def _build_review_result(
     既存呼び出し側 (テスト等) は新引数を渡さなければデフォルト空 tuple のまま。
     """
     prompt_text = prompt or build_prompt(documents, rubric)
+    resolved_chapter_overviews = chapter_overviews or _build_local_chapter_overviews(documents)
+    resolved_chapter_overviews = _reconcile_chapter_overviews_with_structure_check(
+        resolved_chapter_overviews,
+        documents,
+        rubric.document_profile,
+    )
     return ReviewResult(
         summary=summary,
         issues=issues,
@@ -1415,7 +1608,7 @@ def _build_review_result(
         summary_structured=summary_structured or ReviewSummary(),
         checklist_results=checklist_results,
         missing_chapters=missing_chapters,
-        chapter_overviews=chapter_overviews or _build_local_chapter_overviews(documents),
+        chapter_overviews=resolved_chapter_overviews,
     )
 
 

@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from secure_review.models import SanitizedDocument
+from secure_review.models import ChapterOverview, SanitizedDocument
 from secure_review.network_guard import UpstreamHttpError
 from secure_review.reviewer import (
     GeminiApiReviewProvider,
@@ -836,6 +836,62 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         ])
         self.assertIn("review で「適切」と書けるのは", prompt)
         self.assertIn("needs_deep_dive=true", prompt)
+
+    def test_prompt_includes_structure_check_consistency_guidance(self) -> None:
+        from secure_review.reviewer import build_prompt
+
+        prompt = build_prompt([
+            _doc(
+                name="design.docx",
+                text=(
+                    "第 1 章 はじめに\n本書の目的と対象範囲を示す。\n"
+                    "第 2 章 システム要件\n概要のみ。\n"
+                    "第 3 章 システム構成\n構成概要"
+                ),
+            )
+        ])
+        self.assertIn("文書構成チェックとの整合指示", prompt)
+        self.assertIn("chapter_overviews と issues は、この内容と矛盾しない", prompt)
+        self.assertIn("必須要素不足", prompt)
+
+    def test_review_result_reconciles_chapter_overviews_with_structure_check(self) -> None:
+        from secure_review.reviewer import _build_review_result
+        from secure_review.rubric import choose_rubric
+
+        document = _doc(
+            name="design.docx",
+            text=(
+                "第 1 章 はじめに\n本書の目的と対象範囲を示す。\n"
+                "第 2 章 システム要件\n概要のみ。\n"
+                "第 3 章 システム構成\n構成概要"
+            ),
+        )
+        overview = ChapterOverview(
+            source_document="design.docx",
+            chapter_id="ch2",
+            chapter_label="第 2 章 システム要件",
+            summary="要件の概要。",
+            review="適切",
+            needs_deep_dive=False,
+        )
+        result = _build_review_result(
+            summary="summary",
+            issues=[],
+            provider="test",
+            documents=[document],
+            rubric=choose_rubric([document], "design"),
+            classification_confidence="forced",
+            classification_reason="test",
+            chapter_overviews=(overview,),
+        )
+        reconciled = result.chapter_overviews[0]
+        self.assertTrue(reconciled.needs_deep_dive)
+        self.assertIn("文書構成チェック", reconciled.review)
+        self.assertIn("必須要素不足", reconciled.review)
+        self.assertIn(
+            "文書構成チェック",
+            result.to_dict()["chapter_overviews"][0]["review"],
+        )
 
     def test_chapter_deep_dive_prompt_filters_unrelated_existing_issues(self) -> None:
         from secure_review.models import ReviewIssue

@@ -752,6 +752,25 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         )
 
 
+def _structure_findings_for_chapter(
+    result: StructureCheckResult | None,
+    doc_name: str,
+    chapter: ChapterSection,
+) -> list:
+    if result is None:
+        return []
+    findings = []
+    for finding in result.findings or ():
+        if finding.severity not in {"high", "medium"}:
+            continue
+        if finding.source_document and finding.source_document != doc_name:
+            continue
+        if finding.chapter_id != chapter.chapter_id:
+            continue
+        findings.append(finding)
+    return findings
+
+
 def _chapter_sort_value(chapter_id: str) -> int:
     match = re.search(r"\d+", chapter_id or "")
     return int(match.group(0)) if match else 999
@@ -1941,12 +1960,13 @@ if review is not None:
         )
 
     _preview_docs_for_structure = st.session_state.get("preview_docs") or []
+    _structure_result_for_review = None
     if _preview_docs_for_structure:
-        _structure_result = build_structure_check_result(
+        _structure_result_for_review = build_structure_check_result(
             _preview_docs_for_structure,
             review.document_profile or "",
         )
-        _render_document_structure_check(_structure_result)
+        _render_document_structure_check(_structure_result_for_review)
 
     st.markdown("### 文書全体の概要")
     _summary_struct = review.summary_structured
@@ -2055,6 +2075,13 @@ if review is not None:
                                 False,
                             )
                         )
+                        or bool(
+                            _structure_findings_for_chapter(
+                                _structure_result_for_review,
+                                _doc_name,
+                                _candidate_ch,
+                            )
+                        )
                     ]
                     _enabled_deep_idx = (
                         _deep_candidate_indices[0] if _deep_candidate_indices else None
@@ -2086,6 +2113,17 @@ if review is not None:
                                 getattr(_overview, "needs_deep_dive", False)
                                 if _overview is not None else False
                             )
+                            _structure_ch_findings = _structure_findings_for_chapter(
+                                _structure_result_for_review,
+                                _doc_name,
+                                _ch,
+                            )
+                            _needs_deep = _needs_deep or bool(_structure_ch_findings)
+                            if _structure_ch_findings and "文書構成チェック" not in _overview_review:
+                                _overview_review = (
+                                    f"{_overview_review}。ただし文書構成チェックで"
+                                    "追加確認点があります。"
+                                )
                             _deep_badge = (
                                 "<span class='decision-badge decision-mask'>深堀候補</span>"
                                 if _needs_deep else ""
@@ -2109,6 +2147,11 @@ if review is not None:
                                     )
                                     _render_compact_field("章の概要", _summary)
                                     _render_compact_field("概要レビュー", _overview_review)
+                                    if _structure_ch_findings:
+                                        _render_compact_field(
+                                            "構成チェック",
+                                            f"{len(_structure_ch_findings)}件の重要/要確認あり",
+                                        )
                                 with _ch_col2:
                                     _can_run_chapter = _is_enabled_deep_candidate
                                     _can_deep_dive_more = (

@@ -285,6 +285,89 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
+.readiness-panel {
+    display: grid;
+    grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.7fr);
+    gap: 0.85rem;
+    border: 1px solid var(--rule);
+    background: linear-gradient(135deg, #fffdf7 0%, #f5efe3 100%);
+    padding: 1rem;
+    margin: 0.7rem 0 0.9rem;
+}
+.readiness-main {
+    border-left: 5px solid var(--accent);
+    background: rgba(255,255,255,0.62);
+    padding: 0.85rem 1rem;
+}
+.readiness-main.warn { border-left-color: var(--warn); }
+.readiness-main.block { border-left-color: var(--danger); }
+.readiness-main.split { border-left-color: var(--warn); background: #fff9ea; }
+.readiness-eyebrow {
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+.readiness-title {
+    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    font-size: 1.55rem;
+    font-weight: 700;
+    margin-top: 0.2rem;
+}
+.readiness-detail {
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    margin-top: 0.35rem;
+}
+.readiness-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.65rem;
+}
+.readiness-card {
+    background: rgba(255,255,255,0.7);
+    border: 1px solid var(--rule);
+    padding: 0.65rem 0.75rem;
+    min-height: 92px;
+}
+.readiness-card-title {
+    color: var(--ink-soft);
+    font-size: 0.74rem;
+    letter-spacing: 0.08em;
+}
+.readiness-card-value {
+    font-size: 1rem;
+    font-weight: 700;
+    margin-top: 0.25rem;
+}
+.readiness-card-note {
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    margin-top: 0.25rem;
+}
+.summary-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    margin: 0.45rem 0 0.65rem;
+}
+.summary-chip {
+    border: 1px solid var(--rule);
+    background: rgba(255,255,255,0.66);
+    padding: 0.35rem 0.55rem;
+    font-size: 0.82rem;
+}
+.summary-chip b {
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.95rem;
+    margin-left: 0.25rem;
+}
+@media (max-width: 900px) {
+    .readiness-panel { grid-template-columns: 1fr; }
+    .readiness-grid { grid-template-columns: 1fr; }
+}
 .fix-guide {
     margin-top: 0.35rem;
     padding: 0.35rem 0.55rem;
@@ -543,8 +626,35 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
 
 def _render_anonymization_summary(
     preview_docs: list[SanitizedDocument],
-    document_profile_override: str | None,
 ) -> None:
+    summary = _build_anonymization_summary(preview_docs)
+
+    st.markdown("#### 匿名化結果の内訳")
+    chip_labels = [
+        ("文書", len(preview_docs)),
+        ("安全", summary["safe"]),
+        ("要確認", summary["mask_and_continue"]),
+        ("未判定", summary["unknown"]),
+        ("送信禁止", summary["block"]),
+        ("置換", summary["replacement_count"]),
+        ("未確定候補", summary["uncertain_count"]),
+        ("本文tokens", f"{summary['estimated_tokens']:,}"),
+    ]
+    chips = "".join(
+        f"<span class='summary-chip'>{html.escape(label)} <b>{html.escape(str(value))}</b></span>"
+        for label, value in chip_labels
+    )
+    st.markdown(f"<div class='summary-chip-row'>{chips}</div>", unsafe_allow_html=True)
+    st.caption("送信されるのは匿名化済みテキストのみです。詳細なトークン予算は下の折りたたみで確認できます。")
+
+    if summary["unknown"]:
+        st.warning(
+            "未判定の文書は安全扱いにせず、外部送信前に文書別承認を必須にします。"
+            "匿名化結果を確認し、必要に応じてマスク判断を見直してください。"
+        )
+
+
+def _build_anonymization_summary(preview_docs: list[SanitizedDocument]) -> dict[str, int]:
     counts = {"safe": 0, "mask_and_continue": 0, "block": 0, "unknown": 0}
     replacement_count = 0
     estimated_tokens = 0
@@ -558,44 +668,15 @@ def _render_anonymization_summary(
         state = masking_states.get(doc.name)
         if state is not None:
             uncertain_count += len(getattr(state, "uncertain_candidates", []) or [])
-
-    st.markdown("#### 匿名化結果サマリ")
-    cols = st.columns(7)
-    cols[0].metric("文書数", len(preview_docs))
-    cols[1].metric("安全", counts.get("safe", 0))
-    cols[2].metric("要確認", counts.get("mask_and_continue", 0))
-    cols[3].metric("未判定", counts.get("unknown", 0))
-    cols[4].metric("送信禁止", counts.get("block", 0))
-    cols[5].metric("置換数", replacement_count)
-    cols[6].metric("未確定候補", uncertain_count)
-    st.caption(
-        f"LLM 送信対象の推定トークン数: {estimated_tokens:,}。"
-        "送信されるのは匿名化済みテキストのみです。"
-    )
-    try:
-        estimate = estimate_review_token_budget(
-            preview_docs,
-            document_profile_override,
-        )
-        status_label = TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
-        budget_message = (
-            f"{len(preview_docs)} ファイル合算の送信規模判定: **{status_label}** "
-            f"(予定 call 数 {estimate.call_count}、入力合計概算 {estimate.total_input_tokens:,} tokens、"
-            f"最大/1call {estimate.max_call_input_tokens:,} tokens)。"
-        )
-        if estimate.status == "split_recommended":
-            st.warning(budget_message)
-        elif estimate.status == "caution":
-            st.info(budget_message)
-        else:
-            st.success(budget_message)
-    except Exception as exc:  # noqa: BLE001
-        st.warning(f"合算トークン判定の作成に失敗しました: {exc}")
-    if counts.get("unknown", 0):
-        st.warning(
-            "未判定の文書は安全扱いにせず、外部送信前に文書別承認を必須にします。"
-            "匿名化結果を確認し、必要に応じてマスク判断を見直してください。"
-        )
+    return {
+        "safe": counts.get("safe", 0),
+        "mask_and_continue": counts.get("mask_and_continue", 0),
+        "block": counts.get("block", 0),
+        "unknown": counts.get("unknown", 0),
+        "replacement_count": replacement_count,
+        "estimated_tokens": estimated_tokens,
+        "uncertain_count": uncertain_count,
+    }
 
 
 def _render_token_budget_panel(
@@ -750,6 +831,57 @@ def _scroll_height_control(
     )
 
 
+def _readiness_state(
+    *,
+    blocked_count: int,
+    confirmation_count: int,
+    estimate_status: str,
+    send_approved: bool,
+) -> tuple[str, str, str, str]:
+    """Return (tone, label, title, detail) for the pre-send judgement panel."""
+    if blocked_count:
+        return (
+            "block",
+            "送信不可",
+            "送信できません",
+            f"{blocked_count} 件の文書が送信禁止です。機密表現を削除するか、より厳密に匿名化してから再確認してください。",
+        )
+    if confirmation_count:
+        return (
+            "warn",
+            "確認が必要",
+            "送信前に確認してください",
+            f"{confirmation_count} 件の文書に要確認または未確定候補があります。内容を確認してから最終承認へ進んでください。",
+        )
+    if estimate_status == "split_recommended":
+        return (
+            "split",
+            "分割推奨",
+            "分割レビューを推奨します",
+            "送信自体は可能ですが、call数や入力合計が大きめです。章単位・ファイル単位での分割も検討してください。",
+        )
+    if estimate_status == "caution":
+        return (
+            "warn",
+            "注意",
+            "送信できますが注意が必要です",
+            "通常よりトークン消費や待ち時間が増えやすい状態です。不要な別紙やログが含まれていないか確認してください。",
+        )
+    if send_approved:
+        return (
+            "safe",
+            "送信準備完了",
+            "レビューに送信できます",
+            "最終承認済みです。送信ボタンを押すと、匿名化済みテキストのみ外部LLMへ送信されます。",
+        )
+    return (
+        "safe",
+        "送信可能",
+        "送信できます",
+        "送信禁止や追加確認はありません。匿名化後テキストを確認し、最終承認へ進んでください。",
+    )
+
+
 def _render_review_bundle_overview(
     preview_docs: list[SanitizedDocument],
     blocked_docs: list[SanitizedDocument],
@@ -766,27 +898,83 @@ def _render_review_bundle_overview(
         estimate = estimate_review_token_budget(preview_docs, document_profile_override)
     except Exception:
         estimate = None
+    summary = _build_anonymization_summary(preview_docs)
+    estimate_status = estimate.status if estimate is not None else "unknown"
+    tone, status_label, title, detail = _readiness_state(
+        blocked_count=len(blocked_docs),
+        confirmation_count=len(confirmation_docs),
+        estimate_status=estimate_status,
+        send_approved=send_approved,
+    )
+    badge_class = {
+        "safe": "decision-safe",
+        "warn": "decision-mask",
+        "split": "decision-mask",
+        "block": "decision-block",
+    }.get(tone, "decision-mask")
+    budget_label = (
+        TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
+        if estimate is not None else "概算不可"
+    )
+    call_count = estimate.call_count if estimate is not None else "-"
+    total_input = f"{estimate.total_input_tokens:,}" if estimate is not None else "-"
+    max_call = f"{estimate.max_call_input_tokens:,}" if estimate is not None else "-"
+    body_tokens = f"{estimate.body_tokens:,}" if estimate is not None else "-"
 
-    st.markdown("<div class='bundle-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='bundle-kicker'>Review Bundle</div>", unsafe_allow_html=True)
-    bundle_cols = st.columns(5)
-    bundle_cols[0].metric("レビュー束", f"{len(preview_docs)} ファイル")
-    bundle_cols[1].metric("要確認", len(confirmation_docs))
-    bundle_cols[2].metric("送信禁止", len(blocked_docs))
-    if estimate is not None:
-        status_label = TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
-        bundle_cols[3].metric("送信規模", status_label)
-        bundle_cols[4].metric("予定 call", estimate.call_count)
-        st.caption(
-            f"合算入力概算: {estimate.total_input_tokens:,} tokens "
-            f"(本文 {estimate.body_tokens:,} / 最大1call {estimate.max_call_input_tokens:,})。"
-            "複数PDFは1つのレビュー対象として扱いますが、Gemma/Gemini側では分割callになる場合があります。"
-        )
-    else:
-        bundle_cols[3].metric("送信規模", "概算不可")
-        bundle_cols[4].metric("予定 call", "-")
-        st.caption("トークン概算を作成できませんでした。匿名化済みテキストの内容を確認してください。")
-    st.markdown("</div>", unsafe_allow_html=True)
+    anonymization_value = (
+        f"安全 {summary['safe']} / 要確認 {summary['mask_and_continue']} / "
+        f"未判定 {summary['unknown']} / 禁止 {summary['block']}"
+    )
+    anonymization_note = (
+        "追加確認はありません。"
+        if not confirmation_docs and not blocked_docs
+        else "要確認・未確定候補の文書を確認してください。"
+    )
+    token_note = (
+        f"{call_count} call / 入力 {total_input} tokens / 最大1call {max_call}"
+        if estimate is not None
+        else "トークン概算を作成できませんでした。"
+    )
+    next_note = (
+        "最終承認チェック後、レビュー送信できます。"
+        if not send_approved
+        else "送信ボタンでレビューを開始できます。"
+    )
+
+    st.markdown(
+        f"""
+<div class="readiness-panel">
+  <div class="readiness-main {html.escape(tone)}">
+    <div class="readiness-eyebrow">送信前チェック</div>
+    <div style="margin-top:0.35rem;"><span class="decision-badge {badge_class}">{html.escape(status_label)}</span></div>
+    <div class="readiness-title">{html.escape(title)}</div>
+    <div class="readiness-detail">{html.escape(detail)}</div>
+  </div>
+  <div class="readiness-grid">
+    <div class="readiness-card">
+      <div class="readiness-card-title">匿名化状態</div>
+      <div class="readiness-card-value">{html.escape(anonymization_value)}</div>
+      <div class="readiness-card-note">置換 {summary['replacement_count']} 件 / 未確定候補 {summary['uncertain_count']} 件。{html.escape(anonymization_note)}</div>
+    </div>
+    <div class="readiness-card">
+      <div class="readiness-card-title">送信規模</div>
+      <div class="readiness-card-value">{html.escape(budget_label)}</div>
+      <div class="readiness-card-note">{html.escape(token_note)}。本文推定 {html.escape(str(body_tokens))} tokens。</div>
+    </div>
+    <div class="readiness-card">
+      <div class="readiness-card-title">次の操作</div>
+      <div class="readiness-card-value">{html.escape('最終承認' if not send_approved else 'レビュー送信')}</div>
+      <div class="readiness-card-note">{html.escape(next_note)}</div>
+    </div>
+  </div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"{len(preview_docs)} ファイルを1つのレビュー対象として扱います。"
+        "複数PDFでは Gemma/Gemini 側で分割callになる場合があります。"
+    )
 
 
 def _has_regeneratable_mask_candidates(masking_states: dict) -> bool:
@@ -1990,7 +2178,7 @@ if preview_docs:
         document_profile_override=document_profile_override,
         send_approved=bool(st.session_state.get("send_approval")),
     )
-    _render_anonymization_summary(preview_docs, document_profile_override)
+    _render_anonymization_summary(preview_docs)
 
     # PR-J: 文書数が 4 件以上の場合、ステップ 2 の各文書カードを
     # 高さ 600px のスクロール可能コンテナで包む。本文+別紙の構成で

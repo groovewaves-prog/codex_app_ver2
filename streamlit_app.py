@@ -307,6 +307,83 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     letter-spacing: 0.08em;
     text-transform: uppercase;
 }
+.insight-panel {
+    border: 1px solid #d6c9b5;
+    border-left: 5px solid var(--accent);
+    background:
+        linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(250,246,236,0.96) 100%);
+    padding: 0.95rem 1rem;
+    margin: 0.8rem 0 1rem;
+    box-shadow: 0 8px 24px rgba(38, 32, 22, 0.07);
+}
+.insight-panel.warn { border-left-color: var(--warn); background: linear-gradient(135deg, #fffdf7 0%, #fbf1dc 100%); }
+.insight-panel.block { border-left-color: var(--danger); background: linear-gradient(135deg, #fffdf7 0%, #f8e7e2 100%); }
+.insight-panel.safe { border-left-color: var(--accent); background: linear-gradient(135deg, #fffdf7 0%, #eaf2e5 100%); }
+.insight-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+.insight-kicker {
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+}
+.insight-title {
+    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    color: var(--ink);
+    font-size: 1.25rem;
+    font-weight: 700;
+    margin-top: 0.15rem;
+}
+.insight-detail {
+    color: var(--ink-soft);
+    font-size: 0.86rem;
+    line-height: 1.55;
+    max-width: 720px;
+}
+.insight-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+    gap: 0.55rem;
+    margin-top: 0.85rem;
+}
+.insight-metric {
+    background: rgba(255,255,255,0.78);
+    border: 1px solid rgba(217, 209, 192, 0.82);
+    border-top: 3px solid var(--rule);
+    padding: 0.58rem 0.65rem 0.65rem;
+    min-height: 86px;
+}
+.insight-metric.safe { border-top-color: var(--accent); background: rgba(237,246,232,0.72); }
+.insight-metric.warn { border-top-color: var(--warn); background: rgba(255,249,234,0.86); }
+.insight-metric.block { border-top-color: var(--danger); background: rgba(255,245,242,0.92); }
+.insight-metric.info { border-top-color: #7c8878; }
+.insight-label {
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+    letter-spacing: 0.04em;
+}
+.insight-value {
+    color: var(--ink);
+    font-size: 1.55rem;
+    line-height: 1.1;
+    margin-top: 0.3rem;
+    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+}
+.insight-note {
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    margin-top: 0.32rem;
+}
+@media (max-width: 760px) {
+    .insight-header { display: block; }
+    .insight-detail { margin-top: 0.45rem; }
+}
 .readiness-panel {
     display: grid;
     grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.7fr);
@@ -785,6 +862,49 @@ def _render_next_action_card(action) -> None:
     )
 
 
+def _render_insight_panel(
+    *,
+    kicker: str,
+    title: str,
+    detail: str,
+    metrics: list[dict[str, object]],
+    tone: str = "info",
+) -> None:
+    """Render a compact dashboard card without relying on Streamlit metric chrome."""
+    metric_html = []
+    for metric in metrics:
+        metric_tone = str(metric.get("tone") or "info")
+        note = str(metric.get("note") or "")
+        note_html = f"<div class='insight-note'>{html.escape(note)}</div>" if note else ""
+        metric_html.append(
+            "<div class='insight-metric {tone}'>"
+            "<div class='insight-label'>{label}</div>"
+            "<div class='insight-value'>{value}</div>"
+            "{note}"
+            "</div>".format(
+                tone=html.escape(metric_tone),
+                label=html.escape(str(metric.get("label") or "")),
+                value=html.escape(str(metric.get("value") or "")),
+                note=note_html,
+            )
+        )
+    st.markdown(
+        f"""
+<section class="insight-panel {html.escape(tone)}">
+  <div class="insight-header">
+    <div>
+      <div class="insight-kicker">{html.escape(kicker)}</div>
+      <div class="insight-title">{html.escape(title)}</div>
+    </div>
+    <div class="insight-detail">{html.escape(detail)}</div>
+  </div>
+  <div class="insight-grid">{''.join(metric_html)}</div>
+</section>
+""",
+        unsafe_allow_html=True,
+    )
+
+
 def _active_status_for_preview(
     *,
     blocked_docs: list[SanitizedDocument],
@@ -1156,14 +1276,34 @@ def _render_document_structure_check(result: StructureCheckResult) -> None:
         if f.kind in {"chapter_structure_missing", "structure_template_suggestion", "structure_organization_suggestion"}
     ]
 
-    cols = st.columns(7)
-    cols[0].metric("対象文書", result.document_count)
-    cols[1].metric("検出章", result.detected_chapter_count)
-    cols[2].metric("重要不足", len(high_findings))
-    cols[3].metric("要確認", len(medium_findings))
-    cols[4].metric("不足観点", len(missing_chapters))
-    cols[5].metric("必須要素不足", len(item_gaps))
-    cols[6].metric("整理提案", len(organization_suggestions))
+    if high_findings:
+        structure_tone = "block"
+        structure_title = "重要な構成不足があります"
+        structure_detail = "レビュー本文に入る前に、欠けている観点や必須要素を確認してください。"
+    elif medium_findings or organization_suggestions:
+        structure_tone = "warn"
+        structure_title = "構成上の確認点があります"
+        structure_detail = "記述はあるものの、見出し・章・粒度を整理するとレビューしやすくなります。"
+    else:
+        structure_tone = "safe"
+        structure_title = "構成観点は概ね整っています"
+        structure_detail = "今回の構成チェックでは、標準観点に対する明確な不足は検出されていません。"
+
+    _render_insight_panel(
+        kicker="Structure Check",
+        title=structure_title,
+        detail=structure_detail,
+        tone=structure_tone,
+        metrics=[
+            {"label": "対象文書", "value": result.document_count, "tone": "info", "note": "一括レビュー対象"},
+            {"label": "検出章", "value": result.detected_chapter_count, "tone": "info", "note": "章・見出しの抽出数"},
+            {"label": "重要不足", "value": len(high_findings), "tone": "block" if high_findings else "safe", "note": "先に確認する不足"},
+            {"label": "要確認", "value": len(medium_findings), "tone": "warn" if medium_findings else "safe", "note": "補足確認が必要"},
+            {"label": "不足観点", "value": len(missing_chapters), "tone": "block" if missing_chapters else "safe", "note": "記述が見当たらない"},
+            {"label": "必須要素不足", "value": len(item_gaps), "tone": "block" if item_gaps else "safe", "note": "中身が足りない"},
+            {"label": "整理提案", "value": len(organization_suggestions), "tone": "warn" if organization_suggestions else "safe", "note": "章立て・粒度の改善"},
+        ],
+    )
 
     if not findings:
         st.success("標準構成上の明確な不足観点・必須要素不足・構成整理提案は検出されませんでした。")
@@ -1584,15 +1724,32 @@ def _render_review_result_dashboard(
             tone,
         )
     )
-    st.markdown("<div class='bundle-card'>", unsafe_allow_html=True)
-    st.markdown("<div class='bundle-kicker'>Review Result</div>", unsafe_allow_html=True)
-    cols = st.columns(5)
-    cols[0].metric("対象ファイル", len(preview_docs))
-    cols[1].metric("高重要度", high_count + structure_high)
-    cols[2].metric("中重要度", medium_count)
-    cols[3].metric("深堀候補", len(deep_candidates))
-    cols[4].metric("本文トークン", f"{tokens:,}")
-    st.markdown("</div>", unsafe_allow_html=True)
+    total_high = high_count + structure_high
+    if total_high:
+        result_title = "高重要度の指摘を優先確認"
+        result_detail = "LLMレビュー指摘と文書構成チェックの重要不足を合算しています。赤い項目から対応してください。"
+        result_tone = "block"
+    elif medium_count or deep_candidates:
+        result_title = "確認候補があります"
+        result_detail = "中重要度指摘または深堀候補があります。章カード内の候補から追加確認できます。"
+        result_tone = "warn"
+    else:
+        result_title = "レビュー結果は概ね良好です"
+        result_detail = "重大な指摘は検出されていません。必要に応じて結果ログを保存してください。"
+        result_tone = "safe"
+    _render_insight_panel(
+        kicker="Review Result",
+        title=result_title,
+        detail=result_detail,
+        tone=result_tone,
+        metrics=[
+            {"label": "対象ファイル", "value": len(preview_docs), "tone": "info", "note": "レビュー束の件数"},
+            {"label": "高重要度", "value": total_high, "tone": "block" if total_high else "safe", "note": "構成不足を含む"},
+            {"label": "中重要度", "value": medium_count, "tone": "warn" if medium_count else "safe", "note": "確認推奨"},
+            {"label": "深堀候補", "value": len(deep_candidates), "tone": "warn" if deep_candidates else "safe", "note": "章別に追加確認"},
+            {"label": "本文トークン", "value": f"{tokens:,}", "tone": "info", "note": "匿名化済み本文の概算"},
+        ],
+    )
 
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。

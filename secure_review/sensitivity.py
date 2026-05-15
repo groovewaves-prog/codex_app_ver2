@@ -84,11 +84,15 @@ class HeuristicSensitivityClassifier(SensitivityClassifier):
                 recommended_actions=actions,
             )
 
-        if any(record.category in {"company", "project", "ticket", "person"} for record in sanitized_document.replacements):
+        has_identifying_replacements = any(
+            record.category in {"company", "project", "ticket", "person"}
+            for record in sanitized_document.replacements
+        )
+        if has_identifying_replacements:
             reasons.append("顧客・案件・チケット・担当者の識別子がローカルで検出されました。")
             actions.append("顧客名・案件名等の識別子周辺の文脈が、マスク処理で完全に除去されているか確認してください。")
 
-        if self._customer_context.search(original_text):
+        if self._customer_context.search(original_text) and not has_identifying_replacements:
             reasons.append("業務識別子または所有者ラベル (顧客名・案件名・担当者など) がローカル原文中に検出されました。")
             actions.append("組織や案件を特定し得るラベルおよびその周辺文脈をマスク処理してください。")
 

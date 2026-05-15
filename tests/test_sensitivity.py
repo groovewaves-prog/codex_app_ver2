@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from secure_review.models import SanitizedDocument
+from secure_review.models import SanitizationRecord
 from secure_review.network_guard import LocalUrlError, UpstreamHttpError
 from secure_review.sensitivity import (
     HeuristicSensitivityClassifier,
@@ -48,6 +49,23 @@ class HeuristicSensitivityTests(unittest.TestCase):
             _document(),
         )
         self.assertEqual(assessment.decision, "mask_and_continue")
+
+    def test_identifier_reason_is_not_duplicated_when_replacements_exist(self) -> None:
+        classifier = HeuristicSensitivityClassifier()
+        document = _document()
+        document.replacements = [
+            SanitizationRecord("[PERSON_001]", "Someone", "person"),
+            SanitizationRecord("[PROJECT_001]", "X", "project"),
+        ]
+        assessment = classifier.assess(
+            "doc.md",
+            "担当者: Someone\nプロジェクト名: X",
+            document,
+        )
+        self.assertEqual(assessment.decision, "mask_and_continue")
+        joined = "\n".join(assessment.reasons)
+        self.assertIn("顧客・案件・チケット・担当者", joined)
+        self.assertNotIn("業務識別子または所有者ラベル", joined)
 
 
 class SensitivityClassifierChoiceTests(unittest.TestCase):

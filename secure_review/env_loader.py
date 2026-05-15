@@ -33,5 +33,34 @@ def load_dotenv(dotenv_path: str | Path | None = None, override: bool = False) -
 
 def _strip_quotes(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-        return value[1:-1]
+        quote = value[0]
+        inner = value[1:-1]
+        if quote == '"':
+            return _decode_double_quoted_escapes(inner)
+        return inner
     return value
+
+
+def _decode_double_quoted_escapes(value: str) -> str:
+    """Decode a conservative subset of .env double-quoted escape sequences."""
+    replacements = {
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+        "\\": "\\",
+        '"': '"',
+        "$": "$",
+    }
+    result: list[str] = []
+    index = 0
+    while index < len(value):
+        char = value[index]
+        if char == "\\" and index + 1 < len(value):
+            next_char = value[index + 1]
+            if next_char in replacements:
+                result.append(replacements[next_char])
+                index += 2
+                continue
+        result.append(char)
+        index += 1
+    return "".join(result)

@@ -12,6 +12,7 @@ from secure_review.reviewer import (
     _extract_openai_like_text,
     _looks_like_quota,
     choose_provider,
+    provider_display_name,
 )
 
 
@@ -47,6 +48,12 @@ class ProviderChoiceTests(unittest.TestCase):
             provider = choose_provider()
         self.assertIsInstance(provider, GeminiFreeTierProvider)
         self.assertTrue(provider.model.startswith("gemini-"))
+
+    def test_provider_display_name_is_stable_for_gemma_hosted(self) -> None:
+        self.assertEqual(
+            provider_display_name("gemma-4-gemini-api", "gemma-4-31b-it"),
+            "Gemma 4 (Gemini API) / gemma-4-31b-it",
+        )
 
 
 class GeminiExtractorTests(unittest.TestCase):
@@ -854,6 +861,35 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         self.assertIn("chapter_overviews と issues は、この内容と矛盾しない", prompt)
         self.assertIn("必須要素不足", prompt)
 
+    def test_prompt_requires_structured_summary_and_purpose_alignment(self) -> None:
+        from secure_review.reviewer import build_prompt
+        prompt = build_prompt([_doc(name="design.md", text="第 1 章 はじめに\n本文")])
+        self.assertIn("summary は文字列ではなく", prompt)
+        self.assertIn("purpose_section_in_document", prompt)
+        self.assertIn("purpose_divergence", prompt)
+        self.assertIn("目的記載がない", prompt)
+
+    def test_local_summary_is_added_when_provider_summary_is_legacy(self) -> None:
+        from secure_review.reviewer import _build_review_result
+        from secure_review.rubric import choose_rubric
+
+        document = _doc(
+            name="design.md",
+            text="第 1 章 はじめに\n目的: 認証基盤を更新する。\n第 2 章 システム要件\n本文",
+        )
+        result = _build_review_result(
+            summary="legacy summary",
+            issues=[],
+            provider="mock",
+            documents=[document],
+            rubric=choose_rubric([document], "design"),
+            classification_confidence="forced",
+            classification_reason="test",
+        )
+        self.assertFalse(result.summary_structured.is_empty())
+        self.assertIn("認証基盤", result.summary_structured.purpose)
+        self.assertIn("目的", result.summary_structured.purpose_section_in_document)
+
     def test_review_result_reconciles_chapter_overviews_with_structure_check(self) -> None:
         from secure_review.reviewer import _build_review_result
         from secure_review.rubric import choose_rubric
@@ -932,6 +968,17 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         )
         self.assertIn("SECOND_ONLY_ISSUE", prompt)
         self.assertNotIn("FIRST_ONLY_ISSUE", prompt)
+
+
+class SourceCodeHeuristicTests(unittest.TestCase):
+    def test_python_exec_call_is_flagged(self) -> None:
+        from secure_review.reviewer import _has_unprotected_command_execution
+        self.assertTrue(_has_unprotected_command_execution("exec(user_input)"))
+
+    def test_sql_exec_statement_is_not_flagged_as_python_exec(self) -> None:
+        from secure_review.reviewer import _has_unprotected_command_execution
+        sql = "CREATE PROCEDURE dbo.RunJob AS BEGIN EXEC(@sql); SELECT 1; END"
+        self.assertFalse(_has_unprotected_command_execution(sql))
 
 
 class NetworkConfigReviewTests(unittest.TestCase):

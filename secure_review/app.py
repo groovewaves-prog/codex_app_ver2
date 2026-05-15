@@ -28,6 +28,12 @@ SAFE_TOTAL_INPUT_TOKENS = 8_000
 SAFE_DOCUMENT_INPUT_TOKENS = 3_000
 MAX_REQUEST_BYTES = int(os.getenv("MAX_REQUEST_BYTES", str(64 * 1024 * 1024)))
 REQUIRE_MASK_AND_CONTINUE_CONFIRM = os.getenv("MASK_AND_CONTINUE_REQUIRE_CONFIRM", "true").lower() != "false"
+_SENSITIVITY_DECISION_LABELS = {
+    "safe": "安全",
+    "mask_and_continue": "要確認",
+    "block": "送信禁止",
+    "unknown": "未判定",
+}
 
 
 class ReviewRequestHandler(BaseHTTPRequestHandler):
@@ -281,8 +287,12 @@ def _run_sanitization_pipeline(
         sanitized.local_sensitivity_decision = assessment.decision
         sanitized.local_sensitivity_reasons = assessment.reasons
         sanitized.local_sensitivity_provider = assessment.provider
-        sanitized.findings.extend(
-            [f"Local sensitivity gate: {assessment.decision}. {reason}" for reason in assessment.reasons]
+        _append_unique_findings(
+            sanitized,
+            [
+                _format_local_sensitivity_finding(assessment.decision, reason)
+                for reason in assessment.reasons
+            ],
         )
         if assessment.decision == "mask_and_continue":
             extraction_warnings.extend(
@@ -292,6 +302,24 @@ def _run_sanitization_pipeline(
         sanitized_documents.append(sanitized)
 
     return sanitized_documents, extraction_warnings
+
+
+def _format_local_sensitivity_finding(decision: str, reason: str) -> str:
+    label = _SENSITIVITY_DECISION_LABELS.get(decision, decision or "未判定")
+    return f"ローカル機密度ゲート: {label}. {reason}"
+
+
+def _append_unique_findings(
+    sanitized: SanitizedDocument,
+    findings: list[str],
+) -> None:
+    """Append findings without repeating identical UI messages."""
+    seen = {str(item).strip() for item in sanitized.findings if str(item).strip()}
+    for finding in findings:
+        text = str(finding).strip()
+        if text and text not in seen:
+            sanitized.findings.append(text)
+            seen.add(text)
 
 
 def _status_for(sanitized_documents: list[SanitizedDocument]) -> str:

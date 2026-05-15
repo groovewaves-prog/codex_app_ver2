@@ -388,9 +388,9 @@ MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
 
 | # | 内容 | 優先 |
 |---|---|---|
-| **R-A** | `app.py` の findings 接頭辞 `Local sensitivity gate: safe.` を日本語化（例: `ローカル機密度ゲート: 安全.`） | 低 |
-| **R-F** | OneDrive 配下リポジトリの git ロック問題を handoff.md に明記（再発を防ぐ運用 Tips として） | 低 |
-| **R-I** | 文書要約 + 「目的」整合性チェック機能。Gemma 4 にレビュー対象文書の内容要約を生成させ UI に表示。さらに文書中に「目的」セクションが存在する場合、LLM 生成要約と「目的」の内容が一致しているか運用者が判断できる形で並列表示。乖離があれば文書品質指摘の候補（『目的と本文の整合性が取れていない』等）として独立フィールド出力 | 中 |
+| **R-A** | `app.py` の findings 接頭辞 `Local sensitivity gate: safe.` を日本語化（例: `ローカル機密度ゲート: 安全.`） | **対応済み**（2026-05-15: 日本語化 + 重複 findings 抑止） |
+| **R-F** | OneDrive 配下リポジトリの git ロック問題を handoff.md に明記（再発を防ぐ運用 Tips として） | **対応済み**（§ 9 / § 12 に運用 Tips 記載済み） |
+| **R-I** | 文書要約 + 「目的」整合性チェック機能。Gemma 4 にレビュー対象文書の内容要約を生成させ UI に表示。さらに文書中に「目的」セクションが存在する場合、LLM 生成要約と「目的」の内容が一致しているか運用者が判断できる形で並列表示。乖離があれば文書品質指摘の候補（『目的と本文の整合性が取れていない』等）として独立フィールド出力 | **対応済み**（2026-05-15: structured summary を明示要求し、mock/分割時はローカル要約で補完） |
 
 ### 6.2 実データテスト（ユーザー環境でしか確認できない）
 
@@ -408,11 +408,11 @@ MASK_AND_CONTINUE_REQUIRE_CONFIRM = "true"
 | # | 内容 | 優先 | 状態 |
 |---|---|---|---|
 | M1 | 裸ホスト名（`tokyo-rtr-01` 等）の検出強化 | 中 | **対応済み**（社内命名規則 regex `_build_internal_hostname_pattern` を `sanitizer.py` に追加。機器種別語彙ベースで過検出を抑制。テスト 4 件追加で全件通過。R-H として PR #7 マージ済み） |
-| L1 | findings / reasons の重複ノイズ整理 | 低 | 未対応 |
-| L2 | provider 名の表記ゆれ統一 (`gemma4` / `gemma-4-gemini-api`) | 低 | 未対応 |
-| L5 | `env_loader._strip_quotes` のエスケープシーケンス対応 | 低 | 未対応 |
-| L6 | `_has_unprotected_command_execution` の `exec(` が SQL `EXEC` に過剰マッチ | 低 | 未対応 |
-| L7 | `HeuristicSensitivityClassifier` が sanitizer findings を再評価している冗長性 | 低 | 未対応 |
+| L1 | findings / reasons の重複ノイズ整理 | 低 | **対応済み**（2026-05-15: 機密度 findings の重複抑止、識別子 reason の二重表示を抑制） |
+| L2 | provider 名の表記ゆれ統一 (`gemma4` / `gemma-4-gemini-api`) | 低 | **対応済み**（2026-05-15: 画面表示用 `provider_display_name` を追加。内部 slug は互換性維持） |
+| L5 | `env_loader._strip_quotes` のエスケープシーケンス対応 | 低 | **対応済み**（2026-05-15: double quote 内の `\n`, `\t`, `\"`, `\\` 等を保守的に decode） |
+| L6 | `_has_unprotected_command_execution` の `exec(` が SQL `EXEC` に過剰マッチ | 低 | **対応済み**（2026-05-15: SQL 文脈の `EXEC(...)` を Python `exec(...)` と誤判定しないよう調整） |
+| L7 | `HeuristicSensitivityClassifier` が sanitizer findings を再評価している冗長性 | 低 | **対応済み**（2026-05-15: sanitizer の replacements を優先し、同種の customer context reason を二重追加しない） |
 | L8 | ラベル系パターン（`person` / `company` / `project` / `ticket`）が既存プレースホルダ（`[EMAIL_001]` 等）を再マスクしてしまう問題 | 中 | **対応済み**（`_replace_pattern` で値が `_PLACEHOLDER_REUSE_PATTERN` にマッチする場合は再マスクをスキップ。R-J として PR #8 マージ済み、テスト 3 件追加で合計 76 件通過） |
 | L9 | プロファイル自動判定が「変更」「切替」「運用」等の本文キーワードに反応し、設計書を手順書 (change_runbook) として誤判定する問題 | 中 | **対応済み**（`detect_document_profile` をファイル名最優先方式に書き換え。本文 signal は「タイムチャート」「切戻し」「go/no-go」「エスカレーション」等の手順書特有語に厳格化。競合検出時は新 confidence 値 `"conflict"` で UI に警告表示。R-K として新 PR、テスト 14 件新設で合計 90 件通過） |
 | L10 | R-K 後の社内評価で「指摘は出ているが、レビューとしては浅い」(根拠が弱い・影響範囲なし・修正方針が抽象的・優先度や期限なし・指摘票形式でない) という評価を受けた | 高 | **対応済み**（B0-B3 にて全面深化: `ReviewSummary` 構造化(目的/乖離/要約/評価/総合判定 A-D)、`ReviewIssue` 6 フィールド化(現状/問題点/影響/推奨/期限/再レビュー要否)、design ルーブリック大幅深化(MC 2→5 / EA checkpoint 増強)、企画書プロファイル新規追加、SYSTEM_PROMPT 全面書き直し。R-L として新 PR、テスト 25 件新設で合計 115 件通過） |

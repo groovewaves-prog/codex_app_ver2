@@ -83,8 +83,8 @@ class ReviewSummary:
 
     Fields:
         purpose: AI-inferred purpose of the document set.
-        purpose_section_in_document: If a "逶ｮ逧・ / "譛ｬ譖ｸ縺ｮ菴咲ｽｮ莉倥￠" section
-            exists in the document, where it is located (e.g. "1.1 譛ｬ譖ｸ縺ｮ菴咲ｽｮ莉倥￠").
+        purpose_section_in_document: If a "目的" / "本書の目的" section
+            exists in the document, where it is located (e.g. "1.1 本書の目的").
             Empty string if not found.
         purpose_divergence: Description of any divergence between the
             document's stated purpose and the AI-inferred purpose. Empty

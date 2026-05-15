@@ -36,7 +36,7 @@ from secure_review.models import (
     UploadedDocument,
 )
 from secure_review.network_guard import LocalUrlError
-from secure_review.reviewer import choose_provider
+from secure_review.reviewer import choose_provider, provider_display_name
 # Phase 7 段階 2-C (2026-05-08): 章単位深堀り
 from secure_review.rubric import ChapterSection, extract_chapters_from_text
 from secure_review.run_masking_pipeline import (
@@ -1419,13 +1419,17 @@ def _run_chapter_deep_dive(
         return
     try:
         provider_impl = choose_provider()
+        provider_label = provider_display_name(
+            provider_impl.name,
+            getattr(provider_impl, "model", ""),
+        )
         if provider_impl.name == "mock":
             st.warning(
                 "⚠️ mock プロバイダでは章単位深堀りも実質通常レビューと同じです。"
             )
         _enforce_outbound_guard(provider_impl.name, preview_docs)
         with st.spinner(
-            f"{provider_impl.name} で「{chapter.chapter_label}」を深堀レビュー中..."
+            f"{provider_label} で「{chapter.chapter_label}」を深堀レビュー中..."
         ):
             previous_issues = [
                 issue
@@ -1823,12 +1827,18 @@ with st.sidebar:
     st.markdown("---")
 
     provider = os.getenv("REVIEW_PROVIDER", "mock")
+    provider_model = (
+        os.getenv("GEMMA_MODEL", "").strip()
+        or os.getenv("GEMINI_MODEL", "").strip()
+        or os.getenv("LLM_MODEL", "").strip()
+    )
+    provider_label = provider_display_name(provider, provider_model)
     local_san = os.getenv("LOCAL_SANITIZER_PROVIDER", "none")
     local_sens = os.getenv("LOCAL_SENSITIVITY_PROVIDER", "heuristic")
 
     st.markdown("##### 動作環境")
     st.markdown(
-        f'<div class="provider-line">レビュー LLM   → <b>{provider}</b><br/>'
+        f'<div class="provider-line">レビュー LLM   → <b>{provider_label}</b><br/>'
         f"匿名化         → <b>{local_san}</b><br/>"
         f'機密度判定     → <b>{local_sens}</b></div>',
         unsafe_allow_html=True,
@@ -2459,6 +2469,10 @@ if preview_docs:
             preview_docs = st.session_state.get("preview_docs") or preview_docs
             review_progress.progress(20, text="レビュー LLM の設定を確認しています...")
             provider_impl = choose_provider()
+            provider_label = provider_display_name(
+                provider_impl.name,
+                getattr(provider_impl, "model", ""),
+            )
             review_progress.progress(40, text="外部送信ガードを確認しています...")
             _enforce_outbound_guard(provider_impl.name, preview_docs)
 
@@ -2481,10 +2495,10 @@ if preview_docs:
                     # progress bar の更新失敗は致命的ではない (ログのみ)
                     pass
 
-            with st.spinner(f"{provider_impl.name} でレビュー実行中..."):
+            with st.spinner(f"{provider_label} でレビュー実行中..."):
                 review_progress.progress(
                     65,
-                    text=f"{provider_impl.name} に匿名化済みテキストを送信し、レビューを実行しています...",
+                    text=f"{provider_label} に匿名化済みテキストを送信し、レビューを実行しています...",
                 )
                 review = provider_impl.review(
                     preview_docs,
@@ -2633,9 +2647,9 @@ if review is not None:
         # R-B + R-C (ε): show the concrete model identifier alongside the
         # internal provider slug so operators can see at a glance which
         # model produced this review.
-        meta_parts = [f"プロバイダ: {review.provider}"]
-        if review.model:
-            meta_parts.append(f"モデル: {review.model}")
+        meta_parts = [
+            f"レビューLLM: {provider_display_name(review.provider, review.model)}"
+        ]
         meta_parts.append(f"ルーブリック: {review.rubric_name or review.rubric_id or '-'}")
         meta_parts.append(
             f"プロファイル: {_profile_label(review.document_profile)} "

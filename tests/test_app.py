@@ -11,8 +11,8 @@ import threading
 
 from http.server import ThreadingHTTPServer
 
-from secure_review.app import ReviewRequestHandler
-from secure_review.models import SanitizedDocument
+from secure_review.app import ReviewRequestHandler, _run_sanitization_pipeline
+from secure_review.models import SanitizedDocument, UploadedDocument
 
 
 def _start_test_server():
@@ -144,9 +144,27 @@ class AppIntegrationTests(unittest.TestCase):
                     ],
                     "confirmMaskAndContinue": True,
                 },
-            )
+        )
         self.assertEqual(code, HTTPStatus.OK)
         self.assertEqual(body["status"], "ok")
+
+    def test_local_sensitivity_findings_are_japanese_and_unique(self) -> None:
+        with patch.dict(os.environ, {"REVIEW_PROVIDER": "mock"}, clear=True):
+            docs, _ = _run_sanitization_pipeline(
+                [
+                    UploadedDocument(
+                        name="safe.md",
+                        content="一般的な設計メモ",
+                    )
+                ]
+            )
+        self.assertEqual(len(docs), 1)
+        findings = docs[0].findings
+        self.assertTrue(
+            any(finding.startswith("ローカル機密度ゲート: 安全.") for finding in findings)
+        )
+        self.assertFalse(any("Local sensitivity gate" in finding for finding in findings))
+        self.assertEqual(len(findings), len(set(findings)))
 
     def test_per_document_confirmations_gate_partial(self) -> None:
         with patch.dict(os.environ, {"REVIEW_PROVIDER": "mock"}, clear=True):

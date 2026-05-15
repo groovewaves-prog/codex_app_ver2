@@ -46,6 +46,23 @@ class LoadDotenvTests(unittest.TestCase):
                 load_dotenv(path, override=True)
                 self.assertEqual(os.environ["FOO"], "fromfile")
 
+    def test_double_quoted_escape_sequences_are_decoded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / ".env"
+            path.write_text(
+                'MULTILINE="line1\\nline2"\n'
+                'TAB="a\\tb"\n'
+                'QUOTE="say \\"hello\\""\n'
+                "SINGLE='line1\\nline2'\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                load_dotenv(path)
+                self.assertEqual(os.environ["MULTILINE"], "line1\nline2")
+                self.assertEqual(os.environ["TAB"], "a\tb")
+                self.assertEqual(os.environ["QUOTE"], 'say "hello"')
+                self.assertEqual(os.environ["SINGLE"], "line1\\nline2")
+
     def test_missing_file_returns_none(self) -> None:
         result = load_dotenv(Path("/this/path/definitely/does/not/exist.env"))
         self.assertIsNone(result)

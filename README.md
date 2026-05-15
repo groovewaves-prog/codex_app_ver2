@@ -127,6 +127,7 @@ python -m unittest discover tests
 | `docs/traceability.md` | 設計-コード対応表 |
 | `docs/handoff.md` | 引き継ぎ書（現状・残課題） |
 | `docs/operations_policy.md` | 運用ポリシー |
+| `docs/mock_operation_manual.md` | 上司・評価者向けモック操作マニュアル |
 | `docs/local_ollama_verification.md` | ローカル Ollama 検証手順 |
 | `docs/v3_streamlit_verification.md` | Streamlit UI 実データ検証手順 |
 | `CHANGES.md` | 変更履歴 |

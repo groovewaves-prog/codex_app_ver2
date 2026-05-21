@@ -145,6 +145,156 @@ h1, h2, h3 {
     letter-spacing: -0.02em;
 }
 
+[data-testid="stSidebar"] {
+    background:
+        radial-gradient(circle at top left, rgba(56,168,184,0.18), transparent 16rem),
+        linear-gradient(180deg, #edf4f1 0%, #e8eee9 48%, #dde8e4 100%);
+}
+[data-testid="stSidebarContent"] {
+    padding: 1.45rem 1rem 1.6rem;
+}
+[data-testid="stSidebar"] hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(8,119,96,0.22), transparent);
+    margin: 1.35rem 0;
+}
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label {
+    color: #52635d;
+}
+[data-testid="stSidebar"] [data-baseweb="select"] > div {
+    border-radius: 18px;
+    border: 1px solid rgba(8,119,96,0.18);
+    background: rgba(255,253,248,0.88);
+    min-height: 3rem;
+    box-shadow: 0 10px 22px rgba(24,35,30,0.06);
+}
+[data-testid="stSidebar"] div.stButton > button {
+    min-height: 3.1rem;
+    border-radius: 20px !important;
+    border: 1px solid rgba(8,119,96,0.20) !important;
+    background: rgba(255,253,248,0.88) !important;
+    color: var(--ink) !important;
+    font-weight: 800;
+    box-shadow: 0 14px 28px rgba(24,35,30,0.08);
+}
+[data-testid="stSidebar"] div.stButton > button:hover {
+    background: rgba(228,244,236,0.96) !important;
+    color: var(--accent-strong) !important;
+    transform: translateY(-1px);
+}
+[data-testid="stSidebar"] div[data-testid="stExpander"] details {
+    border-radius: 20px !important;
+    border: 1px solid rgba(8,119,96,0.18) !important;
+    background: rgba(255,253,248,0.74) !important;
+    box-shadow: 0 14px 30px rgba(24,35,30,0.075);
+}
+[data-testid="stSidebar"] div[data-testid="stExpander"] summary {
+    min-height: 3.25rem;
+    padding-left: 0.35rem;
+}
+.sidebar-brand {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: 24px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.92) 0%, rgba(230,244,238,0.88) 100%);
+    padding: 1rem 0.95rem;
+    box-shadow: 0 18px 38px rgba(24,35,30,0.10);
+}
+.sidebar-brand::after {
+    content: "";
+    position: absolute;
+    right: -3rem;
+    top: -3rem;
+    width: 8rem;
+    height: 8rem;
+    background: radial-gradient(circle, rgba(56,168,184,0.20), transparent 66%);
+}
+.sidebar-kicker {
+    position: relative;
+    z-index: 1;
+    color: var(--accent-strong);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 800;
+}
+.sidebar-title {
+    position: relative;
+    z-index: 1;
+    color: var(--ink);
+    font-size: 1.08rem;
+    line-height: 1.35;
+    font-weight: 900;
+    margin-top: 0.35rem;
+}
+.sidebar-subtitle {
+    position: relative;
+    z-index: 1;
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+    line-height: 1.6;
+    margin-top: 0.55rem;
+}
+.sidebar-section-label {
+    color: var(--ink);
+    font-size: 0.78rem;
+    font-weight: 900;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    margin: 0.2rem 0 0.55rem;
+}
+.sidebar-help {
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+    line-height: 1.55;
+    margin-top: 0.55rem;
+}
+.env-panel {
+    border: 1px solid rgba(8,119,96,0.16);
+    border-radius: 22px;
+    background: rgba(255,253,248,0.70);
+    padding: 0.85rem 0.85rem 0.7rem;
+    box-shadow: 0 12px 26px rgba(24,35,30,0.06);
+}
+.env-row {
+    display: grid;
+    grid-template-columns: 4.7rem minmax(0, 1fr);
+    gap: 0.55rem;
+    align-items: baseline;
+    padding: 0.34rem 0;
+    border-bottom: 1px solid rgba(8,119,96,0.09);
+}
+.env-row:last-child {
+    border-bottom: none;
+}
+.env-label {
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+}
+.env-value {
+    color: var(--accent-strong);
+    font-size: 0.8rem;
+    font-weight: 900;
+    overflow-wrap: anywhere;
+}
+.sidebar-memory-card {
+    border: 1px solid rgba(8,119,96,0.13);
+    border-left: 4px solid var(--cyan);
+    border-radius: 18px;
+    background: rgba(247,252,250,0.72);
+    padding: 0.75rem 0.8rem;
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+    line-height: 1.6;
+}
+
 .app-hero {
     position: relative;
     overflow: hidden;
@@ -186,21 +336,6 @@ h1, h2, h3 {
     margin-top: 0.55rem;
     font-size: 0.96rem;
     line-height: 1.7;
-}
-.hero-chip-row {
-    display: flex;
-    gap: 0.45rem;
-    flex-wrap: wrap;
-    margin-top: 0.9rem;
-}
-.hero-chip {
-    border: 1px solid rgba(8,119,96,0.20);
-    background: rgba(255,255,255,0.66);
-    color: var(--accent-strong);
-    padding: 0.32rem 0.58rem;
-    border-radius: 999px;
-    font-size: 0.78rem;
-    font-weight: 700;
 }
 
 .operation-assist {
@@ -2674,8 +2809,16 @@ def _render_uncertain_candidates_card(
 # ------------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.markdown("### 📄 技術文書レビュー支援ツール")
-    st.caption("匿名化した文書をもとに、構成・品質・リスクをレビューします。")
+    st.markdown(
+        """
+<section class="sidebar-brand">
+  <div class="sidebar-kicker">Review Cockpit</div>
+  <div class="sidebar-title">技術文書レビュー支援ツール</div>
+  <div class="sidebar-subtitle">匿名化済み文書をもとに、構成・品質・リスクを確認します。</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
     provider = os.getenv("REVIEW_PROVIDER", "mock")
@@ -2688,16 +2831,20 @@ with st.sidebar:
     local_san = os.getenv("LOCAL_SANITIZER_PROVIDER", "none")
     local_sens = os.getenv("LOCAL_SENSITIVITY_PROVIDER", "heuristic")
 
-    st.markdown("##### 動作環境")
     st.markdown(
-        f'<div class="provider-line">レビュー LLM   → <b>{provider_label}</b><br/>'
-        f"匿名化         → <b>{local_san}</b><br/>"
-        f'機密度判定     → <b>{local_sens}</b></div>',
+        f"""
+<div class="sidebar-section-label">動作環境</div>
+<div class="env-panel">
+  <div class="env-row"><span class="env-label">LLM</span><span class="env-value">{html.escape(provider_label)}</span></div>
+  <div class="env-row"><span class="env-label">匿名化</span><span class="env-value">{html.escape(local_san)}</span></div>
+  <div class="env-row"><span class="env-label">機密判定</span><span class="env-value">{html.escape(local_sens)}</span></div>
+</div>
+        """,
         unsafe_allow_html=True,
     )
 
     st.markdown("---")
-    st.markdown("##### 文書種別")
+    st.markdown('<div class="sidebar-section-label">文書種別</div>', unsafe_allow_html=True)
     profile_options = [
         ("(自動判定)", None),
         ("設計書", "design"),
@@ -2717,9 +2864,13 @@ with st.sidebar:
         ),
     )
     document_profile_override = dict(profile_options)[profile_label]
-    st.caption("通常は自動判定で問題ありません。誤判定時のみ手動で変更します。")
+    st.markdown(
+        '<div class="sidebar-help">通常は自動判定で問題ありません。誤判定時のみ手動で変更します。</div>',
+        unsafe_allow_html=True,
+    )
 
     st.markdown("---")
+    st.markdown('<div class="sidebar-section-label">Session</div>', unsafe_allow_html=True)
     if st.button("セッションをリセット", width='stretch'):
         _reset_state()
         # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、
@@ -2730,9 +2881,14 @@ with st.sidebar:
         st.session_state.uploader_key = f"uploads_{uuid.uuid4().hex[:8]}"
         st.rerun()
 
-    st.caption(
-        "アップロードされた文書はサーバ上に保存されません。"
-        "本セッション中のメモリ上のみで処理されます。"
+    st.markdown(
+        """
+<div class="sidebar-memory-card">
+  アップロードされた文書はサーバ上に保存されません。
+  本セッション中のメモリ上のみで処理されます。
+</div>
+        """,
+        unsafe_allow_html=True,
     )
 
     st.markdown("---")
@@ -2837,12 +2993,6 @@ st.markdown(
   <div class="hero-subtitle">
     アップロード文書をローカルで匿名化し、業界標準に基づいて構成・品質・リスクをレビューします。
     レビュー管制エージェントが、送信前の安全境界、トークン規模、次アクションを常時監視します。
-  </div>
-  <div class="hero-chip-row">
-    <span class="hero-chip">Local First</span>
-    <span class="hero-chip">Evidence Review</span>
-    <span class="hero-chip">Human Approval Gate</span>
-    <span class="hero-chip">Agentic Workflow</span>
   </div>
 </section>
     """,

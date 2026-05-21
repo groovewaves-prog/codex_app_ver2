@@ -2398,7 +2398,7 @@ def _parse_issue_blocks(content: str, documents: list[SanitizedDocument]) -> lis
             severity="info",
             title="LLM応答形式を解析できませんでした",
             details=content[:500] or "No review text was returned.",
-            recommendation="結果ログの LLM 生レスポンスを確認し、JSON 形式で返っているか確認してください。",
+            recommendation="レビュー証跡の LLM 生レスポンスを確認し、JSON 形式で返っているか確認してください。",
             source_document=default_source,
             issue_id="PARSE-001",
         )

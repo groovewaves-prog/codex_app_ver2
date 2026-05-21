@@ -1211,6 +1211,16 @@ div[data-testid="stExpander"] summary {
     line-height: 1.55;
     max-width: 520px;
 }
+.remediation-purpose {
+    border: 1px solid rgba(8,119,96,0.13);
+    border-radius: 16px;
+    background: rgba(247,252,250,0.78);
+    color: var(--ink-soft);
+    font-size: 0.86rem;
+    line-height: 1.55;
+    padding: 0.68rem 0.78rem;
+    margin-top: 0.82rem;
+}
 .remediation-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -1268,6 +1278,50 @@ div[data-testid="stExpander"] summary {
     font-size: 0.8rem;
     line-height: 1.5;
     margin-top: 0.28rem;
+}
+.next-work-lane {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.58rem;
+    margin-top: 0.78rem;
+}
+.next-work-step {
+    border: 1px solid rgba(217,209,192,0.70);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.66);
+    padding: 0.64rem 0.72rem;
+}
+.next-work-label {
+    color: var(--ink);
+    font-weight: 900;
+    font-size: 0.86rem;
+}
+.next-work-detail {
+    color: var(--ink-soft);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    margin-top: 0.25rem;
+}
+.export-panel {
+    border: 1px solid rgba(8,119,96,0.16);
+    border-left: 5px solid var(--cyan);
+    border-radius: 20px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.88) 0%, rgba(236,247,245,0.86) 100%);
+    padding: 0.85rem 0.95rem;
+    margin: 0.75rem 0 0.9rem;
+    box-shadow: 0 10px 24px rgba(24,35,30,0.055);
+}
+.export-title {
+    color: var(--ink);
+    font-weight: 900;
+    font-size: 1rem;
+}
+.export-detail {
+    color: var(--ink-soft);
+    font-size: 0.84rem;
+    line-height: 1.55;
+    margin-top: 0.35rem;
 }
 @media (max-width: 760px) {
     .remediation-head { display: block; }
@@ -2739,7 +2793,7 @@ def _render_review_result_dashboard(
         result_tone = "warn"
     else:
         result_title = "レビュー結果は概ね良好です"
-        result_detail = "重大な指摘は検出されていません。必要に応じて結果ログを保存してください。"
+        result_detail = "重大な指摘は検出されていません。必要に応じてレビュー証跡を保存してください。"
         result_tone = "safe"
     _render_insight_panel(
         kicker="Review Result",
@@ -2807,7 +2861,26 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
     </div>
     <div class="remediation-summary">{html.escape(plan.summary)}</div>
   </div>
+  <div class="remediation-purpose">
+    <b>このパネルの目的:</b>
+    レビュー結果を読んで終わりにせず、修正担当者が次に文書へ追記する内容、再レビューの範囲、
+    上長確認へ進む条件まで整理します。まず赤いカード、次に黄色いカードの順で対応してください。
+  </div>
   <div class="remediation-grid">{''.join(item_cards) if item_cards else '<div class="remediation-text">大きな修正アクションはありません。</div>'}</div>
+  <div class="next-work-lane">
+    <div class="next-work-step">
+      <div class="next-work-label">1. 修正担当へ割当</div>
+      <div class="next-work-detail">カード単位で担当者を決め、対象章と方針を共有します。</div>
+    </div>
+    <div class="next-work-step">
+      <div class="next-work-label">2. テンプレートを反映</div>
+      <div class="next-work-detail">下の追記テンプレートを文書に貼り、内容を実態に合わせて修正します。</div>
+    </div>
+    <div class="next-work-step">
+      <div class="next-work-label">3. 条件に沿って再確認</div>
+      <div class="next-work-detail">再レビュー条件に書かれた章・観点だけを再確認します。</div>
+    </div>
+  </div>
   <div class="re-review-lane">{re_review_html}</div>
 </section>
         """,
@@ -2815,7 +2888,7 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
     )
 
     if plan.items:
-        with st.expander("🛠 修正方針・追記テンプレートを開く", expanded=False):
+        with st.expander("🛠 担当者が追記する文章案を開く", expanded=False):
             for idx, item in enumerate(plan.items, 1):
                 st.markdown(
                     f"#### {idx}. {item.title} "
@@ -2828,12 +2901,33 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
                 _render_compact_field("再レビュー条件", item.re_review_condition)
                 st.code(item.template, language="markdown")
         st.download_button(
-            "🧭 修正アクションプランをダウンロード (JSON)",
+            "🧭 修正担当へ渡す計画を保存 (JSON)",
             data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
             file_name="remediation_plan.json",
             mime="application/json",
             width='stretch',
         )
+        st.caption(
+            "保存した JSON は、担当者への作業依頼、上長への進捗共有、再レビュー対象の確認に使います。"
+            "次の操作は、テンプレートを文書へ反映し、再レビュー条件に書かれた章・観点だけを再確認することです。"
+        )
+
+
+def _render_review_log_export_panel() -> None:
+    with st.expander("📦 証跡・エクスポート（必要なときだけ開く）", expanded=False):
+        st.markdown(
+            """
+<div class="export-panel">
+  <div class="export-title">レビュー証跡を保存</div>
+  <div class="export-detail">
+    匿名化済みテキスト、マスク候補、送信対象ログ、レビュー結果を JSON として保存します。
+    通常操作では開く必要はありません。検証ログを共有したい場合だけ利用してください。
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        render_log_export_button()
 
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
@@ -3695,7 +3789,6 @@ if preview_docs:
                 expanded=False,
             )
     render_session_summary()
-    render_log_export_button()
 
     # -- Step 3: Confirmation gate ----------------------------------------
 
@@ -4121,6 +4214,7 @@ if review is not None:
         _structure_result_for_review,
     )
     _render_remediation_plan(_remediation_plan)
+    _render_review_log_export_panel()
     _render_deep_dive_candidate_summary(_deep_dive_candidates)
 
     st.markdown("### 文書全体の概要")

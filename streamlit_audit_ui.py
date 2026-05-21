@@ -335,11 +335,11 @@ def _persist_term(
 
 
 # ============================================================
-# R-W-export: 結果ログのダウンロード (チャットでの貼り付け負担軽減)
+# R-W-export: レビュー証跡の保存 (チャットでの貼り付け負担軽減)
 # ============================================================
 
 def render_log_export_button() -> None:
-    """ステップ 3 直後に「📥 結果ログをダウンロード」ボタンを表示。
+    """Render a JSON export button for review evidence.
 
     現在の preview_docs (匿名化済み文書) と review_result (LLM レビュー結果)
     を JSON にシリアライズして download_button で配布。
@@ -481,7 +481,7 @@ def render_log_export_button() -> None:
     json_str = json.dumps(log_data, ensure_ascii=False, indent=2, default=str)
 
     st.download_button(
-        label="📥 結果ログをダウンロード (JSON)",
+        label="📥 レビュー証跡を保存 (JSON)",
         data=json_str,
         file_name=f"review_log_{session_id}.json",
         mime="application/json",

@@ -138,11 +138,7 @@ def _item_from_issue(issue: ReviewIssue) -> RemediationItem:
     problem = issue.issue or issue.details or issue.title
     fix_policy = issue.recommendation or "指摘箇所に、判断根拠・設計方針・完了条件を追記してください。"
     target_section = issue.section or "該当箇所"
-    re_review_condition = (
-        "修正後に同じ章を再レビューしてください。"
-        if issue.re_review_required or issue.severity == "high"
-        else "修正差分を確認し、必要に応じて再レビューしてください。"
-    )
+    re_review_condition = _re_review_condition_for_issue(issue, target_section)
     return RemediationItem(
         item_id=issue.issue_id or _fallback_issue_id(issue),
         source_type="review_issue",
@@ -178,8 +174,55 @@ def _item_from_structure_finding(finding: StructureFinding) -> RemediationItem:
         fix_policy=fix_policy,
         template=_template_for_structure_finding(finding),
         re_review_scope=f"{finding.source_document or '文書全体'} / {target_section}",
-        re_review_condition="追記後に文書構成チェックと章別概要レビューを再確認してください。",
+        re_review_condition=_re_review_condition_for_structure(finding, target_section),
         effort=_effort_for_severity(finding.severity),
+    )
+
+
+def _re_review_condition_for_issue(issue: ReviewIssue, target_section: str) -> str:
+    title = issue.title or "対象指摘"
+    if issue.severity == "high":
+        return (
+            f"「{target_section}」の修正後、この指摘「{title}」に関連する章だけを再アップロードし、"
+            "高重要度指摘が解消したか確認してください。"
+        )
+    if issue.re_review_required:
+        return (
+            f"「{target_section}」の追記後、該当箇所を再レビューし、"
+            f"「{title}」の再指摘が出ないことを確認してください。"
+        )
+    if issue.severity == "medium":
+        return (
+            f"「{target_section}」の追記差分を確認し、同じ観点の指摘が残る場合だけ再レビューしてください。"
+        )
+    return (
+        f"「{target_section}」の軽微修正後、表記ゆれや参照漏れがないかセルフチェックしてください。"
+    )
+
+
+def _re_review_condition_for_structure(
+    finding: StructureFinding,
+    target_section: str,
+) -> str:
+    if finding.kind == "missing_chapter":
+        return (
+            f"「{target_section}」相当の見出しを追加した後、文書構成チェックで不足観点が消えるか確認してください。"
+        )
+    if finding.kind == "required_item_gap":
+        item = finding.item_name or "必須要素"
+        return (
+            f"「{target_section}」に「{item}」を追記した後、該当章の概要レビューで不足が残らないか確認してください。"
+        )
+    if finding.kind in {"chapter_structure_missing", "structure_organization_suggestion"}:
+        return (
+            f"「{target_section}」の見出し分割・配置見直し後、章別概要で複数観点が混在していないか確認してください。"
+        )
+    if finding.kind == "structure_template_suggestion":
+        return (
+            "テンプレート案に沿って章立てを付け直した後、文書構成チェックで重要不足が減ったか確認してください。"
+        )
+    return (
+        f"「{target_section}」の追記後、文書構成チェックと章別概要レビューを確認してください。"
     )
 
 

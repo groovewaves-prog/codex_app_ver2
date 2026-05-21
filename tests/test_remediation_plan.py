@@ -36,6 +36,8 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertEqual(plan.items[0].item_id, "D-001")
         self.assertIn("RPO/RTO", plan.items[0].fix_policy)
         self.assertIn("第8章 可用性", plan.items[0].template)
+        self.assertIn("DR設計の未定義", plan.items[0].re_review_condition)
+        self.assertIn("第8章 可用性", plan.items[0].re_review_condition)
         self.assertEqual(plan.re_review_steps[0].label, "必須再レビュー")
 
     def test_structure_findings_become_templates(self) -> None:
@@ -67,6 +69,7 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertEqual(plan.items[0].source_type, "structure_check")
         self.assertIn("運用設計", plan.items[0].title)
         self.assertIn("## 運用設計", plan.items[0].template)
+        self.assertIn("不足観点", plan.items[0].re_review_condition)
 
     def test_empty_plan_still_has_completion_step(self) -> None:
         review = ReviewResult(summary="ok", issues=[], provider="mock", prompt_preview="")

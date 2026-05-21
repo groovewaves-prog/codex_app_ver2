@@ -28,6 +28,7 @@ from pathlib import Path
 import streamlit as st
 
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
+from secure_review.agent_planner import AgentBrief, build_review_agent_brief
 from secure_review.env_loader import load_dotenv
 from secure_review.models import (
     MaskingPipelineState,
@@ -107,27 +108,95 @@ st.set_page_config(
 STYLE = """
 <style>
 :root {
-    --bg-base: #f4efe6;
-    --bg-card: #ffffff;
-    --ink: #1f2a1d;
-    --ink-soft: #4a5549;
-    --accent: #2f6d3a;
-    --accent-soft: #e6efe2;
-    --warn: #a16b1a;
-    --warn-soft: #f6ead1;
-    --danger: #9a2a2a;
-    --danger-soft: #f4dcdc;
-    --rule: #d9d1c0;
+    --bg-base: #f3efe4;
+    --bg-card: #fffdf8;
+    --ink: #17251f;
+    --ink-soft: #53645e;
+    --accent: #087760;
+    --accent-strong: #034c42;
+    --accent-soft: #dff0ea;
+    --cyan: #38a8b8;
+    --warn: #a76700;
+    --warn-soft: #fff0c9;
+    --danger: #9d2f2f;
+    --danger-soft: #f8ded8;
+    --rule: #d7cbb8;
+    --shadow: 0 18px 45px rgba(24, 35, 30, 0.10);
 }
 
 .stApp {
-    background: var(--bg-base);
+    background:
+        radial-gradient(circle at top left, rgba(8,119,96,0.13), transparent 32rem),
+        radial-gradient(circle at top right, rgba(56,168,184,0.10), transparent 28rem),
+        linear-gradient(180deg, #f8f5ed 0%, var(--bg-base) 52%, #eee8da 100%);
     color: var(--ink);
 }
 
 .block-container { padding-top: 2rem; max-width: 1200px; }
 
-h1, h2, h3 { font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', 'Times New Roman', serif; color: var(--ink); letter-spacing: -0.01em; }
+h1, h2, h3 {
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+    color: var(--ink);
+    letter-spacing: -0.02em;
+}
+
+.app-hero {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid rgba(8, 119, 96, 0.24);
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.94) 0%, rgba(229,241,234,0.92) 48%, rgba(221,235,231,0.98) 100%);
+    border-radius: 24px;
+    padding: 1.35rem 1.55rem;
+    margin: 0.2rem 0 1.1rem;
+    box-shadow: var(--shadow);
+}
+.app-hero::after {
+    content: "";
+    position: absolute;
+    right: -5rem;
+    top: -5rem;
+    width: 16rem;
+    height: 16rem;
+    background: radial-gradient(circle, rgba(56,168,184,0.22), transparent 68%);
+}
+.hero-kicker {
+    color: var(--accent-strong);
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 800;
+}
+.hero-title {
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+    font-size: clamp(1.9rem, 4vw, 3.2rem);
+    line-height: 1.08;
+    font-weight: 900;
+    margin-top: 0.3rem;
+    color: var(--ink);
+}
+.hero-subtitle {
+    color: var(--ink-soft);
+    max-width: 780px;
+    margin-top: 0.55rem;
+    font-size: 0.96rem;
+    line-height: 1.7;
+}
+.hero-chip-row {
+    display: flex;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-top: 0.9rem;
+}
+.hero-chip {
+    border: 1px solid rgba(8,119,96,0.20);
+    background: rgba(255,255,255,0.66);
+    color: var(--accent-strong);
+    padding: 0.32rem 0.58rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 700;
+}
 
 div.stButton > button[kind="primary"],
 button[data-testid="stBaseButton-primary"] {
@@ -265,10 +334,12 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .next-action-card {
     border: 1px solid var(--rule);
     border-left: 5px solid var(--accent);
-    background: #fbfaf4;
+    border-radius: 16px;
+    background: rgba(255,253,248,0.86);
     padding: 0.75rem 1rem;
     margin: 0.65rem 0 0.85rem;
     line-height: 1.5;
+    box-shadow: 0 8px 20px rgba(24, 35, 30, 0.06);
 }
 .next-action-card.warn { border-left-color: var(--warn); background: var(--warn-soft); }
 .next-action-card.block { border-left-color: var(--danger); background: var(--danger-soft); }
@@ -279,12 +350,13 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     position: sticky;
     top: 0.35rem;
     z-index: 100;
-    background: rgba(244, 239, 230, 0.96);
-    backdrop-filter: blur(6px);
-    border: 1px solid var(--rule);
-    padding: 0.35rem 0.55rem 0.15rem;
+    background: rgba(251, 248, 239, 0.84);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(8,119,96,0.16);
+    border-radius: 18px;
+    padding: 0.45rem 0.6rem 0.2rem;
     margin: 0.3rem 0 0.9rem;
-    box-shadow: 0 3px 12px rgba(40, 32, 20, 0.08);
+    box-shadow: var(--shadow);
 }
 .task-sticky-panel .next-action-card {
     margin: 0.15rem 0 0.45rem;
@@ -310,11 +382,12 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .insight-panel {
     border: 1px solid #d6c9b5;
     border-left: 5px solid var(--accent);
+    border-radius: 22px;
     background:
         linear-gradient(135deg, rgba(255,255,255,0.92) 0%, rgba(250,246,236,0.96) 100%);
     padding: 0.95rem 1rem;
     margin: 0.8rem 0 1rem;
-    box-shadow: 0 8px 24px rgba(38, 32, 22, 0.07);
+    box-shadow: var(--shadow);
 }
 .insight-panel.warn { border-left-color: var(--warn); background: linear-gradient(135deg, #fffdf7 0%, #fbf1dc 100%); }
 .insight-panel.block { border-left-color: var(--danger); background: linear-gradient(135deg, #fffdf7 0%, #f8e7e2 100%); }
@@ -333,7 +406,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
 }
 .insight-title {
-    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
     color: var(--ink);
     font-size: 1.25rem;
     font-weight: 700;
@@ -355,6 +428,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     background: rgba(255,255,255,0.78);
     border: 1px solid rgba(217, 209, 192, 0.82);
     border-top: 3px solid var(--rule);
+    border-radius: 16px;
     padding: 0.58rem 0.65rem 0.65rem;
     min-height: 86px;
 }
@@ -372,7 +446,8 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     font-size: 1.55rem;
     line-height: 1.1;
     margin-top: 0.3rem;
-    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+    font-weight: 900;
 }
 .insight-note {
     color: var(--ink-soft);
@@ -389,14 +464,16 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     grid-template-columns: minmax(260px, 1.1fr) minmax(360px, 1.7fr);
     gap: 0.85rem;
     border: 1px solid #d6c9b5;
+    border-radius: 24px;
     background: linear-gradient(135deg, #fffdf7 0%, #f2ebdd 100%);
     padding: 1rem;
     margin: 0.7rem 0 0.9rem;
-    box-shadow: 0 6px 20px rgba(38, 32, 22, 0.06);
+    box-shadow: var(--shadow);
 }
 .readiness-main {
     border-left: 5px solid var(--accent);
     background: rgba(255,255,255,0.62);
+    border-radius: 18px;
     padding: 0.85rem 1rem;
 }
 .readiness-main.warn { border-left-color: var(--warn); }
@@ -409,7 +486,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     text-transform: uppercase;
 }
 .readiness-title {
-    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
     font-size: 1.55rem;
     font-weight: 700;
     margin-top: 0.2rem;
@@ -428,6 +505,7 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .readiness-card {
     background: rgba(255,255,255,0.78);
     border: 1px solid rgba(217, 209, 192, 0.72);
+    border-radius: 16px;
     padding: 0.65rem 0.75rem;
     min-height: 92px;
 }
@@ -463,6 +541,117 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
     font-size: 0.95rem;
     margin-left: 0.25rem;
+}
+
+.agent-command {
+    border: 1px solid rgba(8,119,96,0.22);
+    border-radius: 24px;
+    background:
+        linear-gradient(135deg, rgba(15, 42, 36, 0.96) 0%, rgba(5, 72, 63, 0.94) 48%, rgba(16, 89, 82, 0.92) 100%);
+    color: #f6fbf7;
+    padding: 1rem;
+    margin: 0.9rem 0 1rem;
+    box-shadow: 0 20px 52px rgba(11, 43, 37, 0.22);
+}
+.agent-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
+    gap: 1rem;
+    align-items: start;
+}
+.agent-kicker {
+    color: rgba(212, 240, 230, 0.78);
+    font-size: 0.72rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    font-weight: 800;
+}
+.agent-title {
+    font-size: 1.35rem;
+    font-weight: 900;
+    margin-top: 0.25rem;
+}
+.agent-mode {
+    display: inline-block;
+    margin-top: 0.45rem;
+    padding: 0.22rem 0.58rem;
+    border: 1px solid rgba(255,255,255,0.26);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.10);
+    color: #dff8eb;
+    font-size: 0.78rem;
+    font-weight: 800;
+}
+.agent-text {
+    color: rgba(247, 252, 247, 0.86);
+    line-height: 1.58;
+    margin-top: 0.45rem;
+}
+.agent-next {
+    border: 1px solid rgba(255,255,255,0.22);
+    border-radius: 18px;
+    background: rgba(255,255,255,0.10);
+    padding: 0.75rem 0.85rem;
+}
+.agent-next b {
+    display: block;
+    color: #fbf4d0;
+    font-size: 0.82rem;
+    letter-spacing: 0.1em;
+}
+.agent-stage-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.55rem;
+    margin-top: 0.9rem;
+}
+.agent-stage {
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.08);
+    padding: 0.6rem 0.7rem;
+    min-height: 86px;
+}
+.agent-stage.done { border-color: rgba(116, 224, 165, 0.50); }
+.agent-stage.active { border-color: rgba(118, 217, 230, 0.65); box-shadow: inset 0 0 0 1px rgba(118,217,230,0.18); }
+.agent-stage.warn { border-color: rgba(255, 204, 107, 0.70); }
+.agent-stage.block { border-color: rgba(255, 139, 121, 0.78); }
+.agent-stage-label {
+    color: #ffffff;
+    font-weight: 900;
+    font-size: 0.86rem;
+}
+.agent-stage-state {
+    color: #dff8eb;
+    font-size: 0.78rem;
+    margin-top: 0.18rem;
+}
+.agent-stage-detail {
+    color: rgba(247, 252, 247, 0.70);
+    font-size: 0.75rem;
+    margin-top: 0.25rem;
+    line-height: 1.35;
+}
+.agent-monitor-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.42rem;
+    margin-top: 0.8rem;
+}
+.agent-monitor {
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.08);
+    color: rgba(247, 252, 247, 0.82);
+    padding: 0.26rem 0.52rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+}
+@media (max-width: 900px) {
+    .agent-head { grid-template-columns: 1fr; }
+    .agent-stage-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 560px) {
+    .agent-stage-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 900px) {
     .readiness-panel { grid-template-columns: 1fr; }
@@ -1010,6 +1199,49 @@ def _render_task_panel_for_state(
         _render_sticky_task_panel(action, active_status)
 
 
+def _render_review_agent_panel(brief: AgentBrief) -> None:
+    stage_html = []
+    for stage in brief.stages:
+        stage_html.append(
+            "<div class='agent-stage {tone}'>"
+            "<div class='agent-stage-label'>{label}</div>"
+            "<div class='agent-stage-state'>{state}</div>"
+            "<div class='agent-stage-detail'>{detail}</div>"
+            "</div>".format(
+                tone=html.escape(stage.tone),
+                label=html.escape(stage.label),
+                state=html.escape(stage.state),
+                detail=html.escape(stage.detail),
+            )
+        )
+    monitor_html = "".join(
+        f"<span class='agent-monitor'>{html.escape(item)}</span>"
+        for item in brief.monitors
+    )
+    st.markdown(
+        f"""
+<section class="agent-command">
+  <div class="agent-head">
+    <div>
+      <div class="agent-kicker">Review Command Agent</div>
+      <div class="agent-title">レビュー管制エージェント</div>
+      <span class="agent-mode">{html.escape(brief.mode)}</span>
+      <div class="agent-text">{html.escape(brief.mission)}</div>
+      <div class="agent-text">{html.escape(brief.risk_summary)}</div>
+    </div>
+    <div class="agent-next">
+      <b>次の一手</b>
+      <div class="agent-text">{html.escape(brief.next_action)}</div>
+    </div>
+  </div>
+  <div class="agent-stage-grid">{''.join(stage_html)}</div>
+  <div class="agent-monitor-row">{monitor_html}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _scroll_height_control(
     label: str,
     *,
@@ -1102,6 +1334,17 @@ def _render_review_bundle_overview(
         estimate = None
     summary = _build_anonymization_summary(preview_docs)
     estimate_status = estimate.status if estimate is not None else "unknown"
+    _render_review_agent_panel(
+        build_review_agent_brief(
+            preview_docs,
+            blocked_count=len(blocked_docs),
+            confirmation_count=len(confirmation_docs),
+            send_approved=send_approved,
+            token_status=estimate_status,
+            review_in_progress=bool(st.session_state.get("review_in_progress")),
+            review_done=st.session_state.get("review_result") is not None,
+        )
+    )
     tone, status_label, title, detail = _readiness_state(
         blocked_count=len(blocked_docs),
         confirmation_count=len(confirmation_docs),
@@ -2218,10 +2461,23 @@ with st.sidebar:
 
 # --------------------------------------------------------------------- main
 
-st.markdown("## 技術文書レビュー支援ツール")
 st.markdown(
-    '<p class="muted">アップロード文書を匿名化し、業界標準に基づいて'
-    '構成・品質・リスクをレビューします。</p>',
+    """
+<section class="app-hero">
+  <div class="hero-kicker">Document Review Command Center</div>
+  <div class="hero-title">技術文書レビュー支援ツール</div>
+  <div class="hero-subtitle">
+    アップロード文書をローカルで匿名化し、業界標準に基づいて構成・品質・リスクをレビューします。
+    レビュー管制エージェントが、送信前の安全境界、トークン規模、次アクションを常時監視します。
+  </div>
+  <div class="hero-chip-row">
+    <span class="hero-chip">Local First</span>
+    <span class="hero-chip">Evidence Review</span>
+    <span class="hero-chip">Human Approval Gate</span>
+    <span class="hero-chip">Agentic Workflow</span>
+  </div>
+</section>
+    """,
     unsafe_allow_html=True,
 )
 

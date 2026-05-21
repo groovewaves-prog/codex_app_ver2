@@ -6,6 +6,7 @@
 ## 1. 構成
 
 - **主 UI**: Streamlit (`streamlit_app.py`)
+- **レビュー管制エージェント**: ローカル状態から次アクション、監視ポイント、送信判断を表示する決定論的UI
 - **ローカル前処理**: 正規表現 sanitizer + Ollama `gemma3:12b`（任意）
 - **社外送信可否判定**: ローカル heuristic または `gemma3:12b` (任意)
 - **外部レビュー**: Gemini free tier (`gemini-2.0-flash`) / Gemma 4 クラスモデル

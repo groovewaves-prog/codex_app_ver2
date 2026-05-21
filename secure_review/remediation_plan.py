@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import asdict, dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from secure_review.models import ReviewIssue, ReviewResult
 from secure_review.structure_check import StructureCheckResult, StructureFinding
@@ -62,6 +63,128 @@ class RemediationPlan:
             "items": [item.to_dict() for item in self.items],
             "re_review_steps": [step.to_dict() for step in self.re_review_steps],
         }
+
+
+@dataclass(frozen=True)
+class RemediationComparisonItem:
+    item_id: str
+    title: str
+    severity: str
+    target_document: str
+    target_section: str
+    status: str
+    score: float
+    matched_terms: tuple[str, ...]
+    missing_terms: tuple[str, ...]
+    evidence: str
+    next_action: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class RemediationComparisonReport:
+    source_headline: str
+    total_count: int
+    items: tuple[RemediationComparisonItem, ...]
+
+    @property
+    def improved_count(self) -> int:
+        return sum(1 for item in self.items if item.status == "improved")
+
+    @property
+    def partial_count(self) -> int:
+        return sum(1 for item in self.items if item.status == "partial")
+
+    @property
+    def not_confirmed_count(self) -> int:
+        return sum(1 for item in self.items if item.status == "not_confirmed")
+
+    @property
+    def needs_review_count(self) -> int:
+        return sum(1 for item in self.items if item.status == "needs_review")
+
+    def to_dict(self) -> dict:
+        return {
+            "source_headline": self.source_headline,
+            "total_count": self.total_count,
+            "improved_count": self.improved_count,
+            "partial_count": self.partial_count,
+            "not_confirmed_count": self.not_confirmed_count,
+            "needs_review_count": self.needs_review_count,
+            "items": [item.to_dict() for item in self.items],
+        }
+
+
+def remediation_plan_from_dict(data: dict[str, Any]) -> RemediationPlan:
+    """Parse a saved remediation-plan JSON into a typed plan.
+
+    The saved JSON is intentionally treated as untrusted user input. Missing
+    fields fall back to safe labels so a partially older JSON can still be used
+    as a re-review checklist.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("修正計画JSONの形式が不正です。")
+
+    raw_items = data.get("items", [])
+    if not isinstance(raw_items, list):
+        raise ValueError("修正計画JSONに items 配列がありません。")
+
+    items = tuple(
+        _remediation_item_from_dict(raw_item)
+        for raw_item in raw_items
+        if isinstance(raw_item, dict)
+    )
+    if not items:
+        raise ValueError("修正計画JSONに読み込める指摘項目がありません。")
+
+    raw_steps = data.get("re_review_steps", [])
+    steps = tuple(
+        _re_review_step_from_dict(raw_step)
+        for raw_step in raw_steps
+        if isinstance(raw_step, dict)
+    )
+    if not steps:
+        steps = _build_re_review_steps(items)
+
+    return RemediationPlan(
+        headline=_coerce_text(data.get("headline")) or "前回の修正計画",
+        summary=_coerce_text(data.get("summary")) or "前回保存された修正計画です。",
+        items=items,
+        re_review_steps=steps,
+    )
+
+
+def compare_remediation_plan_to_documents(
+    plan: RemediationPlan,
+    documents: Iterable[object],
+) -> RemediationComparisonReport:
+    """Compare a previous plan with the current sanitized documents.
+
+    This is a deterministic, local comparison. It does not prove that the
+    document is correct; it checks whether terms and target sections from the
+    previous remediation plan are now visible in the current outbound text.
+    """
+    doc_texts: dict[str, str] = {}
+    all_parts: list[str] = []
+    for document in documents:
+        name = _coerce_text(getattr(document, "name", ""))
+        text = _coerce_text(getattr(document, "outbound_text", ""))
+        if name:
+            doc_texts[name] = text
+        all_parts.append(text)
+    all_text = "\n".join(all_parts)
+
+    compared_items = tuple(
+        _compare_item_to_text(item, doc_texts, all_text)
+        for item in plan.items
+    )
+    return RemediationComparisonReport(
+        source_headline=plan.headline,
+        total_count=len(plan.items),
+        items=compared_items,
+    )
 
 
 def build_remediation_plan(
@@ -352,3 +475,179 @@ def _effort_for_severity(severity: str) -> str:
     if severity == "medium":
         return "中"
     return "小"
+
+
+def _remediation_item_from_dict(data: dict[str, Any]) -> RemediationItem:
+    return RemediationItem(
+        item_id=_coerce_text(data.get("item_id")) or "PLAN-ITEM",
+        source_type=_coerce_text(data.get("source_type")) or "review_issue",
+        severity=_coerce_severity(data.get("severity")),
+        title=_coerce_text(data.get("title")) or "修正項目",
+        target_document=_coerce_text(data.get("target_document")) or "対象文書",
+        target_section=_coerce_text(data.get("target_section")) or "該当箇所",
+        problem=_coerce_text(data.get("problem")) or "前回レビューで修正対象として検出された項目です。",
+        fix_policy=_coerce_text(data.get("fix_policy")) or "前回計画に沿って本文を補強してください。",
+        template=_coerce_text(data.get("template")) or "",
+        re_review_scope=_coerce_text(data.get("re_review_scope")) or "対象文書 / 該当箇所",
+        re_review_condition=_coerce_text(data.get("re_review_condition")) or "修正後に再レビューしてください。",
+        effort=_coerce_text(data.get("effort")) or _effort_for_severity(_coerce_severity(data.get("severity"))),
+    )
+
+
+def _re_review_step_from_dict(data: dict[str, Any]) -> ReReviewStep:
+    return ReReviewStep(
+        label=_coerce_text(data.get("label")) or "再レビュー",
+        detail=_coerce_text(data.get("detail")) or "修正後に該当箇所を確認します。",
+        trigger=_coerce_text(data.get("trigger")) or "修正完了時",
+    )
+
+
+def _compare_item_to_text(
+    item: RemediationItem,
+    doc_texts: dict[str, str],
+    all_text: str,
+) -> RemediationComparisonItem:
+    target_text = doc_texts.get(item.target_document) or all_text
+    normalized_text = _normalize_for_match(target_text)
+    section_present = bool(
+        item.target_section
+        and item.target_section not in {"該当箇所", "文書全体"}
+        and _normalize_for_match(item.target_section) in normalized_text
+    )
+    terms = _extract_remediation_terms(item)
+    matched = tuple(term for term in terms if _normalize_for_match(term) in normalized_text)
+    missing = tuple(term for term in terms if term not in matched)
+    score = (len(matched) / len(terms)) if terms else 0.0
+
+    if not terms:
+        status = "needs_review"
+    elif score >= 0.55 or (section_present and score >= 0.35) or len(matched) >= 5:
+        status = "improved"
+    elif score >= 0.25 or len(matched) >= 2:
+        status = "partial"
+    else:
+        status = "not_confirmed"
+
+    evidence_parts = [f"確認できた要素: {len(matched)}/{len(terms)}"]
+    if section_present:
+        evidence_parts.append(f"対象箇所「{item.target_section}」に相当する記述を確認")
+    if matched:
+        evidence_parts.append("確認語: " + "、".join(matched[:6]))
+    else:
+        evidence_parts.append("前回計画に対応する主要語はまだ確認できません")
+
+    return RemediationComparisonItem(
+        item_id=item.item_id,
+        title=item.title,
+        severity=item.severity,
+        target_document=item.target_document,
+        target_section=item.target_section,
+        status=status,
+        score=round(score, 3),
+        matched_terms=matched[:10],
+        missing_terms=missing[:10],
+        evidence=" / ".join(evidence_parts),
+        next_action=_comparison_next_action(status, item),
+    )
+
+
+def _extract_remediation_terms(item: RemediationItem) -> tuple[str, ...]:
+    source = "\n".join(
+        (
+            item.title,
+            item.target_section,
+            item.problem,
+            item.fix_policy,
+            item.template,
+            item.re_review_condition,
+        )
+    )
+    source = re.sub(
+        r"(および|及び|ならびに|または|について|として|すること|してください|あります|できます)",
+        " ",
+        source,
+    )
+    candidates = re.findall(r"[A-Za-z][A-Za-z0-9_-]{1,}|[一-龥ぁ-んァ-ヶー]{2,}", source)
+    result: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        term = candidate.strip(" _-:：・、。,.()（）[]【】「」『』")
+        if not _is_useful_term(term):
+            continue
+        key = _normalize_for_match(term)
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(term)
+        if len(result) >= 14:
+            break
+    return tuple(result)
+
+
+_TERM_STOPWORDS = {
+    "この",
+    "その",
+    "ため",
+    "もの",
+    "こと",
+    "以下",
+    "以上",
+    "対象",
+    "対象文書",
+    "該当",
+    "該当箇所",
+    "文書",
+    "修正",
+    "追記",
+    "確認",
+    "再レビュー",
+    "レビュー",
+    "計画",
+    "方針",
+    "内容",
+    "現状",
+    "問題点",
+    "完了条件",
+    "判断基準",
+    "記載",
+    "必要",
+    "不足",
+}
+_TERM_STOPWORD_KEYS = {re.sub(r"\s+", "", value).lower() for value in _TERM_STOPWORDS}
+
+
+def _is_useful_term(term: str) -> bool:
+    if len(term) < 2 or len(term) > 32:
+        return False
+    if term in _TERM_STOPWORDS:
+        return False
+    if term.isdigit():
+        return False
+    if _normalize_for_match(term) in _TERM_STOPWORD_KEYS:
+        return False
+    return True
+
+
+def _comparison_next_action(status: str, item: RemediationItem) -> str:
+    if status == "improved":
+        return f"「{item.target_section}」の追記内容を今回レビュー結果と照合し、解消扱いにできるか確認してください。"
+    if status == "partial":
+        return f"一部の追記要素は確認できました。残りの不足語や再レビュー条件を見て、追加補強してください。"
+    if status == "not_confirmed":
+        return f"前回計画に対応する追記が十分には見えません。テンプレート案を再確認してください。"
+    return "自動照合だけでは判断できません。対象章を人手で確認してください。"
+
+
+def _normalize_for_match(value: str) -> str:
+    return re.sub(r"\s+", "", _coerce_text(value)).lower()
+
+
+def _coerce_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _coerce_severity(value: Any) -> str:
+    severity = _coerce_text(value).lower()
+    return severity if severity in {"high", "medium", "low", "info"} else "medium"

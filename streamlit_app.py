@@ -43,7 +43,13 @@ from secure_review.models import (
 )
 from secure_review.network_guard import LocalUrlError
 from secure_review.reviewer import choose_provider, provider_display_name
-from secure_review.remediation_plan import RemediationPlan, build_remediation_plan
+from secure_review.remediation_plan import (
+    RemediationComparisonReport,
+    RemediationPlan,
+    build_remediation_plan,
+    compare_remediation_plan_to_documents,
+    remediation_plan_from_dict,
+)
 # Phase 7 段階 2-C (2026-05-08): 章単位深堀り
 from secure_review.rubric import ChapterSection, extract_chapters_from_text
 from secure_review.run_masking_pipeline import (
@@ -59,7 +65,6 @@ from secure_review.ui_viewmodel import (
     NextAction,
     document_attention_reasons,
     next_action_for_preview,
-    sort_issues_by_importance,
     structure_fix_guidance,
 )
 
@@ -1302,6 +1307,83 @@ div[data-testid="stExpander"] summary {
     line-height: 1.45;
     margin-top: 0.25rem;
 }
+.comparison-panel {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: 22px;
+    background:
+        radial-gradient(circle at top left, rgba(255,191,71,0.11), transparent 17rem),
+        linear-gradient(135deg, rgba(255,253,248,0.96) 0%, rgba(239,248,245,0.92) 100%);
+    padding: 0.92rem 1rem;
+    margin: 0.9rem 0 1rem;
+    box-shadow: 0 12px 28px rgba(24,35,30,0.055);
+}
+.comparison-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+.comparison-title {
+    color: var(--ink);
+    font-weight: 900;
+    font-size: 1.08rem;
+}
+.comparison-detail {
+    color: var(--ink-soft);
+    font-size: 0.84rem;
+    line-height: 1.55;
+    margin-top: 0.28rem;
+}
+.comparison-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.42rem;
+    margin-top: 0.72rem;
+}
+.comparison-pill {
+    border: 1px solid rgba(217,209,192,0.72);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.72);
+    padding: 0.28rem 0.55rem;
+    color: var(--ink);
+    font-weight: 800;
+    font-size: 0.78rem;
+}
+.comparison-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 0.62rem;
+    margin-top: 0.78rem;
+}
+.comparison-card {
+    border: 1px solid rgba(217,209,192,0.76);
+    border-left: 5px solid var(--rule);
+    border-radius: 17px;
+    background: rgba(255,255,255,0.72);
+    padding: 0.72rem 0.78rem;
+}
+.comparison-card.improved { border-left-color: var(--accent); background: rgba(244,252,247,0.90); }
+.comparison-card.partial { border-left-color: var(--warn); background: rgba(255,249,234,0.90); }
+.comparison-card.not_confirmed { border-left-color: var(--danger); background: rgba(255,245,242,0.90); }
+.comparison-card.needs_review { border-left-color: var(--cyan); }
+.comparison-card-title {
+    color: var(--ink);
+    font-weight: 900;
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+.comparison-card-meta {
+    color: var(--ink-soft);
+    font-size: 0.73rem;
+    line-height: 1.45;
+    margin-top: 0.28rem;
+}
+.comparison-card-text {
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin-top: 0.38rem;
+}
 .export-panel {
     border: 1px solid rgba(8,119,96,0.16);
     border-left: 5px solid var(--cyan);
@@ -1489,6 +1571,10 @@ def _reset_state() -> None:
         "deep_dive_notice",
         # Phase 7 段階 2-C (2026-05-08): 章境界キャッシュ。文書が変われば再計算。
         "chapter_sections_cache",
+        # 再レビュー用の前回修正計画JSON
+        "enable_previous_remediation_review",
+        "previous_remediation_plan",
+        "previous_remediation_plan_upload",
     ):
         st.session_state.pop(key, None)
 
@@ -2720,38 +2806,6 @@ def _render_deep_dive_candidate_summary(
             st.caption(f"ほか {len(candidates) - 5} 件の候補があります。章順表示で確認できます。")
 
 
-def _render_priority_issue_list(issues: list, severity_order: dict[str, int]) -> None:
-    if not issues:
-        st.info("重要指摘として優先表示する項目はありません。章別概要や構成チェックを確認してください。")
-        return
-    st.markdown("#### 重要指摘から見る")
-    st.caption("高・中の指摘を先に確認できるよう、重要度順に並べています。")
-    priority_issues = [
-        issue
-        for issue in sort_issues_by_importance(issues)
-        if getattr(issue, "severity", "") in {"high", "medium"}
-    ]
-    if not priority_issues:
-        priority_issues = sort_issues_by_importance(issues)[:8]
-    _priority_height = (
-        _scroll_height_control(
-            "重要指摘リストの表示高さ",
-            key="priority_issue_scroll_height",
-            default=420,
-            min_value=320,
-            max_value=900,
-        )
-        if len(priority_issues) >= 4 else None
-    )
-    container = (
-        st.container(height=_priority_height)
-        if _priority_height is not None else st.container()
-    )
-    with container:
-        for issue in priority_issues:
-            _render_review_issue(issue, severity_order)
-
-
 def _render_review_result_dashboard(
     review,
     preview_docs: list[SanitizedDocument],
@@ -2773,12 +2827,12 @@ def _render_review_result_dashboard(
         action = "次: 深堀候補と中重要度指摘を確認してください"
         tone = "warn"
     else:
-        action = "次: レビュー結果を保存し、必要に応じて関係者へ共有してください"
+        action = "次: 必要に応じて修正計画JSONまたはレビュー証跡を保存してください"
         tone = "success"
     _render_next_action_card(
         NextAction(
             action,
-            "章順表示と重要度順表示を切り替えながら、対応が必要な箇所から確認できます。",
+            "文書別表示は、文書順または対応優先順に並べ替えて確認できます。",
             tone,
         )
     )
@@ -2900,17 +2954,36 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
                 _render_compact_field("修正方針", item.fix_policy)
                 _render_compact_field("再レビュー条件", item.re_review_condition)
                 st.code(item.template, language="markdown")
-        st.download_button(
-            "🧭 修正担当へ渡す計画を保存 (JSON)",
-            data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
-            file_name="remediation_plan.json",
-            mime="application/json",
-            width='stretch',
-        )
-        st.caption(
-            "保存した JSON は、担当者への作業依頼、上長への進捗共有、再レビュー対象の確認に使います。"
-            "次の操作は、テンプレートを文書へ反映し、再レビュー条件に書かれた章・観点だけを再確認することです。"
-        )
+        review_issue_items = [item for item in plan.items if item.source_type == "review_issue"]
+        if review_issue_items:
+            with st.expander("🔎 元のレビュー指摘を確認（監査・照合用）", expanded=False):
+                st.caption(
+                    "上の修正計画カードへ変換する前の指摘情報です。通常は修正計画カードを見れば足りますが、"
+                    "根拠確認やレビュー会議での説明に使えます。"
+                )
+                for idx, item in enumerate(review_issue_items, 1):
+                    st.markdown(f"#### {idx}. {item.title} ({item.item_id})")
+                    _render_compact_field("対象", f"{item.target_document} / {item.target_section}")
+                    _render_compact_field("前回または今回の問題", item.problem)
+                    _render_compact_field("推奨対応", item.fix_policy)
+        if st.session_state.get("enable_previous_remediation_review"):
+            has_previous_plan = bool(st.session_state.get("previous_remediation_plan"))
+            download_label = (
+                "🧭 今回の修正計画JSONを保存（任意・次回比較用）"
+                if has_previous_plan
+                else "🧭 修正計画JSONを保存（任意・次回比較用）"
+            )
+            st.download_button(
+                download_label,
+                data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+                file_name="remediation_plan.json",
+                mime="application/json",
+                width='stretch',
+            )
+            st.caption(
+                "この JSON は次回、修正文書と一緒に読み込ませて改善状況を照合するための台帳です。"
+                "通常レビューでは不要です。人に渡す作業依頼書ではなく、再レビュー比較を続けるための入力データとして扱ってください。"
+            )
 
 
 def _render_review_log_export_panel() -> None:
@@ -2928,6 +3001,123 @@ def _render_review_log_export_panel() -> None:
             unsafe_allow_html=True,
         )
         render_log_export_button()
+
+
+def _load_remediation_plan_json(uploaded_file) -> RemediationPlan:
+    try:
+        payload = json.loads(uploaded_file.getvalue().decode("utf-8-sig"))
+    except UnicodeDecodeError as exc:
+        raise ValueError("修正計画JSONを UTF-8 として読み込めませんでした。") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"JSON形式を解析できませんでした: {exc}") from exc
+    return remediation_plan_from_dict(payload)
+
+
+def _render_previous_remediation_plan_loader() -> None:
+    st.session_state.setdefault("enable_previous_remediation_review", False)
+    with st.container(border=True):
+        enabled = st.toggle(
+            "前回文書の再レビューを使う",
+            key="enable_previous_remediation_review",
+            help=(
+                "前回保存した修正計画JSONと今回の修正文書を照合したい場合だけオンにします。"
+                "通常レビューではオフのままで問題ありません。"
+            ),
+        )
+        st.caption(
+            "オンにした場合だけ、前回JSONの読み込み、前回計画との照合、今回JSONの保存を表示します。"
+            "通常の文書レビューはJSONなしで実行できます。"
+        )
+
+    if not enabled:
+        st.session_state.pop("previous_remediation_plan", None)
+        st.session_state.pop("previous_remediation_plan_upload", None)
+        return
+
+    with st.expander("🔁 前回の修正計画JSONを読み込む（任意・再レビュー時のみ）", expanded=True):
+        st.caption(
+            "初回レビューでは不要です。担当者が文書を修正した後、前回保存した修正計画JSONをここで読み込むと、"
+            "今回アップロードした修正文書に改善要素が反映されているかをローカルで照合できます。"
+        )
+        uploaded_plan = st.file_uploader(
+            "前回保存した remediation_plan.json",
+            type=["json"],
+            accept_multiple_files=False,
+            key="previous_remediation_plan_upload",
+            label_visibility="collapsed",
+            help="このJSONはレビュー対象文書としては扱いません。前回指摘との照合条件として使います。",
+        )
+        if uploaded_plan is not None:
+            try:
+                plan = _load_remediation_plan_json(uploaded_plan)
+                st.session_state.previous_remediation_plan = plan
+                st.success(
+                    f"前回の修正計画JSONを読み込みました: {len(plan.items)} 件。"
+                    "匿名化プレビュー後に改善状況を照合します。"
+                )
+            except ValueError as exc:
+                st.session_state.pop("previous_remediation_plan", None)
+                st.error(str(exc))
+        elif st.session_state.get("previous_remediation_plan"):
+            plan = st.session_state.previous_remediation_plan
+            st.info(f"前回の修正計画JSONを保持中です: {len(plan.items)} 件。")
+
+
+def _comparison_status_label(status: str) -> str:
+    return {
+        "improved": "改善あり",
+        "partial": "一部改善",
+        "not_confirmed": "未確認",
+        "needs_review": "要確認",
+    }.get(status, "要確認")
+
+
+def _render_remediation_comparison_report(report: RemediationComparisonReport) -> None:
+    item_cards = []
+    for item in report.items[:8]:
+        item_cards.append(
+            """
+<div class="comparison-card {status}">
+  <div class="comparison-card-title">{title}</div>
+  <div class="comparison-card-meta">{label} / {severity} / {target}</div>
+  <div class="comparison-card-text"><b>確認結果:</b> {evidence}</div>
+  <div class="comparison-card-text"><b>次の確認:</b> {next_action}</div>
+</div>
+            """.format(
+                status=html.escape(item.status),
+                title=html.escape(item.title),
+                label=html.escape(_comparison_status_label(item.status)),
+                severity=html.escape(item.severity),
+                target=html.escape(f"{item.target_document} / {item.target_section}"),
+                evidence=html.escape(item.evidence),
+                next_action=html.escape(item.next_action),
+            )
+        )
+    st.markdown(
+        f"""
+<section class="comparison-panel">
+  <div class="comparison-head">
+    <div>
+      <div class="remediation-kicker">Re-review Memory</div>
+      <div class="comparison-title">前回の修正計画JSONと今回文書を照合しました</div>
+      <div class="comparison-detail">
+        前回計画「{html.escape(report.source_headline)}」の指摘項目が、今回の匿名化後テキストに反映されているかを
+        ローカルで簡易照合しています。これは送信前の目視補助であり、最終判断は今回のLLMレビュー結果と合わせて確認してください。
+      </div>
+    </div>
+  </div>
+  <div class="comparison-metrics">
+    <span class="comparison-pill">対象 {report.total_count}</span>
+    <span class="comparison-pill">改善あり {report.improved_count}</span>
+    <span class="comparison-pill">一部改善 {report.partial_count}</span>
+    <span class="comparison-pill">未確認 {report.not_confirmed_count}</span>
+    <span class="comparison-pill">要確認 {report.needs_review_count}</span>
+  </div>
+  <div class="comparison-grid">{''.join(item_cards)}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
@@ -3381,6 +3571,8 @@ with col2:
         names = ", ".join(u.name for u in _uploads_now)
         st.markdown(f'<div class="muted">処理待ち: {names}</div>', unsafe_allow_html=True)
 
+_render_previous_remediation_plan_loader()
+
 
 if preview_clicked:
     st.session_state.preview_attempted = True
@@ -3776,6 +3968,10 @@ if preview_docs:
         st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
 
     _render_token_budget_panel(preview_docs, document_profile_override)
+    previous_plan = st.session_state.get("previous_remediation_plan")
+    if st.session_state.get("enable_previous_remediation_review") and previous_plan is not None:
+        _comparison_report = compare_remediation_plan_to_documents(previous_plan, preview_docs)
+        _render_remediation_comparison_report(_comparison_report)
     if st.session_state.get("anonymization_details_visible", False):
         _expand_anonymization_details = bool(
             st.session_state.pop("anonymization_details_expand_once", False)
@@ -4232,7 +4428,7 @@ if review is not None:
         elif review.summary:
             _render_compact_field("サマリ", review.summary)
         else:
-            st.info("LLM から文書全体の概要は返りませんでした。結果ログの生レスポンスを確認してください。")
+            st.info("LLM から文書全体の概要は返りませんでした。レビュー証跡の生レスポンスを確認してください。")
 
     st.markdown("---")
 
@@ -4259,15 +4455,13 @@ if review is not None:
             _ordered_doc_names.append(_n)
 
     _review_display_mode = st.radio(
-        "レビュー結果の見方",
-        ["章順で見る", "重要指摘から見る"],
+        "文書別レビューの並び順",
+        ["文書順で見る", "対応優先順で見る"],
         horizontal=True,
         key="review_result_display_mode",
-        help="章順は文書の流れを確認する見方、重要指摘は対応優先度から確認する見方です。",
+        help="指摘そのものは上の修正計画に集約しています。ここでは文書別表示の並び順だけを切り替えます。",
     )
-    if _review_display_mode == "重要指摘から見る":
-        _render_priority_issue_list(list(review.issues or []), severity_order)
-
+    if _review_display_mode == "対応優先順で見る":
         def _doc_priority(name: str) -> tuple[int, str]:
             doc_issues = issues_by_doc.get(name, [])
             if not doc_issues:
@@ -4278,7 +4472,7 @@ if review is not None:
             )
 
         _ordered_doc_names = sorted(_ordered_doc_names, key=_doc_priority)
-        st.caption("下の文書別表示も、重要指摘がある文書を上に並べ替えています。")
+        st.caption("下の文書別表示は、対応優先度が高い文書から並べ替えています。指摘の詳細は修正計画カード内で確認できます。")
 
     # PR-J: 4 件以上の指摘がある場合、ステップ 4 の指摘リストを高さ 800px の
     # スクロール可能コンテナで包む。複数文書の総合レビューで指摘が 8-15 件

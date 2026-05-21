@@ -1,6 +1,6 @@
 # Streamlit Community Cloud デプロイ手順書
 
-Last updated: 2026-04-27
+Last updated: 2026-05-21
 
 本文書は `secure_review` ツールを Streamlit Community Cloud にデプロイ・運用
 するための手順をまとめる。`docs/operations_policy.md`（運用ポリシー全般）と
@@ -20,14 +20,14 @@ Last updated: 2026-04-27
 
 | 項目 | 詳細 |
 |---|---|
-| GitHub アカウント | リポジトリ `https://github.com/groovewaves-prog/codex_app` の閲覧/Push 権限 |
+| GitHub アカウント | リポジトリ `https://github.com/groovewaves-prog/codex_app_ver2` の閲覧/Push 権限 |
 | Streamlit Community Cloud アカウント | GitHub アカウント連携でサインイン可能 |
 | Google AI Studio アカウント | Gemini Developer API キー発行用 |
 
 ### 1.3 現在のデプロイ URL
 
 ```
-https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
+https://codexappver2-qicnqzha2kbcadvj63j63e.streamlit.app/
 ```
 
 ## 2. 初回デプロイ手順
@@ -40,8 +40,8 @@ https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app
 ```powershell
 # 業務 PC でリポジトリをクローン
 cd "C:\Users\<USER>\Documents"
-git clone https://github.com/groovewaves-prog/codex_app.git
-cd codex_app
+git clone https://github.com/groovewaves-prog/codex_app_ver2.git
+cd codex_app_ver2
 
 # requirements.txt が含まれていることを確認（含まれていなければ pull）
 dir requirements.txt
@@ -52,7 +52,7 @@ dir requirements.txt
 1. https://share.streamlit.io にアクセスし、GitHub アカウントでサインイン。
 2. **「New app」** をクリック。
 3. 以下を指定:
-   - Repository: `groovewaves-prog/codex_app`
+   - Repository: `groovewaves-prog/codex_app_ver2`
    - Branch: `main`
    - Main file path: `streamlit_app.py`
    - App URL: 既定（自動生成）または任意
@@ -108,7 +108,7 @@ if "env_loaded" not in st.session_state:
 
 ### 3.1 トリガー
 
-- `groovewaves-prog/codex_app` の **`main` ブランチへの push** を Streamlit Cloud が
+- `groovewaves-prog/codex_app_ver2` の **`main` ブランチへの push** を Streamlit Cloud が
   検知して自動再デプロイされる。
 - 再デプロイ完了まで概ね **5-10 分**。デプロイ中もアプリは旧バージョンで稼働
   し続ける（無停止切替）。
@@ -129,7 +129,7 @@ git commit -m "<title>" -m "<body>"
 git push -u origin feature/<task-name>
 
 # GitHub で PR 作成 → Merge → Delete branch
-# https://github.com/groovewaves-prog/codex_app/branches でブランチ削除可能
+# https://github.com/groovewaves-prog/codex_app_ver2/branches でブランチ削除可能
 
 git checkout main
 git pull origin main

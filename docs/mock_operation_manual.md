@@ -1,9 +1,15 @@
 # 技術文書レビュー支援ツール モック操作マニュアル
 
-Last updated: 2026-05-15
+Last updated: 2026-05-21
 
 この文書は、上司・評価者に Streamlit モックを試用してもらうための操作マニュアルです。
 開発者向けの内部仕様ではなく、画面を見ながら一巡できることを目的にしています。
+
+評価用URL:
+
+```text
+https://codexappver2-qicnqzha2kbcadvj63j63e.streamlit.app/
+```
 
 ## 1. このモックで確認してほしいこと
 

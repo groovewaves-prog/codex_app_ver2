@@ -1,20 +1,21 @@
 # Handoff
 
-Last updated: 2026-05-19
+Last updated: 2026-05-21
 
-この文書は、現在の `codex_app` モックを別の GitHub リポジトリへコピーして作業を継続する人が、
+この文書は、現在の `codex_app_ver2` モックで作業を継続する人が、
 最短で状況を復元できるようにするための引き継ぎ書です。
 
 ## 0. 最重要サマリ
 
 - 現在のツール名は **技術文書レビュー支援ツール**。
 - サブタイトルは **アップロード文書を匿名化し、業界標準に基づいて構成・品質・リスクをレビューします。**
-- 現行リポジトリ: `https://github.com/groovewaves-prog/codex_app`
-- Streamlit Cloud URL: `https://codexapp-edwxxq7jek7mrtyr8hwtbp.streamlit.app`
-- 現行 main 最新コミット: `1f96172 Polish review summary panels`
+- 現行リポジトリ: `https://github.com/groovewaves-prog/codex_app_ver2`
+- Streamlit Cloud URL: `https://codexappver2-qicnqzha2kbcadvj63j63e.streamlit.app/`
+- 旧リポジトリ: `https://github.com/groovewaves-prog/codex_app`（上司・管理者テスト用の旧モック）
+- ver2 移行直後の基点コミット: `dba72df Update handoff for repository split`
 - 2026-05-19 時点で、ユーザーがモック実機確認を行い、直近で問題視していたUI/動作不具合は解消済み。
 - 現在は **上司・管理者テスト中**。
-- 今後の追加作業は、テスト中の現行リポジトリを壊さないよう、**このモックをコピーした新しい GitHub リポジトリ側で継続予定**。
+- 今後の追加作業は、上司・管理者テスト中の旧リポジトリを壊さないよう、**新しい GitHub リポジトリ `codex_app_ver2` 側で継続する**。
 - APIキーやSecretsはこの文書にも、チャットにも貼らない。Streamlit Cloud Secrets または手元 `.env` のみで管理する。
 
 ## 1. 現在の到達点

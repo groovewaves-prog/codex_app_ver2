@@ -83,6 +83,8 @@ python scripts\local_ollama_precheck.py --input-file C:\path\to\your-document.do
 `.yaml`/`.yml`, `.xml`, `.html`, スクリプト (`.py`, `.ps1`, `.sh`, `.vbs`, `.sql`等),
 画像 (OCR 付き、Tesseract 必須)。
 
+Office / PDF ファイルは、抽出されたテキストに形式メタ情報と抽出上の注意を付与します。PowerPoint の配置・矢印・色、Excel のセル結合・書式・数式、PDF の段組みや図表位置は完全には保持されないため、レビュー結果は必要に応じて原本と照合してください。
+
 詳細手順は `docs/local_ollama_verification.md`、実データでの検証は
 `docs/v3_streamlit_verification.md` を参照。
 

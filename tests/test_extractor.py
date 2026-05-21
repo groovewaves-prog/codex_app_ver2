@@ -5,6 +5,7 @@ import zipfile
 from unittest.mock import patch
 
 from secure_review.extractor import extract_text
+from secure_review.rubric import extract_chapters_from_text
 
 
 class ExtractorTests(unittest.TestCase):
@@ -28,9 +29,26 @@ class ExtractorTests(unittest.TestCase):
             "base64",
         )
 
+        self.assertIn("形式: Word (.docx)", text)
+        self.assertIn("抽出上の注意", text)
         self.assertIn("目的", text)
         self.assertIn("ネットワーク更改", text)
         self.assertEqual(warnings, [])
+
+    def test_extraction_metadata_does_not_become_review_chapter(self) -> None:
+        text = (
+            "# 抽出メタ情報\n"
+            "- 形式: Word (.docx)\n\n"
+            "# 抽出本文\n"
+            "第 1 章 はじめに\n目的と範囲\n"
+            "第 2 章 システム要件\n機能要件と非機能要件\n"
+            "第 3 章 システム全体構成\n構成概要\n"
+        )
+
+        chapters = extract_chapters_from_text(text)
+
+        self.assertEqual(["ch1", "ch2", "ch3"], [chapter.chapter_id for chapter in chapters])
+        self.assertEqual("第 1 章 はじめに", chapters[0].chapter_label)
 
     def test_extracts_xlsx_sheet_rows(self) -> None:
         buffer = io.BytesIO()
@@ -71,6 +89,8 @@ class ExtractorTests(unittest.TestCase):
             "base64",
         )
 
+        self.assertIn("形式: Excel (.xlsx)", text)
+        self.assertIn("シートごとに行テキスト", text)
         self.assertIn("# Sheet: 確認項目", text)
         self.assertIn("項目 | 結果", text)
         self.assertIn("Ping | OK", text)
@@ -107,6 +127,8 @@ class ExtractorTests(unittest.TestCase):
             "base64",
         )
 
+        self.assertIn("形式: PowerPoint (.pptx)", text)
+        self.assertIn("スライド本文とノート", text)
         self.assertIn("# Slide 1", text)
         self.assertIn("切替手順", text)
         self.assertIn("Notes:", text)

@@ -168,6 +168,26 @@ def _format_csv(raw_text: str, name: str, warnings: list[str]) -> str:
         return raw_text
 
 
+def _with_extraction_context(
+    *,
+    name: str,
+    format_label: str,
+    body: str,
+    notes: tuple[str, ...] = (),
+) -> str:
+    """Attach lightweight source-format context for downstream LLM review."""
+    header = [
+        "# 抽出メタ情報",
+        f"- ファイル名: {name}",
+        f"- 形式: {format_label}",
+    ]
+    for note in notes:
+        if note:
+            header.append(f"- 抽出上の注意: {note}")
+    header.extend(["", "# 抽出本文", (body or "").strip() or "(抽出できた本文はありません。)"])
+    return "\n".join(header).strip()
+
+
 def _strip_markup(raw_text: str) -> str:
     text = re.sub(r"<script[\s\S]*?</script>", " ", raw_text, flags=re.IGNORECASE)
     text = re.sub(r"<style[\s\S]*?</style>", " ", text, flags=re.IGNORECASE)
@@ -228,7 +248,16 @@ def _extract_docx(binary: bytes, name: str, warnings: list[str]) -> str:
             if image_text:
                 sections.append(image_text)
 
-            return "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
+            body = "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
+            return _with_extraction_context(
+                name=name,
+                format_label="Word (.docx)",
+                body=body,
+                notes=(
+                    "本文XMLをテキスト順に抽出しています。ページ見た目、図形配置、コメント、変更履歴の意味までは完全には保持しません。",
+                    "画像内の文字はローカルOCRが利用できる場合だけ補助的に抽出します。",
+                ),
+            )
     except Exception:
         warnings.append(f"{name}: DOCX extraction failed, so the raw content was used.")
         return _decode_text(binary)
@@ -266,7 +295,16 @@ def _extract_xlsx(binary: bytes, name: str, warnings: list[str]) -> str:
             if image_text:
                 sections.append(image_text)
 
-            return "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
+            body = "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
+            return _with_extraction_context(
+                name=name,
+                format_label="Excel (.xlsx)",
+                body=body,
+                notes=(
+                    "シートごとに行テキストを抽出し、セル値を区切り文字で並べています。数式、書式、セル結合、色、フィルタ条件はレビュー用テキストには保持しません。",
+                    "表の意味は、見出し行・列名・周辺説明から慎重に推定してください。",
+                ),
+            )
     except Exception:
         warnings.append(f"{name}: XLSX extraction failed, so the raw content was used.")
         return _decode_text(binary)
@@ -313,7 +351,16 @@ def _extract_pptx(binary: bytes, name: str, warnings: list[str]) -> str:
             if image_text:
                 sections.append(image_text)
 
-            return "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
+            body = "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
+            return _with_extraction_context(
+                name=name,
+                format_label="PowerPoint (.pptx)",
+                body=body,
+                notes=(
+                    "スライド本文とノートをスライド順に抽出しています。配置、矢印、色、強調、図形のつながりは完全には保持しません。",
+                    "図やスクリーンショット内の文字はローカルOCRが利用できる場合だけ補助的に抽出します。",
+                ),
+            )
     except Exception:
         warnings.append(f"{name}: PPTX extraction failed, so the raw content was used.")
         return _decode_text(binary)
@@ -336,7 +383,12 @@ def _extract_pdf(binary: bytes, name: str, warnings: list[str]) -> str:
         reader = pypdf.PdfReader(io.BytesIO(binary))
     except Exception as exc:
         warnings.append(f"{name}: PDF could not be opened ({exc}). The raw bytes were skipped.")
-        return f"# PDF: {name}\nPDF could not be parsed."
+        return _with_extraction_context(
+            name=name,
+            format_label="PDF",
+            body="PDF could not be parsed.",
+            notes=("PDFを開けなかったため、本文レビューはできません。",),
+        )
 
     if getattr(reader, "is_encrypted", False):
         try:
@@ -344,7 +396,12 @@ def _extract_pdf(binary: bytes, name: str, warnings: list[str]) -> str:
             reader.decrypt("")
         except Exception:
             warnings.append(f"{name}: PDF is encrypted and cannot be read without a password.")
-            return f"# PDF: {name}\nPDF is encrypted and cannot be read."
+            return _with_extraction_context(
+                name=name,
+                format_label="PDF",
+                body="PDF is encrypted and cannot be read.",
+                notes=("暗号化PDFのため、本文レビューはできません。",),
+            )
 
     sections: list[str] = []
     pages = reader.pages
@@ -371,9 +428,22 @@ def _extract_pdf(binary: bytes, name: str, warnings: list[str]) -> str:
         warnings.append(
             f"{name}: No text extracted from PDF. It may be a scanned image; consider OCR before review."
         )
-        return f"# PDF: {name}\nNo text content extracted. The file may be a scanned image."
+        return _with_extraction_context(
+            name=name,
+            format_label="PDF",
+            body="No text content extracted. The file may be a scanned image.",
+            notes=("テキストを抽出できませんでした。スキャンPDFまたは画像中心資料の可能性があります。",),
+        )
 
-    return "\n\n".join(sections)
+    return _with_extraction_context(
+        name=name,
+        format_label="PDF",
+        body="\n\n".join(sections),
+        notes=(
+            "ページ順にテキストを抽出しています。段組み、表、図形、注釈、ヘッダー/フッターの位置関係は完全には保持しません。",
+            "図表中心のページは、本文だけでは判断できない前提で確認観点として扱ってください。",
+        ),
+    )
 
 
 def _extract_pdf_via_binary(binary: bytes, name: str, warnings: list[str]) -> str:
@@ -384,7 +454,12 @@ def _extract_pdf_via_binary(binary: bytes, name: str, warnings: list[str]) -> st
             f"{name}: PDF extraction is unavailable (install `pypdf` with `pip install pypdf`). "
             "The file was recorded but not read."
         )
-        return f"# PDF: {name}\nPDF detected. Install pypdf to enable text extraction."
+        return _with_extraction_context(
+            name=name,
+            format_label="PDF",
+            body="PDF detected. Install pypdf to enable text extraction.",
+            notes=("PDF抽出ライブラリがないため、本文レビューはできません。",),
+        )
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as input_file:
         input_file.write(binary)
@@ -402,11 +477,26 @@ def _extract_pdf_via_binary(binary: bytes, name: str, warnings: list[str]) -> st
         if result.returncode != 0 or not output:
             stderr = (result.stderr or "").strip()
             warnings.append(f"{name}: pdftotext failed: {stderr[:200]}")
-            return f"# PDF: {name}\nPDF could not be parsed by pdftotext."
-        return f"# PDF: {name}\n{output}"
+            return _with_extraction_context(
+                name=name,
+                format_label="PDF",
+                body="PDF could not be parsed by pdftotext.",
+                notes=("pdftotextでの抽出に失敗したため、本文レビューはできません。",),
+            )
+        return _with_extraction_context(
+            name=name,
+            format_label="PDF",
+            body=output,
+            notes=("pdftotextで抽出しています。レイアウトや図表の意味は完全には保持しません。",),
+        )
     except subprocess.TimeoutExpired:
         warnings.append(f"{name}: pdftotext timed out.")
-        return f"# PDF: {name}\nPDF extraction timed out."
+        return _with_extraction_context(
+            name=name,
+            format_label="PDF",
+            body="PDF extraction timed out.",
+            notes=("PDFテキスト抽出がタイムアウトしたため、本文レビューはできません。",),
+        )
     finally:
         try:
             os.remove(input_path)

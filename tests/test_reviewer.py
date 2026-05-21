@@ -861,6 +861,16 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         self.assertIn("chapter_overviews と issues は、この内容と矛盾しない", prompt)
         self.assertIn("必須要素不足", prompt)
 
+    def test_prompt_includes_source_format_review_guidance(self) -> None:
+        from secure_review.reviewer import build_prompt
+
+        prompt = build_prompt([_doc(name="slides.pptx", text="提案資料")])
+        self.assertIn("# 入力形式別の読み方", prompt)
+        self.assertIn("PDF: 抽出テキストはページ順", prompt)
+        self.assertIn("Word (.docx): 本文中心の技術文書", prompt)
+        self.assertIn("Excel (.xlsx): シート/行/列の表", prompt)
+        self.assertIn("PowerPoint (.pptx): スライド単位の説明資料", prompt)
+
     def test_prompt_requires_structured_summary_and_purpose_alignment(self) -> None:
         from secure_review.reviewer import build_prompt
         prompt = build_prompt([_doc(name="design.md", text="第 1 章 はじめに\n本文")])

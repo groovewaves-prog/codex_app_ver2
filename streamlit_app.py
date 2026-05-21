@@ -597,12 +597,68 @@ div[data-testid="stDownloadButton"] button:disabled {
 }
 
 .step-header {
-    font-family: 'Georgia', 'Hiragino Mincho ProN', 'Yu Mincho', serif;
+    margin: 1.35rem 0 0.75rem;
+}
+.step-banner {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.8rem;
+    align-items: center;
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: 22px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.95) 0%, rgba(233,245,239,0.88) 100%);
+    padding: 0.72rem 0.9rem;
+    box-shadow: 0 14px 32px rgba(24,35,30,0.075);
+}
+.step-index {
+    display: grid;
+    place-items: center;
+    width: 3.05rem;
+    height: 3.05rem;
+    border-radius: 18px;
+    background:
+        linear-gradient(135deg, var(--accent-strong) 0%, var(--accent) 100%);
+    color: #f7fff9;
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 1.15rem;
+    font-weight: 900;
+    box-shadow: 0 10px 22px rgba(8,119,96,0.22);
+}
+.step-copy {
+    min-width: 0;
+}
+.step-kicker {
+    color: var(--accent-strong);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 900;
+}
+.step-title {
+    color: var(--ink);
+    font-size: 1.18rem;
+    line-height: 1.3;
+    font-weight: 900;
+    margin-top: 0.12rem;
+}
+.step-desc {
     color: var(--ink-soft);
     font-size: 0.82rem;
-    letter-spacing: 0.12em;
-    margin-top: 1.5rem;
-    margin-bottom: 0.3rem;
+    line-height: 1.5;
+    margin-top: 0.22rem;
+}
+@media (max-width: 760px) {
+    .step-banner {
+        grid-template-columns: 1fr;
+    }
+    .step-index {
+        width: 2.55rem;
+        height: 2.55rem;
+        border-radius: 14px;
+        font-size: 1rem;
+    }
 }
 
 pre.sanitized {
@@ -1740,6 +1796,24 @@ def _render_operation_assist(guide: OperationGuide) -> None:
     </div>
   </div>
 </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_step_header(step: int, title: str, description: str) -> None:
+    st.markdown(
+        f"""
+<div class="step-header">
+  <section class="step-banner">
+    <div class="step-index">{step}</div>
+    <div class="step-copy">
+      <div class="step-kicker">Step {step}</div>
+      <div class="step-title">{html.escape(title)}</div>
+      <div class="step-desc">{html.escape(description)}</div>
+    </div>
+  </section>
+</div>
         """,
         unsafe_allow_html=True,
     )
@@ -3001,7 +3075,11 @@ st.markdown(
 
 # -- Step 1: Upload --------------------------------------------------------
 
-st.markdown('<div class="step-header">ステップ 1 — 文書アップロード</div>', unsafe_allow_html=True)
+_render_step_header(
+    1,
+    "文書アップロード",
+    "同じ種類の文書を選択し、匿名化プレビューの準備をします。",
+)
 
 st.file_uploader(
     "ファイルを選択",
@@ -3196,7 +3274,11 @@ with _operation_assist_slot.container():
 
 preview_error = st.session_state.get("preview_error")
 if preview_error:
-    st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
+    _render_step_header(
+        2,
+        "匿名化結果プレビュー",
+        "ローカル匿名化と機密度判定の結果を確認します。",
+    )
     st.error(preview_error)
     st.info(
         "匿名化結果が作成されなかったため、ステップ 3 には進めません。"
@@ -3207,11 +3289,19 @@ if preview_error:
             st.code(st.session_state.preview_trace)
 
 if st.session_state.get("preview_attempted") and not preview_error and not preview_docs:
-    st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
+    _render_step_header(
+        2,
+        "匿名化結果プレビュー",
+        "ローカル匿名化と機密度判定の結果を確認します。",
+    )
     st.info("匿名化結果はまだ作成されていません。ファイルを確認して、もう一度実行してください。")
 
 if preview_docs:
-    st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
+    _render_step_header(
+        2,
+        "匿名化結果プレビュー",
+        "外部送信前に、匿名化結果・送信規模・要確認候補を確認します。",
+    )
 
     _task_panel_slot = st.empty()
 
@@ -3429,7 +3519,11 @@ if preview_docs:
 
     # -- Step 3: Confirmation gate ----------------------------------------
 
-    st.markdown('<div class="step-header">ステップ 3 — 確認 & 送信</div>', unsafe_allow_html=True)
+    _render_step_header(
+        3,
+        "確認 & 送信",
+        "匿名化済みテキストだけを送ることを確認し、レビューを開始します。",
+    )
 
     if blocked_docs:
         st.markdown(
@@ -3712,7 +3806,11 @@ if preview_docs:
 
 review = st.session_state.get("review_result")
 if review is not None:
-    st.markdown('<div class="step-header">ステップ 4 — レビュー結果</div>', unsafe_allow_html=True)
+    _render_step_header(
+        4,
+        "レビュー結果",
+        "文書全体の概要、構成チェック、章別指摘、深堀候補を確認します。",
+    )
 
     left, right = st.columns([4, 2])
     with left:

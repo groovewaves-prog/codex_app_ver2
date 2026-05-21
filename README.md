@@ -6,6 +6,7 @@
 ## 1. 構成
 
 - **主 UI**: Streamlit (`streamlit_app.py`)
+- **AI Operation Co-Pilot**: ローカル状態から次に押す操作、理由、完了条件、注意点を案内する決定論的UI
 - **レビュー管制エージェント**: ローカル状態から次アクション、監視ポイント、送信判断を表示する決定論的UI
 - **ローカル前処理**: 正規表現 sanitizer + Ollama `gemma3:12b`（任意）
 - **社外送信可否判定**: ローカル heuristic または `gemma3:12b` (任意)

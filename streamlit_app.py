@@ -28,7 +28,12 @@ from pathlib import Path
 import streamlit as st
 
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
-from secure_review.agent_planner import AgentBrief, build_review_agent_brief
+from secure_review.agent_planner import (
+    AgentBrief,
+    OperationGuide,
+    build_operation_guide,
+    build_review_agent_brief,
+)
 from secure_review.env_loader import load_dotenv
 from secure_review.models import (
     MaskingPipelineState,
@@ -196,6 +201,116 @@ h1, h2, h3 {
     border-radius: 999px;
     font-size: 0.78rem;
     font-weight: 700;
+}
+
+.operation-assist {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-left: 6px solid var(--accent);
+    border-radius: 22px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.96) 0%, rgba(235,246,239,0.94) 100%);
+    padding: 0.9rem 1rem 0.95rem;
+    margin: 0.75rem 0 1rem;
+    box-shadow: 0 14px 36px rgba(24,35,30,0.08);
+}
+.operation-assist.warn {
+    border-left-color: var(--warn);
+    background: linear-gradient(135deg, #fffdf8 0%, #fff4d9 100%);
+}
+.operation-assist.block {
+    border-left-color: var(--danger);
+    background: linear-gradient(135deg, #fffdf8 0%, #f9e3dd 100%);
+}
+.operation-assist.active {
+    border-left-color: var(--cyan);
+    background: linear-gradient(135deg, #fffdf8 0%, #e3f3f2 100%);
+}
+.operation-assist.success {
+    border-left-color: var(--accent);
+    background: linear-gradient(135deg, #fffdf8 0%, #e5f2e5 100%);
+}
+.assist-kicker {
+    color: var(--ink-soft);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    margin-bottom: 0.2rem;
+}
+.assist-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
+    gap: 0.85rem;
+    align-items: stretch;
+}
+.assist-title {
+    color: var(--ink);
+    font-size: 1.25rem;
+    font-weight: 900;
+    line-height: 1.35;
+}
+.assist-step {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    margin: 0.35rem 0 0.45rem;
+    padding: 0.22rem 0.58rem;
+    border-radius: 999px;
+    background: rgba(255,255,255,0.78);
+    color: var(--accent-strong);
+    border: 1px solid rgba(8,119,96,0.18);
+    font-size: 0.78rem;
+    font-weight: 700;
+}
+.assist-action {
+    background: rgba(255,255,255,0.74);
+    border: 1px solid rgba(215,203,184,0.72);
+    border-radius: 16px;
+    padding: 0.72rem 0.8rem;
+    color: var(--ink);
+    line-height: 1.55;
+}
+.assist-action b,
+.assist-note b {
+    color: var(--accent-strong);
+}
+.assist-note {
+    margin-top: 0.5rem;
+    color: var(--ink-soft);
+    font-size: 0.86rem;
+    line-height: 1.55;
+}
+.assist-checklist {
+    background: rgba(255,255,255,0.58);
+    border: 1px solid rgba(215,203,184,0.72);
+    border-radius: 18px;
+    padding: 0.75rem 0.85rem;
+}
+.assist-checklist-title {
+    font-size: 0.78rem;
+    font-weight: 800;
+    color: var(--ink-soft);
+    margin-bottom: 0.45rem;
+    letter-spacing: 0.08em;
+}
+.assist-check {
+    display: flex;
+    gap: 0.42rem;
+    align-items: flex-start;
+    color: var(--ink);
+    font-size: 0.86rem;
+    line-height: 1.45;
+    margin: 0.28rem 0;
+}
+.assist-check::before {
+    content: "•";
+    color: var(--accent);
+    font-weight: 900;
+}
+@media (max-width: 760px) {
+    .assist-layout {
+        grid-template-columns: 1fr;
+    }
 }
 
 div.stButton > button[kind="primary"],
@@ -1236,6 +1351,35 @@ def _render_review_agent_panel(brief: AgentBrief) -> None:
   </div>
   <div class="agent-stage-grid">{''.join(stage_html)}</div>
   <div class="agent-monitor-row">{monitor_html}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_operation_assist(guide: OperationGuide) -> None:
+    checklist_html = "".join(
+        f"<div class='assist-check'>{html.escape(item)}</div>"
+        for item in guide.checklist
+    )
+    st.markdown(
+        f"""
+<section class="operation-assist {html.escape(guide.tone)}">
+  <div class="assist-kicker">AI Operation Co-Pilot</div>
+  <div class="assist-layout">
+    <div>
+      <div class="assist-title">{html.escape(guide.headline)}</div>
+      <div class="assist-step">{html.escape(guide.step_label)}</div>
+      <div class="assist-action"><b>次にすること:</b> {html.escape(guide.primary_action)}</div>
+      <div class="assist-note"><b>なぜ必要か:</b> {html.escape(guide.reason)}</div>
+      <div class="assist-note"><b>完了の目安:</b> {html.escape(guide.done_when)}</div>
+      <div class="assist-note"><b>注意:</b> {html.escape(guide.watch_out)}</div>
+    </div>
+    <div class="assist-checklist">
+      <div class="assist-checklist-title">この画面で見るポイント</div>
+      {checklist_html}
+    </div>
+  </div>
 </section>
         """,
         unsafe_allow_html=True,
@@ -2635,6 +2779,47 @@ if preview_clicked:
 
 # -- Step 2: Preview -------------------------------------------------------
 
+preview_docs = st.session_state.get("preview_docs") or []
+_operation_masking_states = st.session_state.get("masking_states", {}) or {}
+_operation_confirmation_docs = [
+    doc
+    for doc in preview_docs
+    if _requires_manual_confirmation_for_doc(doc, _operation_masking_states)
+]
+_operation_blocked_docs = [
+    doc
+    for doc in preview_docs
+    if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
+]
+_operation_token_status = "unknown"
+if preview_docs:
+    try:
+        _operation_estimate = estimate_review_token_budget(
+            preview_docs,
+            document_profile_override,
+        )
+        _operation_token_status = _operation_estimate.status
+    except Exception:
+        _operation_token_status = "unknown"
+
+_operation_assist_slot = st.empty()
+with _operation_assist_slot.container():
+    _render_operation_assist(
+        build_operation_guide(
+            upload_count=len(_get_uploads()),
+            has_preview_docs=bool(preview_docs),
+            blocked_count=len(_operation_blocked_docs),
+            confirmation_count=len(_operation_confirmation_docs),
+            send_approved=bool(st.session_state.get("send_approval")),
+            token_status=_operation_token_status,
+            review_in_progress=bool(st.session_state.get("review_in_progress")),
+            review_done=st.session_state.get("review_result") is not None,
+            can_regenerate_anonymization=_has_regeneratable_mask_candidates(
+                _operation_masking_states
+            ),
+        )
+    )
+
 preview_error = st.session_state.get("preview_error")
 if preview_error:
     st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
@@ -2647,7 +2832,6 @@ if preview_error:
         with st.expander("詳細トレース"):
             st.code(st.session_state.preview_trace)
 
-preview_docs = st.session_state.get("preview_docs")
 if st.session_state.get("preview_attempted") and not preview_error and not preview_docs:
     st.markdown('<div class="step-header">ステップ 2 — 匿名化結果プレビュー</div>', unsafe_allow_html=True)
     st.info("匿名化結果はまだ作成されていません。ファイルを確認して、もう一度実行してください。")
@@ -2957,6 +3141,21 @@ if preview_docs:
     # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
         st.session_state.review_in_progress = True
+        _operation_assist_slot.empty()
+        with _operation_assist_slot.container():
+            _render_operation_assist(
+                build_operation_guide(
+                    upload_count=len(_get_uploads()),
+                    has_preview_docs=bool(preview_docs),
+                    blocked_count=len(blocked_docs),
+                    confirmation_count=len(mask_docs),
+                    send_approved=send_approved,
+                    token_status=_operation_token_status,
+                    review_in_progress=True,
+                    review_done=False,
+                    can_regenerate_anonymization=can_regenerate_anonymization,
+                )
+            )
         review_progress = st.progress(0.0, text="送信前チェックを開始しています...")
         # 課題 1 拡張 (2026-05-08): ボタン押下時に「本セッションのマスク判断サマリ」を
         # 折りたたむ。Streamlit の st.expander は開閉状態を session_state に自動
@@ -3008,6 +3207,21 @@ if preview_docs:
 
             st.session_state.review_result = review
             st.session_state.review_in_progress = False
+            _operation_assist_slot.empty()
+            with _operation_assist_slot.container():
+                _render_operation_assist(
+                    build_operation_guide(
+                        upload_count=len(_get_uploads()),
+                        has_preview_docs=bool(preview_docs),
+                        blocked_count=len(blocked_docs),
+                        confirmation_count=len(mask_docs),
+                        send_approved=send_approved,
+                        token_status=_operation_token_status,
+                        review_in_progress=False,
+                        review_done=True,
+                        can_regenerate_anonymization=can_regenerate_anonymization,
+                    )
+                )
             _render_task_panel_for_state(
                 _task_panel_slot,
                 preview_docs=preview_docs,

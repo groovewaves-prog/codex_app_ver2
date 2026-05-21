@@ -82,6 +82,7 @@ DRAWINGML_NAMESPACES = {
 SPREADSHEET_NAMESPACES = {
     "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
     "rel": "http://schemas.openxmlformats.org/officeDocument/2006/relationships",
+    "pkgrel": "http://schemas.openxmlformats.org/package/2006/relationships",
 }
 
 PRESENTATION_NAMESPACES = {
@@ -276,24 +277,58 @@ def _extract_xlsx(binary: bytes, name: str, warnings: list[str]) -> str:
     try:
         with archive:
             shared_strings = _read_shared_strings(archive)
-            sheet_names = _read_workbook_sheet_names(archive)
             sections: list[str] = []
+            sheet_diagnostics: list[dict[str, object]] = []
 
-            worksheet_paths = [
-                path
-                for path in archive.namelist()
-                if path.startswith("xl/worksheets/") and path.endswith(".xml")
-            ]
-            worksheet_paths.sort()
+            workbook_sheets = _read_workbook_sheets(archive)
+            if not workbook_sheets:
+                worksheet_paths = [
+                    path
+                    for path in archive.namelist()
+                    if path.startswith("xl/worksheets/") and path.endswith(".xml")
+                ]
+                worksheet_paths.sort()
+                workbook_sheets = [
+                    {
+                        "name": Path(path).stem,
+                        "state": "visible",
+                        "path": path,
+                    }
+                    for path in worksheet_paths
+                ]
 
-            for index, path in enumerate(worksheet_paths, start=1):
-                sheet_name = sheet_names.get(f"rId{index}", Path(path).stem)
-                sheet_text = _read_worksheet(archive.read(path), shared_strings)
+            archive_names = set(archive.namelist())
+            for sheet_info in workbook_sheets:
+                path = str(sheet_info.get("path") or "")
+                sheet_name = str(sheet_info.get("name") or Path(path).stem or "Sheet")
+                if path not in archive_names:
+                    warnings.append(f"{name}: worksheet XML was not found for sheet '{sheet_name}' ({path}).")
+                    continue
+
+                sheet_text, sheet_meta = _read_worksheet_details(archive.read(path), shared_strings)
+                sheet_meta.update(
+                    {
+                        "name": sheet_name,
+                        "state": str(sheet_info.get("state") or "visible"),
+                    }
+                )
+                sheet_diagnostics.append(sheet_meta)
                 sections.append(f"# Sheet: {sheet_name}\n{sheet_text}".strip())
+
+            comment_text, comment_count = _extract_xlsx_comments(archive)
+            if comment_text:
+                sections.append(comment_text)
 
             image_text = _extract_embedded_images(archive, "xl/media/", warnings, name)
             if image_text:
                 sections.append(image_text)
+
+            workbook_diagnostics = _render_xlsx_workbook_diagnostics(
+                sheet_diagnostics,
+                comment_count=comment_count,
+            )
+            if workbook_diagnostics:
+                sections.insert(0, workbook_diagnostics)
 
             body = "\n\n".join(section for section in sections if section).strip() or _decode_text(binary)
             return _with_extraction_context(
@@ -544,6 +579,123 @@ def _collect_xml_text(binary: bytes) -> str:
     return "\n".join(texts)
 
 
+def _read_workbook_sheets(archive: zipfile.ZipFile) -> list[dict[str, str]]:
+    """Return workbook sheets with names, visibility state, and XML paths."""
+    if "xl/workbook.xml" not in archive.namelist():
+        return []
+
+    rels = _read_workbook_relationships(archive)
+    root = ET.fromstring(archive.read("xl/workbook.xml"))
+    sheets: list[dict[str, str]] = []
+    for index, sheet in enumerate(root.findall(".//main:sheets/main:sheet", SPREADSHEET_NAMESPACES), start=1):
+        rel_id = sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id", "")
+        target = rels.get(rel_id, f"worksheets/sheet{index}.xml")
+        sheets.append(
+            {
+                "name": sheet.attrib.get("name", rel_id or f"Sheet{index}"),
+                "state": sheet.attrib.get("state", "visible"),
+                "path": _normalize_workbook_target(target),
+            }
+        )
+    return sheets
+
+
+def _read_workbook_relationships(archive: zipfile.ZipFile) -> dict[str, str]:
+    rel_path = "xl/_rels/workbook.xml.rels"
+    if rel_path not in archive.namelist():
+        return {}
+
+    root = ET.fromstring(archive.read(rel_path))
+    relationships: dict[str, str] = {}
+    for rel in root.findall(".//pkgrel:Relationship", SPREADSHEET_NAMESPACES):
+        rel_id = rel.attrib.get("Id", "")
+        target = rel.attrib.get("Target", "")
+        rel_type = rel.attrib.get("Type", "")
+        if rel_id and target and rel_type.endswith("/worksheet"):
+            relationships[rel_id] = target
+    return relationships
+
+
+def _normalize_workbook_target(target: str) -> str:
+    normalized = (target or "").replace("\\", "/").lstrip("/")
+    if normalized.startswith("xl/"):
+        return normalized
+    return f"xl/{normalized}"
+
+
+def _extract_xlsx_comments(archive: zipfile.ZipFile) -> tuple[str, int]:
+    sections: list[str] = []
+    for path in archive.namelist():
+        if not (
+            re.fullmatch(r"xl/comments\d+\.xml", path)
+            or path.startswith("xl/threadedComments/")
+        ):
+            continue
+        try:
+            root = ET.fromstring(archive.read(path))
+        except ET.ParseError:
+            continue
+        texts = [
+            node.text.strip()
+            for node in root.iter()
+            if node.text and node.text.strip()
+        ]
+        if texts:
+            sections.append(f"# Excelコメント: {Path(path).name}\n" + "\n".join(texts))
+    body = "\n\n".join(sections).strip()
+    count = sum(1 for section in sections for line in section.splitlines()[1:] if line.strip())
+    return body, count
+
+
+def _render_xlsx_workbook_diagnostics(
+    sheet_diagnostics: list[dict[str, object]],
+    *,
+    comment_count: int = 0,
+) -> str:
+    if not sheet_diagnostics and not comment_count:
+        return ""
+
+    hidden_sheets = [
+        str(item.get("name", ""))
+        for item in sheet_diagnostics
+        if str(item.get("state") or "visible") != "visible"
+    ]
+    total_formula_cells = sum(int(item.get("formula_cells") or 0) for item in sheet_diagnostics)
+    total_hyperlinks = sum(int(item.get("hyperlinks") or 0) for item in sheet_diagnostics)
+    total_merged_ranges = sum(int(item.get("merged_ranges") or 0) for item in sheet_diagnostics)
+    total_non_empty_cells = sum(int(item.get("non_empty_cells") or 0) for item in sheet_diagnostics)
+
+    lines = [
+        "# Excelブック診断",
+        f"- シート数: {len(sheet_diagnostics)}",
+        f"- 非表示シート数: {len(hidden_sheets)}" + (f" ({', '.join(hidden_sheets)})" if hidden_sheets else ""),
+        f"- 非空セル数: {total_non_empty_cells}",
+        f"- 数式セル数: {total_formula_cells}",
+        f"- ハイパーリンク数: {total_hyperlinks}",
+        f"- 結合セル範囲数: {total_merged_ranges}",
+        f"- コメント文字列数: {comment_count}",
+        "## シート別診断",
+    ]
+
+    for item in sheet_diagnostics:
+        state = str(item.get("state") or "visible")
+        visible_label = "表示" if state == "visible" else f"非表示({state})"
+        lines.append(
+            "- {name}: {state}, 範囲 {dimension}, 行 {rows}, 非空セル {cells}, "
+            "数式 {formulas}, リンク {links}, 結合 {merged}".format(
+                name=str(item.get("name") or "Sheet"),
+                state=visible_label,
+                dimension=str(item.get("dimension") or "不明"),
+                rows=int(item.get("rows") or 0),
+                cells=int(item.get("non_empty_cells") or 0),
+                formulas=int(item.get("formula_cells") or 0),
+                links=int(item.get("hyperlinks") or 0),
+                merged=int(item.get("merged_ranges") or 0),
+            )
+        )
+    return "\n".join(lines)
+
+
 def _read_shared_strings(archive: zipfile.ZipFile) -> list[str]:
     if "xl/sharedStrings.xml" not in archive.namelist():
         return []
@@ -575,14 +727,25 @@ def _read_workbook_sheet_names(archive: zipfile.ZipFile) -> dict[str, str]:
 
 
 def _read_worksheet(binary: bytes, shared_strings: list[str]) -> str:
+    text, _meta = _read_worksheet_details(binary, shared_strings)
+    return text
+
+
+def _read_worksheet_details(binary: bytes, shared_strings: list[str]) -> tuple[str, dict[str, object]]:
     root = ET.fromstring(binary)
-    lines = []
+    dimension_node = root.find("main:dimension", SPREADSHEET_NAMESPACES)
+    dimension = dimension_node.attrib.get("ref", "") if dimension_node is not None else ""
+
+    lines: list[str] = []
+    non_empty_cells = 0
+    formula_cells = 0
     for row in root.findall(".//main:sheetData/main:row", SPREADSHEET_NAMESPACES):
         values = []
         for cell in row.findall("main:c", SPREADSHEET_NAMESPACES):
             cell_type = cell.attrib.get("t", "")
             value_node = cell.find("main:v", SPREADSHEET_NAMESPACES)
             inline_node = cell.find("main:is", SPREADSHEET_NAMESPACES)
+            formula_node = cell.find("main:f", SPREADSHEET_NAMESPACES)
 
             value = ""
             if inline_node is not None:
@@ -603,12 +766,28 @@ def _read_worksheet(binary: bytes, shared_strings: list[str]) -> str:
                 else:
                     value = raw_value
 
+            if formula_node is not None and formula_node.text and formula_node.text.strip():
+                formula_cells += 1
+                formula = formula_node.text.strip()
+                value = f"{value} [formula: {formula}]" if value else f"[formula: {formula}]"
+
+            if value:
+                non_empty_cells += 1
             values.append(value)
 
         if any(values):
             lines.append(" | ".join(values).rstrip())
 
-    return "\n".join(lines).strip() or "(No cell text found)"
+    meta = {
+        "dimension": dimension,
+        "rows": len(root.findall(".//main:sheetData/main:row", SPREADSHEET_NAMESPACES)),
+        "non_empty_cells": non_empty_cells,
+        "formula_cells": formula_cells,
+        "hyperlinks": len(root.findall(".//main:hyperlinks/main:hyperlink", SPREADSHEET_NAMESPACES)),
+        "merged_ranges": len(root.findall(".//main:mergeCells/main:mergeCell", SPREADSHEET_NAMESPACES)),
+    }
+    return "\n".join(lines).strip() or "(No cell text found)", meta
+
 
 
 def _extract_embedded_images(

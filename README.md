@@ -85,6 +85,8 @@ python scripts\local_ollama_precheck.py --input-file C:\path\to\your-document.do
 
 Office / PDF ファイルは、抽出されたテキストに形式メタ情報と抽出上の注意を付与します。PowerPoint の配置・矢印・色、Excel のセル結合・書式・数式、PDF の段組みや図表位置は完全には保持されないため、レビュー結果は必要に応じて原本と照合してください。
 
+Excel (`.xlsx`) はブック診断として、シート数、非表示シート、数式、ハイパーリンク、結合セル、コメント本文をローカルで抽出します。抽出されたコメント本文も匿名化・機密度判定の対象です。
+
 詳細手順は `docs/local_ollama_verification.md`、実データでの検証は
 `docs/v3_streamlit_verification.md` を参照。
 

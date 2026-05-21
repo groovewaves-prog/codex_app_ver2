@@ -1247,6 +1247,31 @@ def _render_anonymization_detail_panel(
                     st.caption("置換は記録されませんでした。")
 
 
+def _extract_excel_workbook_diagnostics(text: str) -> str:
+    marker = "# Excelブック診断"
+    start = (text or "").find(marker)
+    if start < 0:
+        return ""
+    rest = text[start:]
+    next_sheet = rest.find("\n# Sheet:")
+    if next_sheet >= 0:
+        rest = rest[:next_sheet]
+    return rest.strip()
+
+
+def _render_source_format_diagnostics(doc: SanitizedDocument) -> None:
+    excel_diagnostics = _extract_excel_workbook_diagnostics(doc.outbound_text or "")
+    if not excel_diagnostics:
+        return
+
+    with st.expander("📊 Excelブック診断（ローカル抽出）", expanded=False):
+        st.caption(
+            "シート構成、非表示シート、数式、リンク、結合セルなどをローカルで抽出した補助情報です。"
+            "この内容も匿名化・機密度判定の対象になります。"
+        )
+        st.markdown(excel_diagnostics)
+
+
 def _find_chapter_overview(review, doc_name: str, chapter: ChapterSection):
     for overview in getattr(review, "chapter_overviews", ()) or ():
         source = getattr(overview, "source_document", "")
@@ -2472,6 +2497,8 @@ if preview_docs:
                 with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
                     for finding in doc.findings:
                         st.markdown(f"- {finding}")
+
+            _render_source_format_diagnostics(doc)
 
             # ----- R-M (PR-D2 + PR-F): 未確定候補カード (α 案: 各文書のカード内) -----
             # PR-F: SanitizedDocument.original_excerpt を full_text として渡し、

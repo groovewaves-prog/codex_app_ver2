@@ -91,9 +91,92 @@ class ExtractorTests(unittest.TestCase):
 
         self.assertIn("形式: Excel (.xlsx)", text)
         self.assertIn("シートごとに行テキスト", text)
+        self.assertIn("# Excelブック診断", text)
+        self.assertIn("- シート数: 1", text)
+        self.assertIn("- 数式セル数: 0", text)
         self.assertIn("# Sheet: 確認項目", text)
         self.assertIn("項目 | 結果", text)
         self.assertIn("Ping | OK", text)
+        self.assertEqual(warnings, [])
+
+    def test_xlsx_workbook_diagnostics_include_hidden_formula_and_links(self) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as archive:
+            archive.writestr(
+                "xl/workbook.xml",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    '<sheets>'
+                    '<sheet name="Visible" sheetId="1" r:id="rId1"/>'
+                    '<sheet name="HiddenConfig" sheetId="2" state="hidden" r:id="rId2"/>'
+                    '</sheets></workbook>'
+                ),
+            )
+            archive.writestr(
+                "xl/_rels/workbook.xml.rels",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                    '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+                    '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>'
+                    '</Relationships>'
+                ),
+            )
+            archive.writestr(
+                "xl/worksheets/sheet1.xml",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                    'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                    '<dimension ref="A1:C2"/>'
+                    '<sheetData>'
+                    '<row r="1"><c r="A1" t="inlineStr"><is><t>Item</t></is></c>'
+                    '<c r="B1"><f>SUM(C1:C2)</f><v>10</v></c></row>'
+                    '</sheetData>'
+                    '<mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells>'
+                    '<hyperlinks><hyperlink ref="A1" r:id="rId1"/></hyperlinks>'
+                    '</worksheet>'
+                ),
+            )
+            archive.writestr(
+                "xl/worksheets/sheet2.xml",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    '<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Hidden note</t></is></c></row></sheetData>'
+                    '</worksheet>'
+                ),
+            )
+            archive.writestr(
+                "xl/comments1.xml",
+                (
+                    '<?xml version="1.0" encoding="UTF-8"?>'
+                    '<comments xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                    '<commentList><comment ref="A1"><text><r><t>Review comment</t></r></text></comment></commentList>'
+                    '</comments>'
+                ),
+            )
+
+        text, warnings = extract_text(
+            "workbook.xlsx",
+            base64.b64encode(buffer.getvalue()).decode("ascii"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "base64",
+        )
+
+        self.assertIn("# Excelブック診断", text)
+        self.assertIn("- シート数: 2", text)
+        self.assertIn("- 非表示シート数: 1 (HiddenConfig)", text)
+        self.assertIn("- 数式セル数: 1", text)
+        self.assertIn("- ハイパーリンク数: 1", text)
+        self.assertIn("- 結合セル範囲数: 1", text)
+        self.assertIn("- コメント文字列数: 1", text)
+        self.assertIn("[formula: SUM(C1:C2)]", text)
+        self.assertIn("# Excelコメント: comments1.xml", text)
+        self.assertIn("Review comment", text)
+        self.assertIn("# Sheet: HiddenConfig", text)
         self.assertEqual(warnings, [])
 
     def test_extracts_pptx_slide_text(self) -> None:

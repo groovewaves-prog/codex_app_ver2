@@ -869,6 +869,7 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         self.assertIn("PDF: 抽出テキストはページ順", prompt)
         self.assertIn("Word (.docx): 本文中心の技術文書", prompt)
         self.assertIn("Excel (.xlsx): シート/行/列の表", prompt)
+        self.assertIn("Excelブック診断", prompt)
         self.assertIn("PowerPoint (.pptx): スライド単位の説明資料", prompt)
 
     def test_prompt_requires_structured_summary_and_purpose_alignment(self) -> None:

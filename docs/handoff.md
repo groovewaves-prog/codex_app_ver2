@@ -198,9 +198,9 @@ Streamlit Cloud に接続する場合は、以下を確認する。
 
 | 優先 | 課題 | 状態 |
 |---|---|---|
-| 高 | 上司・管理者テストのフィードバック回収 | 実施中 |
-| 高 | コピー先リポジトリの作成とSecrets/Streamlit設定 | 次作業候補 |
-| 中 | 長文・複数ファイル時の待ち時間、分割call、クォータ挙動の実地確認 | 継続確認 |
+| 高 | 上司・管理者テストのフィードバック回収 | 実施中。記入用テンプレート `docs/admin_test_feedback_template.md` を追加済み |
+| 高 | コピー先リポジトリの作成とSecrets/Streamlit設定 | 対応済み。`codex_app_ver2` と ver2 Streamlit Cloud で動作確認済み |
+| 中 | 長文・複数ファイル時の待ち時間、分割call、クォータ挙動の実地確認 | 継続確認。確認観点は `docs/ver2_validation_checklist.md` に整理済み |
 | 中 | 実業務文書に近い資料での指摘品質確認 | 継続確認 |
 | 中 | Gemini/Gemma free tier のクォータ遭遇時の利用者向け説明確認 | 継続確認 |
 | 低 | ガイドライン定義のYAML/JSON外部化 | 将来対応 |
@@ -241,6 +241,8 @@ Streamlit Cloud に接続する場合は、以下を確認する。
 | `secure_review/network_diagram.py` | OCR文字列からの構成図サマリ |
 | `secure_review/extractor.py` | PDF/DOCX/XLSX/PPTX/画像抽出 |
 | `docs/mock_operation_manual.md` | 上司・管理者テスト用の操作マニュアル |
+| `docs/admin_test_feedback_template.md` | 上司・管理者テストのフィードバック記入テンプレート |
+| `docs/ver2_validation_checklist.md` | ver2 Streamlit 動作確認チェックリスト |
 | `docs/review_methodology.md` | 深堀レビュー方針 |
 | `docs/network_config_review_scope.md` | Config/構成図レビュー方針 |
 | `docs/guideline_externalization_policy.md` | レビュー基準外部化方針 |

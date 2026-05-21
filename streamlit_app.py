@@ -333,29 +333,127 @@ button[data-testid="stBaseButton-primary"]:disabled {
     color: #8a8377 !important;
     box-shadow: none;
 }
+div.stButton > button,
+button[data-testid="stBaseButton-secondary"],
+div[data-testid="stDownloadButton"] button {
+    border-radius: 14px !important;
+    border: 1px solid rgba(8,119,96,0.18) !important;
+    background: rgba(255,253,248,0.86) !important;
+    color: var(--ink) !important;
+    box-shadow: 0 8px 18px rgba(24,35,30,0.06);
+    min-height: 2.65rem;
+}
+div.stButton > button:hover,
+button[data-testid="stBaseButton-secondary"]:hover,
+div[data-testid="stDownloadButton"] button:hover {
+    border-color: rgba(8,119,96,0.36) !important;
+    background: rgba(237,246,232,0.94) !important;
+    color: var(--accent-strong) !important;
+}
+div.stButton > button:disabled,
+button[data-testid="stBaseButton-secondary"]:disabled,
+div[data-testid="stDownloadButton"] button:disabled {
+    background: rgba(231,225,214,0.74) !important;
+    color: #9b9386 !important;
+    box-shadow: none;
+}
 
 .decision-badge {
     display: inline-block;
-    padding: 0.18rem 0.7rem;
-    border-radius: 2px;
+    padding: 0.22rem 0.66rem;
+    border-radius: 999px;
     font-size: 0.78rem;
-    font-weight: 600;
+    font-weight: 800;
     letter-spacing: 0.05em;
     font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', sans-serif;
 }
-.decision-safe   { background: var(--accent-soft); color: var(--accent); border-left: 3px solid var(--accent); }
-.decision-mask   { background: var(--warn-soft);   color: var(--warn);   border-left: 3px solid var(--warn); }
-.decision-block  { background: var(--danger-soft); color: var(--danger); border-left: 3px solid var(--danger); }
+.decision-safe   { background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(8,119,96,0.22); }
+.decision-mask   { background: var(--warn-soft);   color: var(--warn);   border: 1px solid rgba(167,103,0,0.22); }
+.decision-block  { background: var(--danger-soft); color: var(--danger); border: 1px solid rgba(157,47,47,0.22); }
 
 .doc-card {
-    background: var(--bg-card);
-    border: 1px solid var(--rule);
-    border-left: 4px solid var(--accent);
-    padding: 1rem 1.2rem;
-    margin-bottom: 0.8rem;
+    position: relative;
+    overflow: hidden;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.96) 0%, rgba(249,244,234,0.94) 100%);
+    border: 1px solid rgba(215,203,184,0.82);
+    border-left: 6px solid var(--accent);
+    border-radius: 20px;
+    padding: 0.95rem 1.05rem;
+    margin-bottom: 0.85rem;
+    box-shadow: 0 12px 28px rgba(24,35,30,0.07);
 }
 .doc-card.mask  { border-left-color: var(--warn); }
 .doc-card.block { border-left-color: var(--danger); }
+.doc-card::after {
+    content: "";
+    position: absolute;
+    right: -4rem;
+    top: -4rem;
+    width: 10rem;
+    height: 10rem;
+    background: radial-gradient(circle, rgba(8,119,96,0.08), transparent 68%);
+    pointer-events: none;
+}
+.doc-card-header {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+}
+.doc-title {
+    font-size: 1.05rem;
+    font-weight: 900;
+    color: var(--ink);
+    line-height: 1.35;
+}
+.doc-submeta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin-top: 0.34rem;
+}
+.doc-meta-pill {
+    border: 1px solid rgba(83,100,94,0.16);
+    background: rgba(255,255,255,0.58);
+    border-radius: 999px;
+    padding: 0.16rem 0.48rem;
+    color: var(--ink-soft);
+    font-size: 0.74rem;
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+}
+.doc-attention-row {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    margin-top: 0.55rem;
+}
+.doc-reason-block {
+    position: relative;
+    z-index: 1;
+    border: 1px solid rgba(215,203,184,0.62);
+    background: rgba(255,255,255,0.58);
+    border-radius: 16px;
+    padding: 0.7rem 0.85rem;
+    margin-top: 0.75rem;
+}
+.doc-reason-title {
+    color: var(--ink);
+    font-weight: 900;
+    font-size: 0.88rem;
+    margin-bottom: 0.4rem;
+}
+.doc-reason-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    color: var(--ink);
+    line-height: 1.65;
+    font-size: 0.9rem;
+}
 
 .doc-meta {
     color: var(--ink-soft);
@@ -641,21 +739,125 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     margin-top: 0.25rem;
 }
 .summary-chip-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.45rem;
-    margin: 0.45rem 0 0.65rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+    gap: 0.62rem;
+    margin: 0.75rem 0 0.7rem;
 }
 .summary-chip {
     border: 1px solid rgba(217, 209, 192, 0.72);
-    background: rgba(255,255,255,0.72);
-    padding: 0.3rem 0.5rem;
-    font-size: 0.82rem;
+    background:
+        linear-gradient(135deg, rgba(255,255,255,0.86) 0%, rgba(250,246,236,0.94) 100%);
+    border-radius: 18px;
+    padding: 0.62rem 0.72rem;
+    min-height: 82px;
+    box-shadow: 0 8px 20px rgba(24,35,30,0.05);
 }
-.summary-chip b {
+.summary-chip.safe { border-top: 3px solid var(--accent); background: rgba(237,246,232,0.74); }
+.summary-chip.warn { border-top: 3px solid var(--warn); background: rgba(255,249,234,0.86); }
+.summary-chip.block { border-top: 3px solid var(--danger); background: rgba(255,245,242,0.92); }
+.summary-chip.info { border-top: 3px solid #7c8878; }
+.summary-chip-label {
+    color: var(--ink-soft);
+    font-size: 0.74rem;
+    letter-spacing: 0.06em;
+}
+.summary-chip-value {
+    color: var(--ink);
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+    font-size: 1.45rem;
+    line-height: 1.05;
+    font-weight: 900;
+    margin-top: 0.32rem;
+}
+.summary-panel {
+    border: 1px solid rgba(8,119,96,0.16);
+    border-radius: 24px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.94) 0%, rgba(239,247,241,0.86) 100%);
+    padding: 1rem;
+    margin: 1rem 0 0.9rem;
+    box-shadow: var(--shadow);
+}
+.summary-panel-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+.summary-panel-title {
+    font-size: 1.45rem;
+    font-weight: 900;
+    color: var(--ink);
+}
+.summary-panel-note {
+    color: var(--ink-soft);
+    font-size: 0.86rem;
+    line-height: 1.55;
+    max-width: 560px;
+}
+
+.send-gate-panel {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-left: 6px solid var(--accent);
+    border-radius: 22px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.95) 0%, rgba(234,245,231,0.92) 100%);
+    padding: 0.9rem 1rem;
+    margin: 0.65rem 0 0.85rem;
+    box-shadow: 0 12px 28px rgba(24,35,30,0.07);
+}
+.send-gate-panel.warn { border-left-color: var(--warn); background: linear-gradient(135deg, #fffdf8 0%, #fff3d3 100%); }
+.send-gate-panel.block { border-left-color: var(--danger); background: linear-gradient(135deg, #fffdf8 0%, #f9e3dd 100%); }
+.send-gate-kicker {
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
     font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
-    font-size: 0.95rem;
-    margin-left: 0.25rem;
+}
+.send-gate-title {
+    color: var(--ink);
+    font-size: 1.2rem;
+    font-weight: 900;
+    margin-top: 0.22rem;
+}
+.send-gate-detail {
+    color: var(--ink-soft);
+    line-height: 1.6;
+    margin-top: 0.35rem;
+    font-size: 0.92rem;
+}
+.approval-box {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: 20px;
+    background: rgba(255,253,248,0.78);
+    padding: 0.85rem 1rem 0.7rem;
+    margin: 0.8rem 0 0.9rem;
+    box-shadow: 0 10px 24px rgba(24,35,30,0.05);
+}
+.approval-title {
+    color: var(--ink);
+    font-size: 1.04rem;
+    font-weight: 900;
+}
+.approval-note {
+    color: var(--ink-soft);
+    font-size: 0.86rem;
+    line-height: 1.5;
+    margin-top: 0.25rem;
+}
+
+div[data-testid="stExpander"] details {
+    border: 1px solid rgba(8,119,96,0.16) !important;
+    border-radius: 16px !important;
+    background: rgba(255,253,248,0.70) !important;
+    box-shadow: 0 8px 18px rgba(24,35,30,0.045);
+}
+div[data-testid="stExpander"] summary {
+    min-height: 3rem;
+    font-weight: 800 !important;
+    color: var(--ink) !important;
 }
 
 .agent-command {
@@ -1033,23 +1235,45 @@ def _render_anonymization_summary(
 ) -> None:
     summary = _build_anonymization_summary(preview_docs)
 
-    st.markdown("#### 匿名化結果の内訳")
     chip_labels = [
-        ("文書", len(preview_docs)),
-        ("安全", summary["safe"]),
-        ("要確認", summary["mask_and_continue"]),
-        ("未判定", summary["unknown"]),
-        ("送信禁止", summary["block"]),
-        ("置換", summary["replacement_count"]),
-        ("未確定候補", summary["uncertain_count"]),
-        ("本文tokens", f"{summary['estimated_tokens']:,}"),
+        ("文書", len(preview_docs), "info"),
+        ("安全", summary["safe"], "safe"),
+        ("要確認", summary["mask_and_continue"], "warn"),
+        ("未判定", summary["unknown"], "warn"),
+        ("送信禁止", summary["block"], "block"),
+        ("置換", summary["replacement_count"], "info"),
+        ("未確定候補", summary["uncertain_count"], "warn"),
+        ("本文tokens", f"{summary['estimated_tokens']:,}", "info"),
     ]
     chips = "".join(
-        f"<span class='summary-chip'>{html.escape(label)} <b>{html.escape(str(value))}</b></span>"
-        for label, value in chip_labels
+        "<div class='summary-chip {tone}'>"
+        "<div class='summary-chip-label'>{label}</div>"
+        "<div class='summary-chip-value'>{value}</div>"
+        "</div>".format(
+            tone=html.escape(tone),
+            label=html.escape(label),
+            value=html.escape(str(value)),
+        )
+        for label, value, tone in chip_labels
     )
-    st.markdown(f"<div class='summary-chip-row'>{chips}</div>", unsafe_allow_html=True)
-    st.caption("送信されるのは匿名化済みテキストのみです。詳細なトークン予算は下の折りたたみで確認できます。")
+    st.markdown(
+        f"""
+<section class="summary-panel">
+  <div class="summary-panel-head">
+    <div>
+      <div class="insight-kicker">Anonymization Result</div>
+      <div class="summary-panel-title">匿名化結果の内訳</div>
+    </div>
+    <div class="summary-panel-note">
+      外部LLMへ送信されるのは匿名化済みテキストのみです。
+      詳細なトークン予算は下の折りたたみで確認できます。
+    </div>
+  </div>
+  <div class="summary-chip-row">{chips}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if summary["unknown"]:
         st.warning(
@@ -2902,17 +3126,12 @@ if preview_docs:
             card_class = _doc_card_class(doc.local_sensitivity_decision)
             st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
 
-            header_left = (
-                f"<b>{doc.name}</b> "
-                f'<span class="doc-meta"> · {doc.estimated_input_tokens} トークン '
-                f"· 外部送信リスク: {doc.outbound_risk}</span>"
-            )
             _attention_reasons = document_attention_reasons(
                 doc,
                 has_uncertain_candidates=doc.name in _uncertain_doc_names,
             )
             _attention_html = (
-                "<div style='margin-top:0.35rem;'>"
+                "<div class='doc-attention-row'>"
                 + " ".join(
                     f"<span class='decision-badge decision-mask'>{html.escape(reason)}</span>"
                     for reason in _attention_reasons
@@ -2921,17 +3140,36 @@ if preview_docs:
                 if _attention_reasons else ""
             )
             st.markdown(
-                f'<div style="display:flex;justify-content:space-between;align-items:center;">'
-                f'<div>{header_left}</div>'
-                f"<div>{_decision_badge(doc.local_sensitivity_decision)}</div>"
-                f"</div>{_attention_html}",
+                f"""
+<div class="doc-card-header">
+  <div>
+    <div class="doc-title">{html.escape(doc.name)}</div>
+    <div class="doc-submeta">
+      <span class="doc-meta-pill">{doc.estimated_input_tokens} tokens</span>
+      <span class="doc-meta-pill">外部送信リスク: {html.escape(doc.outbound_risk)}</span>
+    </div>
+  </div>
+  <div>{_decision_badge(doc.local_sensitivity_decision)}</div>
+</div>
+{_attention_html}
+                """,
                 unsafe_allow_html=True,
             )
 
             if doc.local_sensitivity_reasons:
-                st.markdown("**判定理由**")
-                for reason in doc.local_sensitivity_reasons:
-                    st.markdown(f"- {reason}")
+                reason_items = "".join(
+                    f"<li>{html.escape(reason)}</li>"
+                    for reason in doc.local_sensitivity_reasons
+                )
+                st.markdown(
+                    f"""
+<div class="doc-reason-block">
+  <div class="doc-reason-title">判定理由</div>
+  <ul class="doc-reason-list">{reason_items}</ul>
+</div>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
             if doc.findings:
                 with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
@@ -3044,16 +3282,33 @@ if preview_docs:
     st.markdown('<div class="step-header">ステップ 3 — 確認 & 送信</div>', unsafe_allow_html=True)
 
     if blocked_docs:
-        st.error(
-            "次のファイルは外部レビューへの送信が禁止されています: "
-            + ", ".join(doc.name for doc in blocked_docs)
-            + "。より厳密に匿名化したコピーを準備してから再試行してください。"
+        st.markdown(
+            f"""
+<section class="send-gate-panel block">
+  <div class="send-gate-kicker">Send Gate</div>
+  <div class="send-gate-title">外部レビューへ送信できません</div>
+  <div class="send-gate-detail">
+    送信禁止の文書があります: {html.escape(", ".join(doc.name for doc in blocked_docs))}。
+    より厳密に匿名化したコピーを準備するか、対象から除外して再プレビューしてください。
+  </div>
+</section>
+            """,
+            unsafe_allow_html=True,
         )
 
     if mask_docs and not blocked_docs:
-        st.warning(
-            f"{len(mask_docs)} 件の文書に未判定または要確認の項目があります。"
-            "ステップ2の匿名化結果とマスク候補を確認したうえで、下の最終承認に進んでください。"
+        st.markdown(
+            f"""
+<section class="send-gate-panel warn">
+  <div class="send-gate-kicker">Send Gate</div>
+  <div class="send-gate-title">送信前に確認が必要です</div>
+  <div class="send-gate-detail">
+    {len(mask_docs)} 件の文書に未判定または要確認の項目があります。
+    ステップ2の匿名化結果とマスク候補を確認したうえで、最終承認に進んでください。
+  </div>
+</section>
+            """,
+            unsafe_allow_html=True,
         )
         with st.expander("確認が必要な文書", expanded=False):
             for doc in mask_docs:
@@ -3067,14 +3322,33 @@ if preview_docs:
                     reasons.append("マスク候補あり")
                 st.markdown(f"- **{doc.name}**: {', '.join(reasons) or '要確認'}")
     elif not blocked_docs:
-        st.success(
-            "送信禁止または追加確認が必要な文書はありません。"
-            "匿名化結果を確認したうえで、このまま外部レビューへ送信できます。"
+        st.markdown(
+            """
+<section class="send-gate-panel">
+  <div class="send-gate-kicker">Send Gate</div>
+  <div class="send-gate-title">送信前チェックを通過しています</div>
+  <div class="send-gate-detail">
+    送信禁止または追加確認が必要な文書はありません。
+    匿名化結果を確認したうえで、このまま外部レビューへ送信できます。
+  </div>
+</section>
+            """,
+            unsafe_allow_html=True,
         )
 
     send_approved = False
     if not blocked_docs:
-        st.markdown("**LLM 送信前の最終承認**")
+        st.markdown(
+            """
+<div class="approval-box">
+  <div class="approval-title">LLM 送信前の最終承認</div>
+  <div class="approval-note">
+    チェックすると「レビューに送信」が有効になります。外部LLMへ送る対象は匿名化済みテキストのみです。
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
         send_approved = st.checkbox(
             "ステップ 2 の匿名化結果、マスク候補、送信対象ログを確認しました。"
             "匿名化済みテキストを外部 LLM レビューに送信することを承認します。",

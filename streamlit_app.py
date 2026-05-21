@@ -815,6 +815,12 @@ def _render_token_budget_panel(
             f"(最大予約枠の概算: {estimate.estimated_output_token_cap:,})。"
             "深堀ボタンを押すと追加callが発生します。"
         )
+        if estimate.minimum_wait_seconds > 0:
+            st.caption(
+                "Free tier のレート制限対策として、分割call間の待機だけで "
+                f"最低 {_format_duration(estimate.minimum_wait_seconds)} 程度を見込んでください。"
+                "実際には各callの応答時間がさらに加わります。"
+            )
 
         for reason in estimate.reasons:
             if estimate.status == "split_recommended":
@@ -829,6 +835,59 @@ def _render_token_budget_panel(
                 "- 普段使いの長い手順書では、章単位に分ける、別紙ログを外す、"
                 "画像OCR結果を確認して不要行を削る、といった運用を推奨します。"
             )
+        _render_token_budget_details(estimate)
+
+
+def _format_duration(seconds: int) -> str:
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} 秒"
+    minutes, rest = divmod(seconds, 60)
+    if rest == 0:
+        return f"{minutes} 分"
+    return f"{minutes} 分 {rest} 秒"
+
+
+def _md_cell(value: object) -> str:
+    return str(value).replace("|", "｜").replace("\n", " ")
+
+
+def _render_token_budget_details(estimate) -> None:
+    if not getattr(estimate, "document_estimates", ()):
+        return
+
+    document_estimates = sorted(
+        estimate.document_estimates,
+        key=lambda item: item.call_input_tokens,
+        reverse=True,
+    )
+    rows = [
+        "| 文書 | 本文tokens | 1call入力概算 |",
+        "|---|---:|---:|",
+    ]
+    for item in document_estimates[:8]:
+        rows.append(
+            f"| {_md_cell(item.name)} | {item.body_tokens:,} | {item.call_input_tokens:,} |"
+        )
+    st.markdown("**文書別の送信規模（大きい順）**")
+    st.markdown("\n".join(rows))
+
+    if len(document_estimates) > 8:
+        st.caption(f"残り {len(document_estimates) - 8} 件は省略しています。")
+
+    suggested_batches = getattr(estimate, "suggested_batches", ()) or ()
+    if suggested_batches:
+        st.markdown("**推奨レビュー分割案**")
+        for batch in suggested_batches:
+            names = "、".join(batch.document_names)
+            st.markdown(
+                f"- {batch.label}: {batch.call_count} call / "
+                f"{batch.total_input_tokens:,} tokens / {names}"
+            )
+        st.caption(
+            "分割案は、1回の評価で扱うファイル数と入力規模を抑えるための目安です。"
+            "文書の意味上のまとまりがある場合は、そちらを優先してください。"
+        )
 
 
 def _has_uncertain_candidates_for_doc(masking_states: dict, name: str) -> bool:

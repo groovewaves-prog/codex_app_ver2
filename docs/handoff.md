@@ -200,7 +200,7 @@ Streamlit Cloud に接続する場合は、以下を確認する。
 |---|---|---|
 | 高 | 上司・管理者テストのフィードバック回収 | 実施中。記入用テンプレート `docs/admin_test_feedback_template.md` を追加済み |
 | 高 | コピー先リポジトリの作成とSecrets/Streamlit設定 | 対応済み。`codex_app_ver2` と ver2 Streamlit Cloud で動作確認済み |
-| 中 | 長文・複数ファイル時の待ち時間、分割call、クォータ挙動の実地確認 | 継続確認。確認観点は `docs/ver2_validation_checklist.md` に整理済み |
+| 中 | 長文・複数ファイル時の待ち時間、分割call、クォータ挙動の実地確認 | 一部対応済み。文書別トークン、最低待機時間、推奨分割案をUI表示するよう改善。実地確認は継続 |
 | 中 | 実業務文書に近い資料での指摘品質確認 | 継続確認 |
 | 中 | Gemini/Gemma free tier のクォータ遭遇時の利用者向け説明確認 | 継続確認 |
 | 低 | ガイドライン定義のYAML/JSON外部化 | 将来対応 |

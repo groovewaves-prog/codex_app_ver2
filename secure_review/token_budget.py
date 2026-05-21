@@ -10,6 +10,21 @@ from secure_review.rubric import choose_rubric
 
 
 @dataclass(frozen=True)
+class DocumentTokenEstimate:
+    name: str
+    body_tokens: int
+    call_input_tokens: int
+
+
+@dataclass(frozen=True)
+class ReviewBatchSuggestion:
+    label: str
+    document_names: tuple[str, ...]
+    call_count: int
+    total_input_tokens: int
+
+
+@dataclass(frozen=True)
 class TokenBudgetEstimate:
     provider_mode: str
     review_mode: str
@@ -21,6 +36,10 @@ class TokenBudgetEstimate:
     estimated_output_token_cap: int
     status: str
     reasons: tuple[str, ...]
+    document_estimates: tuple[DocumentTokenEstimate, ...] = ()
+    suggested_batches: tuple[ReviewBatchSuggestion, ...] = ()
+    minimum_wait_seconds: int = 0
+    throttle_interval_seconds: float = 0.0
 
 
 def estimate_tokens(text: str) -> int:
@@ -43,11 +62,17 @@ def estimate_review_token_budget(
     body_tokens = sum(int(getattr(doc, "estimated_input_tokens", 0) or 0) for doc in documents)
     system_tokens = estimate_tokens(SYSTEM_PROMPT)
 
+    document_estimates = tuple(
+        DocumentTokenEstimate(
+            name=doc.name,
+            body_tokens=int(getattr(doc, "estimated_input_tokens", 0) or 0),
+            call_input_tokens=system_tokens + estimate_tokens(build_prompt([doc], rubric)),
+        )
+        for doc in documents
+    )
+
     if chunked:
-        call_inputs = [
-            system_tokens + estimate_tokens(build_prompt([doc], rubric))
-            for doc in documents
-        ]
+        call_inputs = [doc_est.call_input_tokens for doc_est in document_estimates]
         review_mode = "chunked"
     else:
         call_inputs = [system_tokens + estimate_tokens(build_prompt(documents, rubric))]
@@ -57,11 +82,17 @@ def estimate_review_token_budget(
     total_input = sum(call_inputs)
     max_call = max(call_inputs, default=0)
     output_cap = max_output * max(1, len(call_inputs))
+    throttle_interval = _chunking_interval_seconds(provider) if chunked else 0.0
+    minimum_wait_seconds = int(math.ceil(max(0, len(call_inputs) - 1) * throttle_interval))
     status, reasons = _classify_budget(
         call_count=len(call_inputs),
         max_call_input_tokens=max_call,
         total_input_tokens=total_input,
         external_provider=external_provider,
+    )
+    suggested_batches = _suggest_batches(
+        document_estimates,
+        enabled=external_provider and len(documents) > 1,
     )
 
     return TokenBudgetEstimate(
@@ -75,6 +106,10 @@ def estimate_review_token_budget(
         estimated_output_token_cap=output_cap,
         status=status,
         reasons=reasons,
+        document_estimates=document_estimates,
+        suggested_batches=suggested_batches,
+        minimum_wait_seconds=minimum_wait_seconds,
+        throttle_interval_seconds=throttle_interval,
     )
 
 
@@ -101,6 +136,64 @@ def _env_int(name: str, default: int) -> int:
         return max(1, int(raw))
     except ValueError:
         return default
+
+
+def _chunking_interval_seconds(provider: str) -> float:
+    if provider not in {"gemma", "gemma4", "gemma-4", "gemini-gemma", "gemma-gemini", "gemini", "gemini-api", "gemini-free", "gemini-free-tier"}:
+        return 0.0
+    raw = os.getenv("GEMINI_CHUNKING_INTERVAL", "0").strip()
+    if not raw:
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
+def _suggest_batches(
+    document_estimates: tuple[DocumentTokenEstimate, ...],
+    *,
+    enabled: bool,
+    max_calls_per_batch: int = 6,
+    max_input_tokens_per_batch: int = 25000,
+) -> tuple[ReviewBatchSuggestion, ...]:
+    if not enabled or len(document_estimates) <= 1:
+        return ()
+
+    batches: list[ReviewBatchSuggestion] = []
+    current_names: list[str] = []
+    current_tokens = 0
+
+    def flush() -> None:
+        nonlocal current_names, current_tokens
+        if not current_names:
+            return
+        batches.append(
+            ReviewBatchSuggestion(
+                label=f"分割案 {len(batches) + 1}",
+                document_names=tuple(current_names),
+                call_count=len(current_names),
+                total_input_tokens=current_tokens,
+            )
+        )
+        current_names = []
+        current_tokens = 0
+
+    for doc_est in document_estimates:
+        would_exceed_calls = len(current_names) >= max_calls_per_batch
+        would_exceed_tokens = (
+            bool(current_names)
+            and current_tokens + doc_est.call_input_tokens > max_input_tokens_per_batch
+        )
+        if would_exceed_calls or would_exceed_tokens:
+            flush()
+        current_names.append(doc_est.name)
+        current_tokens += doc_est.call_input_tokens
+    flush()
+
+    if len(batches) <= 1:
+        return ()
+    return tuple(batches)
 
 
 def _classify_budget(

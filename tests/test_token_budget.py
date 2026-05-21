@@ -46,7 +46,53 @@ class TokenBudgetTests(unittest.TestCase):
         self.assertEqual(estimate.review_mode, "chunked")
         self.assertEqual(estimate.call_count, 2)
         self.assertEqual(estimate.max_output_tokens_per_call, 4096)
+        self.assertEqual(estimate.minimum_wait_seconds, 0)
+        self.assertEqual([item.name for item in estimate.document_estimates], ["a.docx", "b.docx"])
         self.assertGreater(estimate.total_input_tokens, estimate.body_tokens)
+
+    def test_chunking_interval_surfaces_minimum_wait_time(self) -> None:
+        docs = [
+            _doc("01.pdf", "本文\n" * 100),
+            _doc("02.pdf", "本文\n" * 100),
+            _doc("03.pdf", "本文\n" * 100),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "REVIEW_PROVIDER": "gemma",
+                "GEMINI_CHUNKING": "true",
+                "GEMINI_CHUNKING_INTERVAL": "6",
+            },
+            clear=True,
+        ):
+            estimate = estimate_review_token_budget(docs)
+
+        self.assertEqual(estimate.call_count, 3)
+        self.assertEqual(estimate.throttle_interval_seconds, 6)
+        self.assertEqual(estimate.minimum_wait_seconds, 12)
+
+    def test_large_multi_file_review_suggests_batches(self) -> None:
+        docs = [
+            _doc(f"{idx:02d}.pdf", "本文\n" * 800)
+            for idx in range(1, 10)
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "REVIEW_PROVIDER": "gemma",
+                "GEMINI_CHUNKING": "true",
+            },
+            clear=True,
+        ):
+            estimate = estimate_review_token_budget(docs)
+
+        self.assertGreaterEqual(len(estimate.suggested_batches), 2)
+        suggested_names = [
+            name
+            for batch in estimate.suggested_batches
+            for name in batch.document_names
+        ]
+        self.assertEqual(suggested_names, [doc.name for doc in docs])
 
 
 if __name__ == "__main__":

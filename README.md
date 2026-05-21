@@ -8,6 +8,7 @@
 - **主 UI**: Streamlit (`streamlit_app.py`)
 - **AI Operation Co-Pilot**: ローカル状態から次に押す操作、理由、完了条件、注意点を案内する決定論的UI
 - **レビュー管制エージェント**: ローカル状態から次アクション、監視ポイント、送信判断を表示する決定論的UI
+- **修正アクションプラン**: レビュー結果から修正方針、追記テンプレート、再レビュー条件をローカル生成
 - **ローカル前処理**: 正規表現 sanitizer + Ollama `gemma3:12b`（任意）
 - **社外送信可否判定**: ローカル heuristic または `gemma3:12b` (任意)
 - **外部レビュー**: Gemini free tier (`gemini-2.0-flash`) / Gemma 4 クラスモデル

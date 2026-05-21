@@ -43,6 +43,7 @@ from secure_review.models import (
 )
 from secure_review.network_guard import LocalUrlError
 from secure_review.reviewer import choose_provider, provider_display_name
+from secure_review.remediation_plan import RemediationPlan, build_remediation_plan
 # Phase 7 段階 2-C (2026-05-08): 章単位深堀り
 from secure_review.rubric import ChapterSection, extract_chapters_from_text
 from secure_review.run_masking_pipeline import (
@@ -1172,6 +1173,105 @@ div[data-testid="stExpander"] summary {
     border-left: 3px solid var(--accent);
     color: var(--ink-soft);
     font-size: 0.86rem;
+}
+.remediation-panel {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: 24px;
+    background:
+        radial-gradient(circle at top right, rgba(56,168,184,0.12), transparent 18rem),
+        linear-gradient(135deg, rgba(255,253,248,0.96) 0%, rgba(235,246,239,0.90) 100%);
+    padding: 1rem;
+    margin: 0.95rem 0 1rem;
+    box-shadow: var(--shadow);
+}
+.remediation-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+.remediation-kicker {
+    color: var(--accent-strong);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    font-weight: 900;
+}
+.remediation-title {
+    color: var(--ink);
+    font-size: 1.34rem;
+    line-height: 1.3;
+    font-weight: 900;
+    margin-top: 0.22rem;
+}
+.remediation-summary {
+    color: var(--ink-soft);
+    font-size: 0.88rem;
+    line-height: 1.55;
+    max-width: 520px;
+}
+.remediation-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 0.72rem;
+    margin-top: 0.9rem;
+}
+.remediation-card {
+    border: 1px solid rgba(217, 209, 192, 0.76);
+    border-left: 5px solid var(--rule);
+    border-radius: 18px;
+    background: rgba(255,255,255,0.72);
+    padding: 0.78rem 0.82rem;
+}
+.remediation-card.high { border-left-color: var(--danger); background: rgba(255,245,242,0.92); }
+.remediation-card.medium { border-left-color: var(--warn); background: rgba(255,249,234,0.88); }
+.remediation-card.low { border-left-color: var(--accent); }
+.remediation-card-title {
+    color: var(--ink);
+    font-size: 0.96rem;
+    line-height: 1.4;
+    font-weight: 900;
+}
+.remediation-meta {
+    color: var(--ink-soft);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.72rem;
+    line-height: 1.45;
+    margin-top: 0.35rem;
+}
+.remediation-text {
+    color: var(--ink-soft);
+    font-size: 0.84rem;
+    line-height: 1.55;
+    margin-top: 0.45rem;
+}
+.re-review-lane {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 0.6rem;
+    margin-top: 0.85rem;
+}
+.re-review-step {
+    border: 1px solid rgba(8,119,96,0.14);
+    border-radius: 16px;
+    background: rgba(247,252,250,0.78);
+    padding: 0.68rem 0.75rem;
+}
+.re-review-label {
+    color: var(--accent-strong);
+    font-weight: 900;
+    font-size: 0.88rem;
+}
+.re-review-detail {
+    color: var(--ink-soft);
+    font-size: 0.8rem;
+    line-height: 1.5;
+    margin-top: 0.28rem;
+}
+@media (max-width: 760px) {
+    .remediation-head { display: block; }
+    .remediation-summary { margin-top: 0.45rem; }
 }
 
 .provider-line {
@@ -2655,6 +2755,86 @@ def _render_review_result_dashboard(
         ],
     )
 
+
+def _render_remediation_plan(plan: RemediationPlan) -> None:
+    item_cards = []
+    severity_labels = {"high": "高", "medium": "中", "low": "低", "info": "情報"}
+    source_labels = {
+        "review_issue": "レビュー指摘",
+        "structure_check": "構成チェック",
+    }
+    for item in plan.items[:6]:
+        item_cards.append(
+            """
+<div class="remediation-card {severity}">
+  <div class="remediation-card-title">{title}</div>
+  <div class="remediation-meta">{source} / {severity_label} / 工数 {effort}<br/>{target}</div>
+  <div class="remediation-text"><b>方針:</b> {fix_policy}</div>
+  <div class="remediation-text"><b>再レビュー:</b> {condition}</div>
+</div>
+            """.format(
+                severity=html.escape(item.severity),
+                title=html.escape(item.title),
+                source=html.escape(source_labels.get(item.source_type, item.source_type)),
+                severity_label=html.escape(severity_labels.get(item.severity, item.severity)),
+                effort=html.escape(item.effort),
+                target=html.escape(f"{item.target_document} / {item.target_section}"),
+                fix_policy=html.escape(item.fix_policy[:180]),
+                condition=html.escape(item.re_review_condition),
+            )
+        )
+    re_review_html = "".join(
+        """
+<div class="re-review-step">
+  <div class="re-review-label">{label}</div>
+  <div class="re-review-detail">{detail}</div>
+  <div class="re-review-detail"><b>契機:</b> {trigger}</div>
+</div>
+        """.format(
+            label=html.escape(step.label),
+            detail=html.escape(step.detail),
+            trigger=html.escape(step.trigger),
+        )
+        for step in plan.re_review_steps
+    )
+    st.markdown(
+        f"""
+<section class="remediation-panel">
+  <div class="remediation-head">
+    <div>
+      <div class="remediation-kicker">Remediation Planner</div>
+      <div class="remediation-title">{html.escape(plan.headline)}</div>
+    </div>
+    <div class="remediation-summary">{html.escape(plan.summary)}</div>
+  </div>
+  <div class="remediation-grid">{''.join(item_cards) if item_cards else '<div class="remediation-text">大きな修正アクションはありません。</div>'}</div>
+  <div class="re-review-lane">{re_review_html}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if plan.items:
+        with st.expander("🛠 修正方針・追記テンプレートを開く", expanded=False):
+            for idx, item in enumerate(plan.items, 1):
+                st.markdown(
+                    f"#### {idx}. {item.title} "
+                    f"<span class='doc-meta'>({item.item_id} / {item.target_document})</span>",
+                    unsafe_allow_html=True,
+                )
+                _render_compact_field("対象", f"{item.target_document} / {item.target_section}")
+                _render_compact_field("問題", item.problem)
+                _render_compact_field("修正方針", item.fix_policy)
+                _render_compact_field("再レビュー条件", item.re_review_condition)
+                st.code(item.template, language="markdown")
+        st.download_button(
+            "🧭 修正アクションプランをダウンロード (JSON)",
+            data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+            file_name="remediation_plan.json",
+            mime="application/json",
+            width='stretch',
+        )
+
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
 #
@@ -3936,6 +4116,11 @@ if review is not None:
         _structure_result_for_review,
         _deep_dive_candidates,
     )
+    _remediation_plan = build_remediation_plan(
+        review,
+        _structure_result_for_review,
+    )
+    _render_remediation_plan(_remediation_plan)
     _render_deep_dive_candidate_summary(_deep_dive_candidates)
 
     st.markdown("### 文書全体の概要")

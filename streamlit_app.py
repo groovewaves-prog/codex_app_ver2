@@ -41,6 +41,7 @@ from secure_review.models import (
     SanitizedDocument,
     UploadedDocument,
 )
+from secure_review.future_review import FutureReviewReport, build_future_review_report
 from secure_review.network_guard import LocalUrlError
 from secure_review.reviewer import choose_provider, provider_display_name
 from secure_review.remediation_plan import (
@@ -694,6 +695,102 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .issue-row.medium { border-left-color: var(--warn); }
 .issue-row.low    { border-left-color: var(--accent); }
 .issue-row.info   { border-left-color: var(--ink-soft); }
+
+.future-lens {
+    margin: 1.05rem 0;
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: 22px;
+    background:
+        radial-gradient(circle at top right, rgba(85,200,178,0.15), transparent 28%),
+        linear-gradient(135deg, rgba(255,253,248,0.98), rgba(238,247,242,0.92));
+    padding: 1rem;
+    box-shadow: 0 18px 38px rgba(24,35,30,0.08);
+}
+.future-lens-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+}
+.future-lens-kicker {
+    color: var(--accent-strong);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.68rem;
+    font-weight: 900;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+}
+.future-lens-title {
+    color: var(--ink);
+    font-size: 1.24rem;
+    font-weight: 900;
+    line-height: 1.35;
+}
+.future-lens-copy {
+    color: var(--ink-soft);
+    font-size: 0.86rem;
+    line-height: 1.6;
+    margin-top: 0.25rem;
+}
+.future-lens-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    justify-content: flex-end;
+}
+.future-pill {
+    border: 1px solid rgba(8,119,96,0.16);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.78);
+    color: var(--ink);
+    font-size: 0.78rem;
+    font-weight: 800;
+    padding: 0.34rem 0.62rem;
+}
+.future-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+    gap: 0.65rem;
+    margin-top: 0.75rem;
+}
+.future-card {
+    border: 1px solid var(--rule);
+    border-left: 4px solid var(--accent);
+    border-radius: 16px;
+    background: rgba(255,255,255,0.82);
+    padding: 0.78rem;
+    font-size: 0.86rem;
+    line-height: 1.55;
+}
+.future-card.high { border-left-color: var(--danger); background: rgba(255,245,242,0.92); }
+.future-card.medium { border-left-color: var(--warn); background: rgba(255,249,234,0.92); }
+.future-card.low { border-left-color: var(--accent); }
+.future-card-title {
+    font-weight: 900;
+    color: var(--ink);
+    line-height: 1.35;
+}
+.future-card-meta {
+    color: var(--ink-soft);
+    font-size: 0.75rem;
+    margin: 0.25rem 0 0.35rem;
+}
+.future-card-text {
+    color: var(--ink);
+    font-size: 0.84rem;
+    margin-top: 0.26rem;
+}
+.feedback-panel {
+    border: 1px solid rgba(8,119,96,0.14);
+    border-radius: 16px;
+    background: rgba(247,252,248,0.84);
+    padding: 0.7rem 0.85rem;
+    margin: 0.45rem 0 0.8rem;
+}
+@media (max-width: 760px) {
+    .future-lens-head { display: block; }
+    .future-lens-metrics { justify-content: flex-start; margin-top: 0.6rem; }
+}
 
 .review-compact {
     font-size: 0.92rem;
@@ -1560,6 +1657,8 @@ def _reset_state() -> None:
         "anonymization_details_visible",
         "anonymization_details_expand_once",
         "review_result",
+        "review_issue_feedback",
+        "review_issue_feedback_notes",
         # R-M (PR-D2)
         "masking_states",
         "user_decisions",
@@ -3119,6 +3218,219 @@ def _render_remediation_comparison_report(report: RemediationComparisonReport) -
         unsafe_allow_html=True,
     )
 
+
+FEEDBACK_OPTIONS = ("未評価", "有効", "言い過ぎ", "不要", "見落としあり")
+
+
+def _future_tone_label(level: str) -> str:
+    return {
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "info": "情報",
+    }.get(level, level or "-")
+
+
+def _trigger_source_label(value: str) -> str:
+    return {
+        "document": "本文由来",
+        "issue": "レビュー指摘由来",
+        "both": "本文＋レビュー指摘由来",
+    }.get(value, value or "-")
+
+
+def _future_card(title: str, meta: str, body: str, action: str, tone: str = "low") -> str:
+    return f"""
+<div class="future-card {html.escape(tone)}">
+  <div class="future-card-title">{html.escape(title)}</div>
+  <div class="future-card-meta">{html.escape(meta)}</div>
+  <div class="future-card-text">{html.escape(body)}</div>
+  <div class="future-card-text"><b>次の一手:</b> {html.escape(action)}</div>
+</div>
+    """
+
+
+def _premortem_card(item) -> str:
+    confirmed = ", ".join(item.confirmed_elements) if item.confirmed_elements else "なし"
+    missing = ", ".join(item.missing_elements) if item.missing_elements else "なし"
+    hints = " / ".join(item.review_hint) if item.review_hint else "なし"
+    return f"""
+<div class="future-card {html.escape(item.risk_level)}">
+  <div class="future-card-title">{html.escape(item.title)}</div>
+  <div class="future-card-meta">
+    {html.escape(item.scenario_id)} / {html.escape(item.source_document)} / {html.escape(item.section)} /
+    {html.escape(_future_tone_label(item.risk_level))}
+  </div>
+  <div class="future-card-text"><b>発火理由:</b> {html.escape(_trigger_source_label(item.trigger_source))}</div>
+  <div class="future-card-text"><b>本文で確認済み:</b> {html.escape(confirmed)}</div>
+  <div class="future-card-text"><b>本文で不足:</b> {html.escape(missing)}</div>
+  <div class="future-card-text"><b>レビュー指摘ヒント:</b> {html.escape(hints)}</div>
+  <div class="future-card-text"><b>故障への道筋:</b> {html.escape(item.failure_path)}</div>
+  <div class="future-card-text"><b>次の一手:</b> {html.escape(item.prevention)}</div>
+</div>
+    """
+
+
+def _issue_feedback_key(issue) -> str:
+    # section は後段の章推定で補完されることがあるため、キーには含めない。
+    # ここに含めると初回表示と再描画後でフィードバックが別扱いになる。
+    raw = "|".join(
+        str(part or "")
+        for part in (
+            getattr(issue, "issue_id", ""),
+            getattr(issue, "source_document", ""),
+            getattr(issue, "title", ""),
+            getattr(issue, "issue", ""),
+            getattr(issue, "recommendation", ""),
+        )
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _feedback_counts(review) -> dict[str, int]:
+    feedback = st.session_state.get("review_issue_feedback") or {}
+    keys = {_issue_feedback_key(issue) for issue in getattr(review, "issues", []) or []}
+    counts = {option: 0 for option in FEEDBACK_OPTIONS}
+    for key in keys:
+        value = feedback.get(key, "未評価")
+        counts[value if value in counts else "未評価"] += 1
+    counts["合計"] = len(keys)
+    counts["評価済み"] = counts["合計"] - counts["未評価"]
+    return counts
+
+
+def _render_issue_feedback_control(issue, scope: str = "main") -> None:
+    key = _issue_feedback_key(issue)
+    feedback = st.session_state.setdefault("review_issue_feedback", {})
+    notes = st.session_state.setdefault("review_issue_feedback_notes", {})
+    current = feedback.get(key, "未評価")
+    if current not in FEEDBACK_OPTIONS:
+        current = "未評価"
+    with st.expander("🧭 この指摘の精度を評価（メタレビュー用）", expanded=False):
+        choice = st.radio(
+            "この指摘は実務上どうでしたか？",
+            FEEDBACK_OPTIONS,
+            index=FEEDBACK_OPTIONS.index(current),
+            horizontal=True,
+            key=f"issue_feedback_{scope}_{key}",
+            help="この評価は外部送信されません。レビュー基準の調整候補を把握するためのセッション内メモです。",
+        )
+        feedback[key] = choice
+        if choice in {"言い過ぎ", "不要", "見落としあり"}:
+            notes[key] = st.text_area(
+                "補足メモ",
+                value=notes.get(key, ""),
+                key=f"issue_feedback_note_{scope}_{key}",
+                height=82,
+                placeholder="例: この観点は本資料のスコープ外 / 実際には別紙に記載あり / 逆に○○観点が不足",
+            )
+        st.session_state.review_issue_feedback = feedback
+        st.session_state.review_issue_feedback_notes = notes
+
+
+def _render_feedback_summary(review) -> None:
+    counts = _feedback_counts(review)
+    total = counts.get("合計", 0)
+    if total == 0:
+        st.info("まだ評価対象のレビュー指摘がありません。")
+        return
+    st.markdown(
+        f"""
+<div class="feedback-panel">
+  <b>レビュー品質フィードバック</b><br/>
+  評価済み {counts.get('評価済み', 0)} / {total} 件。
+  有効 {counts.get('有効', 0)} 件、言い過ぎ {counts.get('言い過ぎ', 0)} 件、
+  不要 {counts.get('不要', 0)} 件、見落としあり {counts.get('見落としあり', 0)} 件。
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+    if counts.get("言い過ぎ", 0) or counts.get("不要", 0):
+        st.caption("言い過ぎ・不要が増える観点は、次回のレビュー基準調整候補として扱います。")
+    if counts.get("見落としあり", 0):
+        st.caption("見落としありのメモは、ルーブリック追加候補として確認してください。")
+
+
+def _render_future_review_lens(report: FutureReviewReport, review) -> None:
+    feedback_counts = _feedback_counts(review)
+    high_or_medium_reader = sum(
+        1 for item in report.reader_risks if item.risk_level in {"high", "medium"}
+    )
+    st.markdown(
+        f"""
+<section class="future-lens">
+  <div class="future-lens-head">
+    <div>
+      <div class="future-lens-kicker">Future Review Lens</div>
+      <div class="future-lens-title">先読みレビュー</div>
+      <div class="future-lens-copy">
+        通常レビュー結果を補助するローカル解析です。曖昧表現、読み手別の誤読リスク、
+        将来障害の予兆、レビュー指摘そのものの品質を確認します。
+      </div>
+    </div>
+    <div class="future-lens-metrics">
+      <span class="future-pill">未確定表現 {report.ambiguous_count}</span>
+      <span class="future-pill">読み手リスク {high_or_medium_reader}</span>
+      <span class="future-pill">未来障害候補 {len(report.premortem_scenarios)}</span>
+      <span class="future-pill">指摘評価 {feedback_counts.get('評価済み', 0)}/{feedback_counts.get('合計', 0)}</span>
+    </div>
+  </div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("1. 曖昧表現の未確定チェック", expanded=bool(report.ambiguous_findings)):
+        if not report.ambiguous_findings:
+            st.success("未確定のまま残っている典型的な曖昧表現は検出されませんでした。")
+        else:
+            cards = [
+                _future_card(
+                    title=f"{item.expression} · 不足: {', '.join(item.missing_elements)}",
+                    meta=f"{item.source_document} / {item.section} / {_future_tone_label(item.severity)}",
+                    body=item.context or "該当表現の周辺文脈を抽出できませんでした。",
+                    action=item.recommendation,
+                    tone=item.severity,
+                )
+                for item in report.ambiguous_findings
+            ]
+            st.markdown(
+                f"<div class='future-card-grid'>{''.join(cards)}</div>",
+                unsafe_allow_html=True,
+            )
+    with st.expander("2. 読み手別の誤読リスクマップ", expanded=True):
+        cards = [
+            _future_card(
+                title=f"{item.persona}: {_future_tone_label(item.risk_level)}",
+                meta=f"{item.source_document} / {item.section}",
+                body=item.reason + (f" シグナル: {', '.join(item.signals)}" if item.signals else ""),
+                action=item.recommendation,
+                tone=item.risk_level,
+            )
+            for item in report.reader_risks
+        ]
+        st.markdown(
+            f"<div class='future-card-grid'>{''.join(cards)}</div>",
+            unsafe_allow_html=True,
+        )
+    with st.expander("3. 未来障害プレモーテム（ローカル予兆）", expanded=bool(report.premortem_scenarios)):
+        st.caption(
+            "ここでは追加の外部LLM呼び出しは行いません。本文から不足を確認し、レビュー指摘は発火理由・ヒントとして分けて扱います。"
+        )
+        if not report.premortem_scenarios:
+            st.success("代表的な未来障害シナリオに直結する予兆は強く検出されませんでした。")
+        else:
+            cards = [_premortem_card(item) for item in report.premortem_scenarios]
+            st.markdown(
+                f"<div class='future-card-grid'>{''.join(cards)}</div>",
+                unsafe_allow_html=True,
+            )
+    with st.expander("4. メタレビュー（指摘そのものを評価）", expanded=False):
+        _render_feedback_summary(review)
+        st.caption(
+            "各レビュー指摘の下にある「この指摘の精度を評価」から、有効・言い過ぎ・不要・見落としありを選べます。"
+            "この結果は、上司・管理者テスト後にレビュー基準を調整するための材料になります。"
+        )
+
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
 #
@@ -3585,6 +3897,8 @@ if preview_clicked:
         "anonymization_details_visible",
         "anonymization_details_expand_once",
         "review_result",
+        "review_issue_feedback",
+        "review_issue_feedback_notes",
     ):
         st.session_state.pop(key, None)
 
@@ -4193,6 +4507,8 @@ if preview_docs:
             review_progress.progress(100, text="レビューが完了しました。")
 
             st.session_state.review_result = review
+            st.session_state.pop("review_issue_feedback", None)
+            st.session_state.pop("review_issue_feedback_notes", None)
             st.session_state.review_in_progress = False
             _operation_assist_slot.empty()
             with _operation_assist_slot.container():
@@ -4410,6 +4726,11 @@ if review is not None:
         _structure_result_for_review,
     )
     _render_remediation_plan(_remediation_plan)
+    _future_report = build_future_review_report(
+        _preview_docs_for_structure,
+        review,
+    )
+    _render_future_review_lens(_future_report, review)
     _render_review_log_export_panel()
     _render_deep_dive_candidate_summary(_deep_dive_candidates)
 
@@ -4831,6 +5152,7 @@ if review is not None:
                         f"</div>",
                         unsafe_allow_html=True,
                     )
+                _render_issue_feedback_control(issue)
 
             # Phase 7 (2026-05-08): この文書のチェック項目評価表示。
             # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。

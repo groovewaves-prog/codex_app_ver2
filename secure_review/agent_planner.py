@@ -35,6 +35,21 @@ class OperationGuide:
     checklist: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class DisplayPolicy:
+    tone: str
+    headline: str
+    primary_action: str
+    reason: str
+    show_now: tuple[str, ...]
+    keep_collapsed: tuple[str, ...]
+    developer_only: tuple[str, ...] = ()
+    expand_quality_hints: bool = False
+    show_document_details: bool = False
+    expand_structure_details: bool = False
+    expand_deep_candidates: bool = False
+
+
 def build_operation_guide(
     *,
     upload_count: int,
@@ -58,14 +73,14 @@ def build_operation_guide(
             tone="success",
             step_label="ステップ 4 / レビュー結果確認",
             headline="レビュー結果を確認できます",
-            primary_action="文書構成チェック、概要レビュー、章別レビュー、深堀候補の順に確認してください。",
-            reason="全体から詳細へ読むと、重要不足と章別指摘の整合性を確認しやすくなります。",
-            done_when="対応すべき指摘、保留する指摘、追加確認する指摘を整理できた状態です。",
-            watch_out="深堀はトークンを消費します。まず深堀候補章を優先してください。",
+            primary_action="まず修正計画カードを確認してください。詳細ログや品質改善ヒントは必要なときだけ開けば十分です。",
+            reason="レビュー指摘と構成不足は修正計画へ集約済みです。重複情報を順番に読むより、次に直す内容から確認する方が迷いません。",
+            done_when="修正担当に渡す項目、追記する文章案、再レビュー条件を把握できた状態です。",
+            watch_out="深堀や詳細表示は補助情報です。通常は赤いカード、黄色いカード、追記テンプレートの順に確認してください。",
             checklist=(
-                "高重要度の指摘を先に確認",
-                "構成不足と章別レビューの矛盾がないか確認",
-                "必要ならレビュー証跡(JSON)を保存",
+                "修正計画カードを確認",
+                "必要なら追記テンプレートを開く",
+                "次回比較したい場合だけJSONを保存",
             ),
         )
 
@@ -197,6 +212,85 @@ def build_operation_guide(
             "LLMプロバイダ設定を確認",
             "レビュー完了後に結果を確認",
         ),
+    )
+
+
+def build_review_display_policy(
+    *,
+    remediation_count: int,
+    high_count: int,
+    medium_count: int,
+    structure_finding_count: int,
+    future_hint_count: int,
+    deep_candidate_count: int,
+    previous_plan_loaded: bool = False,
+    developer_mode: bool = False,
+) -> DisplayPolicy:
+    """Decide how much review information to surface for the current state.
+
+    This is a deterministic local policy, not an external LLM call.  It keeps
+    the UI agent-like while avoiding extra token usage or hidden data transfer.
+    """
+    base_show = ("修正計画カード", "追記テンプレート", "再レビュー条件")
+    json_label = "今回レビュー結果JSON" if not previous_plan_loaded else "今回JSONと前回比較結果"
+    base_collapsed = [
+        "品質改善ヒント",
+        "文書別の元指摘",
+        "証跡・エクスポート",
+    ]
+    if structure_finding_count:
+        base_collapsed.append("文書構成チェック詳細")
+    if deep_candidate_count:
+        base_collapsed.append("章別深堀候補")
+
+    developer_only = (
+        ("メタレビュー", "プロンプトプレビュー", "LLM生レスポンス")
+        if developer_mode else ()
+    )
+
+    if high_count > 0:
+        return DisplayPolicy(
+            tone="block",
+            headline="AI判断: まず高重要度の修正計画に集中してください",
+            primary_action="赤い修正計画カードから確認し、担当者・追記内容・再レビュー条件を決めてください。",
+            reason="高重要度の指摘があるため、章別詳細や品質改善ヒントを先に読むと判断が散らばります。",
+            show_now=(*base_show, json_label),
+            keep_collapsed=tuple(base_collapsed),
+            developer_only=developer_only,
+        )
+
+    if remediation_count > 0 or medium_count > 0:
+        return DisplayPolicy(
+            tone="warn",
+            headline="AI判断: 修正計画だけ見れば次の作業に進めます",
+            primary_action="黄色いカードを確認し、必要な追記だけ文書へ反映してください。",
+            reason="元レビュー指摘は修正計画に集約済みです。通常は詳細ログを開かなくても対応できます。",
+            show_now=(*base_show, json_label),
+            keep_collapsed=tuple(base_collapsed),
+            developer_only=developer_only,
+        )
+
+    if future_hint_count > 0 or deep_candidate_count > 0:
+        return DisplayPolicy(
+            tone="info",
+            headline="AI判断: 大きな修正は少なく、品質改善ヒントが中心です",
+            primary_action="必要に応じて品質改善ヒントを開き、曖昧表現や読み手リスクだけ確認してください。",
+            reason="重大な修正計画が少ないため、本文品質を上げる補助情報の確認が有効です。",
+            show_now=("レビュー結果サマリ", json_label),
+            keep_collapsed=tuple(item for item in base_collapsed if item != "品質改善ヒント"),
+            developer_only=developer_only,
+            expand_quality_hints=True,
+            expand_deep_candidates=bool(deep_candidate_count and remediation_count == 0),
+        )
+
+    return DisplayPolicy(
+        tone="success",
+        headline="AI判断: 追加確認は最小限で十分です",
+        primary_action="必要なら今回レビュー結果JSONだけ保存し、レビューを完了してください。",
+        reason="高重要度・中重要度の修正計画や強い品質改善ヒントは目立っていません。",
+        show_now=("レビュー結果サマリ", json_label),
+        keep_collapsed=tuple(base_collapsed),
+        developer_only=developer_only,
     )
 
 

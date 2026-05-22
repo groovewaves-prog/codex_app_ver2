@@ -30,9 +30,11 @@ import streamlit as st
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
 from secure_review.agent_planner import (
     AgentBrief,
+    DisplayPolicy,
     OperationGuide,
     build_operation_guide,
     build_review_agent_brief,
+    build_review_display_policy,
 )
 from secure_review.env_loader import load_dotenv
 from secure_review.models import (
@@ -2140,6 +2142,47 @@ def _render_operation_assist(guide: OperationGuide) -> None:
     )
 
 
+def _render_display_policy_assist(policy: DisplayPolicy) -> None:
+    show_html = "".join(
+        f"<div class='assist-check'>{html.escape(item)}</div>"
+        for item in policy.show_now
+    )
+    collapsed_html = "".join(
+        f"<div class='assist-check'>{html.escape(item)}</div>"
+        for item in policy.keep_collapsed
+    ) or "<div class='assist-check'>必要時に開く詳細はありません</div>"
+    developer_html = ""
+    if policy.developer_only:
+        developer_items = " / ".join(policy.developer_only)
+        developer_html = (
+            "<div class='assist-note'><b>開発者モード:</b> "
+            f"{html.escape(developer_items)} は開発者モード時だけ表示します。</div>"
+        )
+    st.markdown(
+        f"""
+<section class="operation-assist {html.escape(policy.tone)}">
+  <div class="assist-kicker">AI Display Director</div>
+  <div class="assist-layout">
+    <div>
+      <div class="assist-title">{html.escape(policy.headline)}</div>
+      <div class="assist-step">表示量を自動調整中</div>
+      <div class="assist-action"><b>次にすること:</b> {html.escape(policy.primary_action)}</div>
+      <div class="assist-note"><b>判断理由:</b> {html.escape(policy.reason)}</div>
+      {developer_html}
+    </div>
+    <div class="assist-checklist">
+      <div class="assist-checklist-title">今見るもの</div>
+      {show_html}
+      <div class="assist-checklist-title" style="margin-top:0.75rem;">必要なときだけ開くもの</div>
+      {collapsed_html}
+    </div>
+  </div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _render_step_header(step: int, title: str, description: str) -> None:
     st.markdown(
         f"""
@@ -2931,7 +2974,7 @@ def _render_review_result_dashboard(
     _render_next_action_card(
         NextAction(
             action,
-            "文書別表示は、文書順または対応優先順に並べ替えて確認できます。",
+            "通常は下の修正計画カードを見れば十分です。章別詳細や元指摘は必要なときだけ開いてください。",
             tone,
         )
     )
@@ -3053,8 +3096,22 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
                 _render_compact_field("修正方針", item.fix_policy)
                 _render_compact_field("再レビュー条件", item.re_review_condition)
                 st.code(item.template, language="markdown")
+
+    st.download_button(
+        "💾 今回レビュー結果JSONを保存（次回比較用）",
+        data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+        file_name="remediation_plan.json",
+        mime="application/json",
+        width='stretch',
+    )
+    st.caption(
+        "修正後の文書と今回の指摘を比較したい場合だけ保存してください。"
+        "通常の作業は、上の修正計画カードと追記テンプレートを見れば進められます。"
+    )
+
+    if plan.items:
         review_issue_items = [item for item in plan.items if item.source_type == "review_issue"]
-        if review_issue_items:
+        if st.session_state.get("developer_mode", False) and review_issue_items:
             with st.expander("🔎 元のレビュー指摘を確認（監査・照合用）", expanded=False):
                 st.caption(
                     "上の修正計画カードへ変換する前の指摘情報です。通常は修正計画カードを見れば足りますが、"
@@ -3065,24 +3122,6 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
                     _render_compact_field("対象", f"{item.target_document} / {item.target_section}")
                     _render_compact_field("前回または今回の問題", item.problem)
                     _render_compact_field("推奨対応", item.fix_policy)
-        if st.session_state.get("enable_previous_remediation_review"):
-            has_previous_plan = bool(st.session_state.get("previous_remediation_plan"))
-            download_label = (
-                "🧭 今回の修正計画JSONを保存（任意・次回比較用）"
-                if has_previous_plan
-                else "🧭 修正計画JSONを保存（任意・次回比較用）"
-            )
-            st.download_button(
-                download_label,
-                data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
-                file_name="remediation_plan.json",
-                mime="application/json",
-                width='stretch',
-            )
-            st.caption(
-                "この JSON は次回、修正文書と一緒に読み込ませて改善状況を照合するための台帳です。"
-                "通常レビューでは不要です。人に渡す作業依頼書ではなく、再レビュー比較を続けるための入力データとして扱ってください。"
-            )
 
 
 def _render_review_log_export_panel() -> None:
@@ -3351,85 +3390,110 @@ def _render_feedback_summary(review) -> None:
         st.caption("見落としありのメモは、ルーブリック追加候補として確認してください。")
 
 
-def _render_future_review_lens(report: FutureReviewReport, review) -> None:
-    feedback_counts = _feedback_counts(review)
+def _render_future_review_lens(
+    report: FutureReviewReport,
+    review,
+    *,
+    expanded: bool = False,
+) -> None:
+    show_meta_review = bool(st.session_state.get("developer_mode", False))
+    feedback_counts = _feedback_counts(review) if show_meta_review else {}
     high_or_medium_reader = sum(
         1 for item in report.reader_risks if item.risk_level in {"high", "medium"}
     )
-    st.markdown(
-        f"""
+    metric_html = "".join(
+        (
+            f'<span class="future-pill">未確定表現 {report.ambiguous_count}</span>',
+            f'<span class="future-pill">読み手リスク {high_or_medium_reader}</span>',
+            f'<span class="future-pill">未来障害候補 {len(report.premortem_scenarios)}</span>',
+            (
+                f'<span class="future-pill">指摘評価 '
+                f"{feedback_counts.get('評価済み', 0)}/{feedback_counts.get('合計', 0)}</span>"
+                if show_meta_review else ""
+            ),
+        )
+    )
+
+    with st.expander("💡 品質改善ヒント（必要なときだけ開く）", expanded=expanded):
+        st.markdown(
+            f"""
 <section class="future-lens">
   <div class="future-lens-head">
     <div>
       <div class="future-lens-kicker">Future Review Lens</div>
       <div class="future-lens-title">先読みレビュー</div>
       <div class="future-lens-copy">
-        通常レビュー結果を補助するローカル解析です。曖昧表現、読み手別の誤読リスク、
-        将来障害の予兆、レビュー指摘そのものの品質を確認します。
+        修正計画に載せるほどではないものの、文書の質を上げるヒントです。
+        必要なときだけ開いて確認してください。
       </div>
     </div>
     <div class="future-lens-metrics">
-      <span class="future-pill">未確定表現 {report.ambiguous_count}</span>
-      <span class="future-pill">読み手リスク {high_or_medium_reader}</span>
-      <span class="future-pill">未来障害候補 {len(report.premortem_scenarios)}</span>
-      <span class="future-pill">指摘評価 {feedback_counts.get('評価済み', 0)}/{feedback_counts.get('合計', 0)}</span>
+      {metric_html}
     </div>
   </div>
 </section>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.expander("1. 曖昧表現の未確定チェック", expanded=bool(report.ambiguous_findings)):
-        if not report.ambiguous_findings:
-            st.success("未確定のまま残っている典型的な曖昧表現は検出されませんでした。")
-        else:
+            """,
+            unsafe_allow_html=True,
+        )
+        tab_labels = ["曖昧表現", "読み手リスク", "未来障害"]
+        if show_meta_review:
+            tab_labels.append("メタレビュー")
+        tabs = st.tabs(tab_labels)
+
+        with tabs[0]:
+            if not report.ambiguous_findings:
+                st.success("未確定のまま残っている典型的な曖昧表現は検出されませんでした。")
+            else:
+                cards = [
+                    _future_card(
+                        title=f"{item.expression} · 不足: {', '.join(item.missing_elements)}",
+                        meta=f"{item.source_document} / {item.section} / {_future_tone_label(item.severity)}",
+                        body=item.context or "該当表現の周辺文脈を抽出できませんでした。",
+                        action=item.recommendation,
+                        tone=item.severity,
+                    )
+                    for item in report.ambiguous_findings
+                ]
+                st.markdown(
+                    f"<div class='future-card-grid'>{''.join(cards)}</div>",
+                    unsafe_allow_html=True,
+                )
+
+        with tabs[1]:
             cards = [
                 _future_card(
-                    title=f"{item.expression} · 不足: {', '.join(item.missing_elements)}",
-                    meta=f"{item.source_document} / {item.section} / {_future_tone_label(item.severity)}",
-                    body=item.context or "該当表現の周辺文脈を抽出できませんでした。",
+                    title=f"{item.persona}: {_future_tone_label(item.risk_level)}",
+                    meta=f"{item.source_document} / {item.section}",
+                    body=item.reason + (f" シグナル: {', '.join(item.signals)}" if item.signals else ""),
                     action=item.recommendation,
-                    tone=item.severity,
+                    tone=item.risk_level,
                 )
-                for item in report.ambiguous_findings
+                for item in report.reader_risks
             ]
             st.markdown(
                 f"<div class='future-card-grid'>{''.join(cards)}</div>",
                 unsafe_allow_html=True,
             )
-    with st.expander("2. 読み手別の誤読リスクマップ", expanded=True):
-        cards = [
-            _future_card(
-                title=f"{item.persona}: {_future_tone_label(item.risk_level)}",
-                meta=f"{item.source_document} / {item.section}",
-                body=item.reason + (f" シグナル: {', '.join(item.signals)}" if item.signals else ""),
-                action=item.recommendation,
-                tone=item.risk_level,
+
+        with tabs[2]:
+            st.caption(
+                "ここでは追加の外部LLM呼び出しは行いません。本文から不足を確認し、レビュー指摘は発火理由・ヒントとして分けて扱います。"
             )
-            for item in report.reader_risks
-        ]
-        st.markdown(
-            f"<div class='future-card-grid'>{''.join(cards)}</div>",
-            unsafe_allow_html=True,
-        )
-    with st.expander("3. 未来障害プレモーテム（ローカル予兆）", expanded=bool(report.premortem_scenarios)):
-        st.caption(
-            "ここでは追加の外部LLM呼び出しは行いません。本文から不足を確認し、レビュー指摘は発火理由・ヒントとして分けて扱います。"
-        )
-        if not report.premortem_scenarios:
-            st.success("代表的な未来障害シナリオに直結する予兆は強く検出されませんでした。")
-        else:
-            cards = [_premortem_card(item) for item in report.premortem_scenarios]
-            st.markdown(
-                f"<div class='future-card-grid'>{''.join(cards)}</div>",
-                unsafe_allow_html=True,
-            )
-    with st.expander("4. メタレビュー（指摘そのものを評価）", expanded=False):
-        _render_feedback_summary(review)
-        st.caption(
-            "各レビュー指摘の下にある「この指摘の精度を評価」から、有効・言い過ぎ・不要・見落としありを選べます。"
-            "この結果は、上司・管理者テスト後にレビュー基準を調整するための材料になります。"
-        )
+            if not report.premortem_scenarios:
+                st.success("代表的な未来障害シナリオに直結する予兆は強く検出されませんでした。")
+            else:
+                cards = [_premortem_card(item) for item in report.premortem_scenarios]
+                st.markdown(
+                    f"<div class='future-card-grid'>{''.join(cards)}</div>",
+                    unsafe_allow_html=True,
+                )
+
+        if show_meta_review:
+            with tabs[3]:
+                _render_feedback_summary(review)
+                st.caption(
+                    "開発者モードでのみ表示されます。指摘の有効性を記録し、レビュー基準の調整材料にします。"
+                )
 
 # ----------------------------------------------------------------------
 # R-M (PR-D2) helpers: NER + 法人名検索によるカスタムマスク辞書統合。
@@ -3669,6 +3733,24 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
+    if st.button("新しいレビューを始める", width='stretch', type="secondary"):
+        _reset_state()
+        # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、視覚的にも空にする。
+        old_key = st.session_state.get("uploader_key")
+        if old_key:
+            st.session_state.pop(old_key, None)
+        st.session_state.uploader_key = f"uploads_{uuid.uuid4().hex[:8]}"
+        st.rerun()
+
+    st.markdown(
+        """
+<div class="sidebar-memory-card">
+  新しい文書をレビューするときは、ここから現在のアップロード・匿名化結果・レビュー結果をクリアします。
+  アップロード文書はサーバ上に保存されず、本セッション中のメモリ上のみで処理されます。
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
     provider = os.getenv("REVIEW_PROVIDER", "mock")
@@ -3720,26 +3802,6 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown('<div class="sidebar-section-label">Session</div>', unsafe_allow_html=True)
-    if st.button("セッションをリセット", width='stretch'):
-        _reset_state()
-        # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、
-        # 新しい key を発行することで、file_uploader を視覚的にも空にする。
-        old_key = st.session_state.get("uploader_key")
-        if old_key:
-            st.session_state.pop(old_key, None)
-        st.session_state.uploader_key = f"uploads_{uuid.uuid4().hex[:8]}"
-        st.rerun()
-
-    st.markdown(
-        """
-<div class="sidebar-memory-card">
-  アップロードされた文書はサーバ上に保存されません。
-  本セッション中のメモリ上のみで処理されます。
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
 
     st.markdown("---")
     with st.expander("⚙️ 詳細設定（必要なときだけ開く）", expanded=False):
@@ -3921,7 +3983,7 @@ if preview_clicked:
             f"⚠️ **重複アップロード検出 ({len(duplicates)} 件)**\n\n"
             f"{dup_lines}\n\n"
             "重複ファイルを × で削除してから再度「匿名化してプレビュー」を押してください。"
-            " (「セッションをリセット」で全ファイル一括クリアも可能)"
+            " (「新しいレビューを始める」で全ファイル一括クリアも可能)"
         )
         st.stop()  # 以降の preview 処理を中断
 
@@ -4703,12 +4765,15 @@ if review is not None:
 
     _preview_docs_for_structure = st.session_state.get("preview_docs") or []
     _structure_result_for_review = None
+    _structure_findings_count = 0
     if _preview_docs_for_structure:
         _structure_result_for_review = build_structure_check_result(
             _preview_docs_for_structure,
             review.document_profile or "",
         )
-        _render_document_structure_check(_structure_result_for_review)
+        _structure_findings_count = len(
+            getattr(_structure_result_for_review, "findings", ()) or ()
+        )
 
     _deep_dive_candidates = _collect_deep_dive_candidates(
         review,
@@ -4725,33 +4790,51 @@ if review is not None:
         review,
         _structure_result_for_review,
     )
-    _render_remediation_plan(_remediation_plan)
     _future_report = build_future_review_report(
         _preview_docs_for_structure,
         review,
     )
-    _render_future_review_lens(_future_report, review)
+    _remediation_high_count = sum(
+        1 for item in _remediation_plan.items if item.severity == "high"
+    )
+    _remediation_medium_count = sum(
+        1 for item in _remediation_plan.items if item.severity == "medium"
+    )
+    _future_hint_count = (
+        _future_report.ambiguous_count
+        + _future_report.high_reader_risk_count
+        + len(_future_report.premortem_scenarios)
+    )
+    _display_policy = build_review_display_policy(
+        remediation_count=len(_remediation_plan.items),
+        high_count=_remediation_high_count,
+        medium_count=_remediation_medium_count,
+        structure_finding_count=_structure_findings_count,
+        future_hint_count=_future_hint_count,
+        deep_candidate_count=len(_deep_dive_candidates),
+        previous_plan_loaded=bool(st.session_state.get("previous_remediation_plan")),
+        developer_mode=bool(st.session_state.get("developer_mode", False)),
+    )
+    _render_display_policy_assist(_display_policy)
+    _render_remediation_plan(_remediation_plan)
+    if _structure_findings_count:
+        with st.expander(
+            f"📐 文書構成チェック詳細 ({_structure_findings_count}件・必要なときだけ開く)",
+            expanded=_display_policy.expand_structure_details,
+        ):
+            _render_document_structure_check(_structure_result_for_review)
+    _render_future_review_lens(
+        _future_report,
+        review,
+        expanded=_display_policy.expand_quality_hints,
+    )
     _render_review_log_export_panel()
-    _render_deep_dive_candidate_summary(_deep_dive_candidates)
-
-    st.markdown("### 文書全体の概要")
-    _summary_struct = review.summary_structured
-    with st.container(border=True):
-        if not _summary_struct.is_empty():
-            if _summary_struct.purpose:
-                _render_compact_field("目的", _summary_struct.purpose)
-            if _summary_struct.content_outline:
-                _render_compact_field("内容要約", _summary_struct.content_outline)
-            if _summary_struct.overall_evaluation:
-                _render_compact_field("全体評価", _summary_struct.overall_evaluation)
-            if _summary_struct.verdict:
-                st.markdown(f"**総合判定**: {_verdict_badge(_summary_struct.verdict)}", unsafe_allow_html=True)
-        elif review.summary:
-            _render_compact_field("サマリ", review.summary)
-        else:
-            st.info("LLM から文書全体の概要は返りませんでした。レビュー証跡の生レスポンスを確認してください。")
-
-    st.markdown("---")
+    if _deep_dive_candidates:
+        with st.expander(
+            "🔬 章別深堀候補（必要なときだけ開く）",
+            expanded=_display_policy.expand_deep_candidates,
+        ):
+            _render_deep_dive_candidate_summary(_deep_dive_candidates)
 
     severity_order = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
@@ -4775,44 +4858,15 @@ if review is not None:
         if _n not in _ordered_doc_names:
             _ordered_doc_names.append(_n)
 
-    _review_display_mode = st.radio(
-        "文書別レビューの並び順",
-        ["文書順で見る", "対応優先順で見る"],
-        horizontal=True,
-        key="review_result_display_mode",
-        help="指摘そのものは上の修正計画に集約しています。ここでは文書別表示の並び順だけを切り替えます。",
+    _show_doc_details = st.toggle(
+        "🗂 文書別の詳細確認（章別概要・元指摘・深堀り）",
+        value=_display_policy.show_document_details,
+        key="show_document_detail_sections",
+        help="修正計画カードで足りる場合は開く必要はありません。章別概要や元指摘を確認したい場合だけオンにします。",
     )
-    if _review_display_mode == "対応優先順で見る":
-        def _doc_priority(name: str) -> tuple[int, str]:
-            doc_issues = issues_by_doc.get(name, [])
-            if not doc_issues:
-                return (99, name)
-            return (
-                min(severity_order.get(getattr(issue, "severity", ""), 9) for issue in doc_issues),
-                name,
-            )
-
-        _ordered_doc_names = sorted(_ordered_doc_names, key=_doc_priority)
-        st.caption("下の文書別表示は、対応優先度が高い文書から並べ替えています。指摘の詳細は修正計画カード内で確認できます。")
-
-    # PR-J: 4 件以上の指摘がある場合、ステップ 4 の指摘リストを高さ 800px の
-    # スクロール可能コンテナで包む。複数文書の総合レビューで指摘が 8-15 件
-    # 出る際に、画面が縦に長く伸びすぎる問題への対処。プロンプトプレビュー
-    # と生レスポンスはコンテナの外に置き、デバッグ時は通常通り展開できる。
-    _step4_use_scroll = len(review.issues) >= 4
-    _step4_height = (
-        _scroll_height_control(
-            "文書別レビュー結果の表示高さ",
-            key="step4_scroll_height",
-            default=800,
-            min_value=440,
-            max_value=1200,
-        )
-        if _step4_use_scroll else None
-    )
-    _step4_container = (
-        st.container(height=_step4_height) if _step4_use_scroll else st.container()
-    )
+    if not _show_doc_details:
+        _ordered_doc_names = []
+    _step4_container = st.container()
 
     # 深堀結果 (章キー -> [ReviewResult, ...]) を session_state から取得。
     _chapter_deep_results_all = st.session_state.get("chapter_deep_dive_results") or {}
@@ -4821,6 +4875,10 @@ if review is not None:
         st.info(_deep_dive_notice)
 
     with _step4_container:
+        if _show_doc_details:
+            st.caption(
+                "修正計画カードに集約する前の詳細です。章別概要、元のLLM指摘、深堀結果を確認したい場合だけ確認してください。"
+            )
         for _doc_name in _ordered_doc_names:
             # Q4 修正: issues_by_doc に存在しない文書 (= LLM 指摘なし) は空リスト
             _doc_issues = sorted(
@@ -5152,7 +5210,8 @@ if review is not None:
                         f"</div>",
                         unsafe_allow_html=True,
                     )
-                _render_issue_feedback_control(issue)
+                if st.session_state.get("developer_mode", False):
+                    _render_issue_feedback_control(issue)
 
             # Phase 7 (2026-05-08): この文書のチェック項目評価表示。
             # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。

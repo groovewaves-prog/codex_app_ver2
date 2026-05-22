@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import unittest
 
-from secure_review.agent_planner import build_operation_guide, build_review_agent_brief
+from secure_review.agent_planner import (
+    build_operation_guide,
+    build_review_agent_brief,
+    build_review_display_policy,
+)
 from secure_review.models import SanitizedDocument
 
 
@@ -84,6 +88,50 @@ class AgentPlannerTests(unittest.TestCase):
         )
         self.assertEqual(guide.step_label, "ステップ 3 / 最終承認")
         self.assertIn("最終承認", guide.primary_action)
+
+    def test_operation_guide_review_done_focuses_on_remediation_plan(self) -> None:
+        guide = build_operation_guide(
+            upload_count=1,
+            has_preview_docs=True,
+            blocked_count=0,
+            confirmation_count=0,
+            send_approved=True,
+            review_done=True,
+        )
+
+        self.assertEqual(guide.step_label, "ステップ 4 / レビュー結果確認")
+        self.assertIn("修正計画カード", guide.primary_action)
+        self.assertIn("必要なときだけ", guide.primary_action)
+
+    def test_display_policy_prioritizes_high_remediation_items(self) -> None:
+        policy = build_review_display_policy(
+            remediation_count=3,
+            high_count=2,
+            medium_count=1,
+            structure_finding_count=1,
+            future_hint_count=4,
+            deep_candidate_count=2,
+        )
+
+        self.assertEqual(policy.tone, "block")
+        self.assertIn("高重要度", policy.headline)
+        self.assertIn("修正計画カード", policy.show_now)
+        self.assertIn("品質改善ヒント", policy.keep_collapsed)
+        self.assertFalse(policy.expand_quality_hints)
+
+    def test_display_policy_expands_quality_hints_when_no_remediation(self) -> None:
+        policy = build_review_display_policy(
+            remediation_count=0,
+            high_count=0,
+            medium_count=0,
+            structure_finding_count=0,
+            future_hint_count=2,
+            deep_candidate_count=0,
+        )
+
+        self.assertEqual(policy.tone, "info")
+        self.assertTrue(policy.expand_quality_hints)
+        self.assertNotIn("品質改善ヒント", policy.keep_collapsed)
 
 
 if __name__ == "__main__":

@@ -94,8 +94,8 @@ def next_action_for_preview(
         )
     if review_done:
         return NextAction(
-            "次: 重要指摘と深堀候補を確認してください",
-            "レビュー結果は章順と重要度順で切り替えできます。必要な章だけ深堀してください。",
+            "次: 修正計画カードを確認してください",
+            "レビュー指摘と構成不足は修正計画へ集約済みです。詳細や品質改善ヒントは必要なときだけ開いてください。",
             "success",
         )
     if confirmation_count and not send_approved:

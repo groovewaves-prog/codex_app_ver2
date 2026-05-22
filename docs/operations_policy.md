@@ -116,7 +116,7 @@ Streamlit Cloud Secrets で以下が設定されている。
 
 UI が予期せず「安全」と判定した文書を表示した場合:
 
-1. **送信ボタンを押さない**。サイドバーからセッションをリセットする。
+1. **送信ボタンを押さない**。サイドバー上部の「新しいレビューを始める」を押す。
 2. 設定を確認する:
    - Streamlit Cloud Secrets の `REVIEW_PROVIDER` と `GEMMA_MODEL`。
    - `LOCAL_SANITIZER_API_URL` / `LOCAL_SENSITIVITY_API_URL` を設定している

@@ -1661,6 +1661,7 @@ def _reset_state() -> None:
         "review_result",
         "review_issue_feedback",
         "review_issue_feedback_notes",
+        "show_document_detail_sections",
         # R-M (PR-D2)
         "masking_states",
         "user_decisions",
@@ -2963,13 +2964,13 @@ def _render_review_result_dashboard(
     )
     tokens = sum(int(getattr(doc, "estimated_input_tokens", 0) or 0) for doc in preview_docs)
     if high_count or structure_high:
-        action = "次: 高重要度指摘と構成不足を先に確認してください"
+        action = "次: 修正計画カードの高重要度項目を確認してください"
         tone = "block"
     elif medium_count or deep_candidates:
-        action = "次: 深堀候補と中重要度指摘を確認してください"
+        action = "次: 修正計画カードと必要な追記テンプレートを確認してください"
         tone = "warn"
     else:
-        action = "次: 必要に応じて修正計画JSONまたはレビュー証跡を保存してください"
+        action = "次: 必要なら今回レビュー結果JSONを保存してください"
         tone = "success"
     _render_next_action_card(
         NextAction(
@@ -2981,15 +2982,15 @@ def _render_review_result_dashboard(
     total_high = high_count + structure_high
     if total_high:
         result_title = "高重要度の指摘を優先確認"
-        result_detail = "LLMレビュー指摘と文書構成チェックの重要不足を合算しています。赤い項目から対応してください。"
+        result_detail = "レビュー指摘と文書構成チェックは修正計画カードに集約しています。赤いカードから対応してください。"
         result_tone = "block"
     elif medium_count or deep_candidates:
         result_title = "確認候補があります"
-        result_detail = "中重要度指摘または深堀候補があります。章カード内の候補から追加確認できます。"
+        result_detail = "中重要度指摘や深堀候補は、修正計画カードと必要時の補助情報で確認できます。"
         result_tone = "warn"
     else:
         result_title = "レビュー結果は概ね良好です"
-        result_detail = "重大な指摘は検出されていません。必要に応じてレビュー証跡を保存してください。"
+        result_detail = "重大な指摘は検出されていません。次回比較が必要な場合だけJSONを保存してください。"
         result_tone = "safe"
     _render_insight_panel(
         kicker="Review Result",
@@ -4802,7 +4803,11 @@ if review is not None:
     )
     _future_hint_count = (
         _future_report.ambiguous_count
-        + _future_report.high_reader_risk_count
+        + sum(
+            1
+            for item in _future_report.reader_risks
+            if item.risk_level in {"high", "medium"}
+        )
         + len(_future_report.premortem_scenarios)
     )
     _display_policy = build_review_display_policy(

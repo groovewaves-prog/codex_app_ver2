@@ -2159,27 +2159,28 @@ def _render_display_policy_assist(policy: DisplayPolicy) -> None:
             "<div class='assist-note'><b>開発者モード:</b> "
             f"{html.escape(developer_items)} は開発者モード時だけ表示します。</div>"
         )
+    html_block = (
+        f"<section class='operation-assist {html.escape(policy.tone)}'>"
+        "<div class='assist-kicker'>AI Display Director</div>"
+        "<div class='assist-layout'>"
+        "<div>"
+        f"<div class='assist-title'>{html.escape(policy.headline)}</div>"
+        "<div class='assist-step'>表示量を自動調整中</div>"
+        f"<div class='assist-action'><b>次にすること:</b> {html.escape(policy.primary_action)}</div>"
+        f"<div class='assist-note'><b>判断理由:</b> {html.escape(policy.reason)}</div>"
+        f"{developer_html}"
+        "</div>"
+        "<div class='assist-checklist'>"
+        "<div class='assist-checklist-title'>今見るもの</div>"
+        f"{show_html}"
+        "<div class='assist-checklist-title' style='margin-top:0.75rem;'>必要なときだけ開くもの</div>"
+        f"{collapsed_html}"
+        "</div>"
+        "</div>"
+        "</section>"
+    )
     st.markdown(
-        f"""
-<section class="operation-assist {html.escape(policy.tone)}">
-  <div class="assist-kicker">AI Display Director</div>
-  <div class="assist-layout">
-    <div>
-      <div class="assist-title">{html.escape(policy.headline)}</div>
-      <div class="assist-step">表示量を自動調整中</div>
-      <div class="assist-action"><b>次にすること:</b> {html.escape(policy.primary_action)}</div>
-      <div class="assist-note"><b>判断理由:</b> {html.escape(policy.reason)}</div>
-      {developer_html}
-    </div>
-    <div class="assist-checklist">
-      <div class="assist-checklist-title">今見るもの</div>
-      {show_html}
-      <div class="assist-checklist-title" style="margin-top:0.75rem;">必要なときだけ開くもの</div>
-      {collapsed_html}
-    </div>
-  </div>
-</section>
-        """,
+        html_block,
         unsafe_allow_html=True,
     )
 

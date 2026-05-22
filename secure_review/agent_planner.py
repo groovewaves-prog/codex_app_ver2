@@ -251,9 +251,9 @@ def build_review_display_policy(
     if high_count > 0:
         return DisplayPolicy(
             tone="block",
-            headline="AI判断: まず高重要度の修正計画に集中してください",
-            primary_action="赤い修正計画カードから確認し、担当者・追記内容・再レビュー条件を決めてください。",
-            reason="高重要度の指摘があるため、章別詳細や品質改善ヒントを先に読むと判断が散らばります。",
+            headline="AI判断: 先に対応すべき指摘があります",
+            primary_action="赤い修正計画カードを確認し、誰が・何を追記するか・再レビュー条件を決めてください。",
+            reason="影響が大きい指摘があります。詳細ログや品質改善ヒントより、先に修正が必要な項目を確認すると迷いにくくなります。",
             show_now=(*base_show, json_label),
             keep_collapsed=tuple(base_collapsed),
             developer_only=developer_only,

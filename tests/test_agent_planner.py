@@ -114,7 +114,7 @@ class AgentPlannerTests(unittest.TestCase):
         )
 
         self.assertEqual(policy.tone, "block")
-        self.assertIn("高重要度", policy.headline)
+        self.assertIn("先に対応", policy.headline)
         self.assertIn("修正計画カード", policy.show_now)
         self.assertIn("品質改善ヒント", policy.keep_collapsed)
         self.assertFalse(policy.expand_quality_hints)

@@ -32,7 +32,7 @@ https://codexappver2-qicnqzha2kbcadvj63j63e.streamlit.app/
 | 5 | 最終承認チェック後に「レビューに送信」が押せる | OK / NG |  |
 | 6 | ステータスがレビュー中からレビュー完了へ進む | OK / NG |  |
 | 7 | Review Result がカード表示される | OK / NG |  |
-| 8 | AI Display Director が「今見るもの」「必要なときだけ開くもの」を表示する | OK / NG |  |
+| 8 | AI Display Director が「今見るもの」「補助で見るもの」を表示する | OK / NG |  |
 | 9 | 文書全体の概要が表示される | OK / NG |  |
 | 10 | 文書別詳細トグルをオンにした場合、章別概要レビューが表示される | OK / NG |  |
 | 11 | 深堀候補章の深堀ボタンが期待どおり有効化される | OK / NG |  |

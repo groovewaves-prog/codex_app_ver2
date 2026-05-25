@@ -55,7 +55,8 @@ class AgentPlannerTests(unittest.TestCase):
 
         self.assertEqual(guide.step_label, "ステップ 4 / レビュー結果確認")
         self.assertIn("修正計画カード", guide.primary_action)
-        self.assertIn("必要なときだけ", guide.primary_action)
+        self.assertIn("監査・追加確認", guide.primary_action)
+        self.assertNotIn("必要なときだけ", guide.primary_action)
 
     def test_display_policy_prioritizes_high_remediation_items(self) -> None:
         policy = build_review_display_policy(
@@ -71,6 +72,8 @@ class AgentPlannerTests(unittest.TestCase):
         self.assertIn("先に対応", policy.headline)
         self.assertIn("修正計画カード", policy.show_now)
         self.assertIn("品質改善ヒント", policy.keep_collapsed)
+        self.assertIn("元のレビュー指摘", policy.keep_collapsed)
+        self.assertIn("証跡エクスポート", policy.keep_collapsed)
         self.assertFalse(policy.expand_quality_hints)
 
     def test_display_policy_expands_quality_hints_when_no_remediation(self) -> None:

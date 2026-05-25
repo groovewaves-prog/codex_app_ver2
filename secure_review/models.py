@@ -197,6 +197,7 @@ class ReviewIssue:
     impact: str = ""
     required_timing: str = ""
     re_review_required: bool = False
+    origin: str = "initial"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

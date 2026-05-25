@@ -22,6 +22,12 @@ Baseline commit: `eaf605a`.
 - 専用CSS `.next-action-card` を削除。
 - D-1 計画（次の一手案内の整理）は本ステップで完了。
 
+### D-2 step1 — add origin field to ReviewIssue and RemediationItem
+
+- 深堀指摘を修正計画へ合流する前段として、`ReviewIssue` と `RemediationItem` に `origin` フィールドを追加。
+- 既定値は `"initial"` とし、既存レビュー・旧形式の修正計画JSONは表示変更なしで読み込めるよう後方互換を維持。
+- `ReviewIssue.origin` を修正計画カードへ伝搬し、構成チェック由来の修正計画は `"initial"` として扱う。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

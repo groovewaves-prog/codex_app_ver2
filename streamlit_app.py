@@ -1997,7 +1997,7 @@ def _render_display_policy_assist(policy: DisplayPolicy) -> None:
         "<div class='assist-checklist'>"
         "<div class='assist-checklist-title'>今見るもの</div>"
         f"{show_html}"
-        "<div class='assist-checklist-title' style='margin-top:0.75rem;'>必要なときだけ開くもの</div>"
+        "<div class='assist-checklist-title' style='margin-top:0.75rem;'>補助で見るもの</div>"
         f"{collapsed_html}"
         "</div>"
         "</div>"
@@ -3027,7 +3027,7 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
     if plan.items:
         review_issue_items = [item for item in plan.items if item.source_type == "review_issue"]
         if st.session_state.get("developer_mode", False) and review_issue_items:
-            with st.expander("🔎 元のレビュー指摘を確認（監査・照合用）", expanded=False):
+            with st.expander("🔎 元のレビュー指摘 — LLM の生指摘を監査・照合したいときに開く", expanded=False):
                 st.caption(
                     "上の修正計画カードへ変換する前の指摘情報です。通常は修正計画カードを見れば足りますが、"
                     "根拠確認やレビュー会議での説明に使えます。"
@@ -3040,7 +3040,7 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
 
 
 def _render_review_log_export_panel() -> None:
-    with st.expander("📦 証跡・エクスポート（必要なときだけ開く）", expanded=False):
+    with st.expander("📦 証跡エクスポート — 監査ログを共有・保存するときに開く", expanded=False):
         st.markdown(
             """
 <div class="export-panel">
@@ -3329,7 +3329,7 @@ def _render_future_review_lens(
         )
     )
 
-    with st.expander("💡 品質改善ヒント（必要なときだけ開く）", expanded=expanded):
+    with st.expander("💡 品質改善ヒント — 修正計画だけでは満足できないときに開く", expanded=expanded):
         st.markdown(
             f"""
 <section class="future-lens">
@@ -3339,7 +3339,7 @@ def _render_future_review_lens(
       <div class="future-lens-title">先読みレビュー</div>
       <div class="future-lens-copy">
         修正計画に載せるほどではないものの、文書の質を上げるヒントです。
-        必要なときだけ開いて確認してください。
+        追加の改善余地を探したい場面で確認してください。
       </div>
     </div>
     <div class="future-lens-metrics">
@@ -3719,7 +3719,7 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("---")
-    with st.expander("⚙️ 詳細設定（必要なときだけ開く）", expanded=False):
+    with st.expander("⚙️ 詳細設定 — 辞書・R-M・開発者表示を切り替えるときに開く", expanded=False):
         st.caption(
             "通常操作では変更不要です。プロジェクト固有のマスク辞書、R-M、"
             "開発者向け表示を切り替える場合だけ使います。"
@@ -4269,7 +4269,7 @@ if preview_docs:
             st.session_state.pop("anonymization_details_expand_once", False)
         )
         with st.expander(
-            "匿名化後テキスト確認（必要なときだけ開く）",
+            "匿名化後テキスト確認 — 外部送信前の本文・置換を確認するときに開く",
             expanded=_expand_anonymization_details,
         ):
             _render_anonymization_detail_panel(
@@ -4722,7 +4722,7 @@ if review is not None:
     _render_remediation_plan(_remediation_plan)
     if _structure_findings_count:
         with st.expander(
-            f"📐 文書構成チェック詳細 ({_structure_findings_count}件・必要なときだけ開く)",
+            f"📐 文書構成チェック詳細 ({_structure_findings_count}件) — 章立て不足の根拠を確認するときに開く",
             expanded=_display_policy.expand_structure_details,
         ):
             _render_document_structure_check(_structure_result_for_review)
@@ -4734,7 +4734,7 @@ if review is not None:
     _render_review_log_export_panel()
     if _deep_dive_candidates:
         with st.expander(
-            "🔬 章別深堀候補（必要なときだけ開く）",
+            "🔬 章別深堀候補 — 特定章を追加レビューしたいときに開く",
             expanded=_display_policy.expand_deep_candidates,
         ):
             _render_deep_dive_candidate_summary(_deep_dive_candidates)
@@ -4762,7 +4762,7 @@ if review is not None:
             _ordered_doc_names.append(_n)
 
     _show_doc_details = st.toggle(
-        "🗂 文書別の詳細確認（章別概要・元指摘・深堀り）",
+        "🗂 文書別の詳細確認 — 修正計画では特定文書の状況が把握しきれないときに開く",
         value=_display_policy.show_document_details,
         key="show_document_detail_sections",
         help="修正計画カードで足りる場合は開く必要はありません。章別概要や元指摘を確認したい場合だけオンにします。",
@@ -4996,7 +4996,7 @@ if review is not None:
                                             f"""
 <div class="deep-dive-merged-note">
   📌 <b>章深堀で {_deep_issue_count} 件の追加指摘が修正計画に合流しました。</b><br/>
-  詳細は必要なときだけ開き、通常は上の修正計画カードから対応してください。
+  詳細は監査や経緯確認の場面で開き、通常は上の修正計画カードから対応してください。
 </div>
                                             """,
                                             unsafe_allow_html=True,

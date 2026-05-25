@@ -53,7 +53,7 @@ def build_operation_guide(
             tone="success",
             step_label="ステップ 4 / レビュー結果確認",
             headline="レビュー結果を確認できます",
-            primary_action="まず修正計画カードを確認してください。詳細ログや品質改善ヒントは必要なときだけ開けば十分です。",
+            primary_action="まず修正計画カードを確認してください。詳細ログや品質改善ヒントは、監査・追加確認を行う場面で開けば十分です。",
             reason="レビュー指摘と構成不足は修正計画へ集約済みです。重複情報を順番に読むより、次に直す内容から確認する方が迷いません。",
             done_when="修正担当に渡す項目、追記する文章案、再レビュー条件を把握できた状態です。",
             watch_out="深堀や詳細表示は補助情報です。通常は赤いカード、黄色いカード、追記テンプレートの順に確認してください。",
@@ -215,8 +215,8 @@ def build_review_display_policy(
     json_label = "今回レビュー結果JSON" if not previous_plan_loaded else "今回JSONと前回比較結果"
     base_collapsed = [
         "品質改善ヒント",
-        "文書別の元指摘",
-        "証跡・エクスポート",
+        "元のレビュー指摘",
+        "証跡エクスポート",
     ]
     if structure_finding_count:
         base_collapsed.append("文書構成チェック詳細")
@@ -254,7 +254,7 @@ def build_review_display_policy(
         return DisplayPolicy(
             tone="info",
             headline="AI判断: 大きな修正は少なく、品質改善ヒントが中心です",
-            primary_action="必要に応じて品質改善ヒントを開き、曖昧表現や読み手リスクだけ確認してください。",
+            primary_action="修正計画が少ない場合は品質改善ヒントを開き、曖昧表現や読み手リスクだけ確認してください。",
             reason="重大な修正計画が少ないため、本文品質を上げる補助情報の確認が有効です。",
             show_now=("レビュー結果サマリ", json_label),
             keep_collapsed=tuple(item for item in base_collapsed if item != "品質改善ヒント"),

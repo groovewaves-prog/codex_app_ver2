@@ -24,6 +24,7 @@ class RemediationItem:
     re_review_scope: str
     re_review_condition: str
     effort: str
+    origin: str = "initial"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -275,6 +276,7 @@ def _item_from_issue(issue: ReviewIssue) -> RemediationItem:
         re_review_scope=f"{issue.source_document or '対象文書'} / {target_section}",
         re_review_condition=re_review_condition,
         effort=_effort_for_severity(issue.severity),
+        origin=issue.origin or "initial",
     )
 
 
@@ -299,6 +301,7 @@ def _item_from_structure_finding(finding: StructureFinding) -> RemediationItem:
         re_review_scope=f"{finding.source_document or '文書全体'} / {target_section}",
         re_review_condition=_re_review_condition_for_structure(finding, target_section),
         effort=_effort_for_severity(finding.severity),
+        origin="initial",
     )
 
 
@@ -491,6 +494,7 @@ def _remediation_item_from_dict(data: dict[str, Any]) -> RemediationItem:
         re_review_scope=_coerce_text(data.get("re_review_scope")) or "対象文書 / 該当箇所",
         re_review_condition=_coerce_text(data.get("re_review_condition")) or "修正後に再レビューしてください。",
         effort=_coerce_text(data.get("effort")) or _effort_for_severity(_coerce_severity(data.get("severity"))),
+        origin=_coerce_text(data.get("origin")) or "initial",
     )
 
 

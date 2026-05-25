@@ -29,11 +29,9 @@ import streamlit as st
 
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
 from secure_review.agent_planner import (
-    AgentBrief,
     DisplayPolicy,
     OperationGuide,
     build_operation_guide,
-    build_review_agent_brief,
     build_review_display_policy,
 )
 from secure_review.env_loader import load_dotenv
@@ -1156,116 +1154,6 @@ div[data-testid="stExpander"] summary {
     color: var(--ink) !important;
 }
 
-.agent-command {
-    border: 1px solid rgba(8,119,96,0.22);
-    border-radius: 24px;
-    background:
-        linear-gradient(135deg, rgba(15, 42, 36, 0.96) 0%, rgba(5, 72, 63, 0.94) 48%, rgba(16, 89, 82, 0.92) 100%);
-    color: #f6fbf7;
-    padding: 1rem;
-    margin: 0.9rem 0 1rem;
-    box-shadow: 0 20px 52px rgba(11, 43, 37, 0.22);
-}
-.agent-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1.1fr) minmax(280px, 0.9fr);
-    gap: 1rem;
-    align-items: start;
-}
-.agent-kicker {
-    color: rgba(212, 240, 230, 0.78);
-    font-size: 0.72rem;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    font-weight: 800;
-}
-.agent-title {
-    font-size: 1.35rem;
-    font-weight: 900;
-    margin-top: 0.25rem;
-}
-.agent-mode {
-    display: inline-block;
-    margin-top: 0.45rem;
-    padding: 0.22rem 0.58rem;
-    border: 1px solid rgba(255,255,255,0.26);
-    border-radius: 999px;
-    background: rgba(255,255,255,0.10);
-    color: #dff8eb;
-    font-size: 0.78rem;
-    font-weight: 800;
-}
-.agent-text {
-    color: rgba(247, 252, 247, 0.86);
-    line-height: 1.58;
-    margin-top: 0.45rem;
-}
-.agent-next {
-    border: 1px solid rgba(255,255,255,0.22);
-    border-radius: 18px;
-    background: rgba(255,255,255,0.10);
-    padding: 0.75rem 0.85rem;
-}
-.agent-next b {
-    display: block;
-    color: #fbf4d0;
-    font-size: 0.82rem;
-    letter-spacing: 0.1em;
-}
-.agent-stage-grid {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0.55rem;
-    margin-top: 0.9rem;
-}
-.agent-stage {
-    border: 1px solid rgba(255,255,255,0.18);
-    border-radius: 16px;
-    background: rgba(255,255,255,0.08);
-    padding: 0.6rem 0.7rem;
-    min-height: 86px;
-}
-.agent-stage.done { border-color: rgba(116, 224, 165, 0.50); }
-.agent-stage.active { border-color: rgba(118, 217, 230, 0.65); box-shadow: inset 0 0 0 1px rgba(118,217,230,0.18); }
-.agent-stage.warn { border-color: rgba(255, 204, 107, 0.70); }
-.agent-stage.block { border-color: rgba(255, 139, 121, 0.78); }
-.agent-stage-label {
-    color: #ffffff;
-    font-weight: 900;
-    font-size: 0.86rem;
-}
-.agent-stage-state {
-    color: #dff8eb;
-    font-size: 0.78rem;
-    margin-top: 0.18rem;
-}
-.agent-stage-detail {
-    color: rgba(247, 252, 247, 0.70);
-    font-size: 0.75rem;
-    margin-top: 0.25rem;
-    line-height: 1.35;
-}
-.agent-monitor-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.42rem;
-    margin-top: 0.8rem;
-}
-.agent-monitor {
-    border: 1px solid rgba(255,255,255,0.18);
-    background: rgba(255,255,255,0.08);
-    color: rgba(247, 252, 247, 0.82);
-    padding: 0.26rem 0.52rem;
-    border-radius: 999px;
-    font-size: 0.76rem;
-}
-@media (max-width: 900px) {
-    .agent-head { grid-template-columns: 1fr; }
-    .agent-stage-grid { grid-template-columns: 1fr 1fr; }
-}
-@media (max-width: 560px) {
-    .agent-stage-grid { grid-template-columns: 1fr; }
-}
 @media (max-width: 900px) {
     .readiness-panel { grid-template-columns: 1fr; }
     .readiness-grid { grid-template-columns: 1fr; }
@@ -2071,49 +1959,6 @@ def _render_task_panel_for_state(
         _render_sticky_task_panel(action, active_status)
 
 
-def _render_review_agent_panel(brief: AgentBrief) -> None:
-    stage_html = []
-    for stage in brief.stages:
-        stage_html.append(
-            "<div class='agent-stage {tone}'>"
-            "<div class='agent-stage-label'>{label}</div>"
-            "<div class='agent-stage-state'>{state}</div>"
-            "<div class='agent-stage-detail'>{detail}</div>"
-            "</div>".format(
-                tone=html.escape(stage.tone),
-                label=html.escape(stage.label),
-                state=html.escape(stage.state),
-                detail=html.escape(stage.detail),
-            )
-        )
-    monitor_html = "".join(
-        f"<span class='agent-monitor'>{html.escape(item)}</span>"
-        for item in brief.monitors
-    )
-    st.markdown(
-        f"""
-<section class="agent-command">
-  <div class="agent-head">
-    <div>
-      <div class="agent-kicker">Review Command Agent</div>
-      <div class="agent-title">レビュー管制エージェント</div>
-      <span class="agent-mode">{html.escape(brief.mode)}</span>
-      <div class="agent-text">{html.escape(brief.mission)}</div>
-      <div class="agent-text">{html.escape(brief.risk_summary)}</div>
-    </div>
-    <div class="agent-next">
-      <b>次の一手</b>
-      <div class="agent-text">{html.escape(brief.next_action)}</div>
-    </div>
-  </div>
-  <div class="agent-stage-grid">{''.join(stage_html)}</div>
-  <div class="agent-monitor-row">{monitor_html}</div>
-</section>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def _render_operation_assist(guide: OperationGuide) -> None:
     checklist_html = "".join(
         f"<div class='assist-check'>{html.escape(item)}</div>"
@@ -2295,17 +2140,6 @@ def _render_review_bundle_overview(
         estimate = None
     summary = _build_anonymization_summary(preview_docs)
     estimate_status = estimate.status if estimate is not None else "unknown"
-    _render_review_agent_panel(
-        build_review_agent_brief(
-            preview_docs,
-            blocked_count=len(blocked_docs),
-            confirmation_count=len(confirmation_docs),
-            send_approved=send_approved,
-            token_status=estimate_status,
-            review_in_progress=bool(st.session_state.get("review_in_progress")),
-            review_done=st.session_state.get("review_result") is not None,
-        )
-    )
     tone, status_label, title, detail = _readiness_state(
         blocked_count=len(blocked_docs),
         confirmation_count=len(confirmation_docs),
@@ -3906,7 +3740,7 @@ st.markdown(
   <div class="hero-title">技術文書レビュー支援ツール</div>
   <div class="hero-subtitle">
     アップロード文書をローカルで匿名化し、業界標準に基づいて構成・品質・リスクをレビューします。
-    レビュー管制エージェントが、送信前の安全境界、トークン規模、次アクションを常時監視します。
+    操作アシストが、送信前の安全境界、トークン規模、次アクションを段階ごとに案内します。
   </div>
 </section>
     """,

@@ -2,6 +2,13 @@
 
 Baseline commit: `eaf605a`.
 
+### D-1 step1 — Review Command Agent removed
+
+- Step 2 に表示していた Review Command Agent / レビュー管制エージェントを削除し、レビュー前の次アクション案内を AI Operation Co-Pilot に一本化。
+- `build_review_agent_brief`、`AgentBrief` / `AgentStage`、専用CSS、専用テスト3件を削除。
+- レビュー後の表示調整は AI Display Director が担当する方針を維持。
+- Verification: `python -m unittest discover tests` passes with 314 tests. Before this cleanup, 317 tests passed; the difference is the removed Review Command Agent-only tests.
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

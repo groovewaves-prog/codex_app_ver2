@@ -40,6 +40,12 @@ Baseline commit: `eaf605a`.
 - 初回レビュー由来の item はバッジ非表示のままにし、通常カードの視覚ノイズを抑制。
 - 章別詳細内の深堀結果は、合流済み件数のサマリ行 + デフォルト閉の詳細 expander に縮退。
 
+### D-6 — replace generic expander labels with specific guidance
+
+- レビュー結果ページの expander / toggle ラベルから「必要なときだけ」系の汎用句を削除。
+- 「短い名前 — いつ・なぜ開くか」の形式に統一し、補助情報を開く判断理由をラベル上で明示。
+- AI Display Director の `keep_collapsed` 表示名も新ラベルの短い名前と同期。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

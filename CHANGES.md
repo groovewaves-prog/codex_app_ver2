@@ -28,6 +28,12 @@ Baseline commit: `eaf605a`.
 - 既定値は `"initial"` とし、既存レビュー・旧形式の修正計画JSONは表示変更なしで読み込めるよう後方互換を維持。
 - `ReviewIssue.origin` を修正計画カードへ伝搬し、構成チェック由来の修正計画は `"initial"` として扱う。
 
+### D-2 step2 — tag deep-dive issues and rebuild remediation plan
+
+- 章単位深堀で得た新規指摘に `origin="chapter_deep_dive"` を付与し、修正計画を再構築する流路を追加。
+- 旧 `deep_dive_results` に文書深堀結果が存在する場合は `origin="document_deep_dive"` として修正計画に合流できるようにした。
+- 修正計画JSONには、初回レビューと深堀由来の item が origin 別に保持される。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

@@ -23,6 +23,7 @@ import os
 import re
 import traceback
 import uuid
+from dataclasses import replace
 from pathlib import Path
 
 import streamlit as st
@@ -38,6 +39,7 @@ from secure_review.env_loader import load_dotenv
 from secure_review.models import (
     MaskingPipelineState,
     NerCandidate,
+    ReviewResult,
     SanitizedDocument,
     UploadedDocument,
 )
@@ -1515,6 +1517,8 @@ def _reset_state() -> None:
         "anonymization_details_visible",
         "anonymization_details_expand_once",
         "review_result",
+        "structure_result",
+        "remediation_plan",
         "review_issue_feedback",
         "review_issue_feedback_notes",
         "show_document_detail_sections",
@@ -2634,6 +2638,56 @@ def _render_review_issue(issue, severity_order: dict[str, int]) -> None:
         )
 
 
+def _tag_review_issues(review: ReviewResult, origin: str) -> ReviewResult:
+    for issue in getattr(review, "issues", []) or []:
+        issue.origin = origin
+    return review
+
+
+def _iter_review_results(value):
+    if not value:
+        return
+    if isinstance(value, dict):
+        iterable = value.values()
+    elif isinstance(value, (list, tuple)):
+        iterable = value
+    else:
+        iterable = (value,)
+    for entry in iterable:
+        if isinstance(entry, (list, tuple)):
+            for nested in _iter_review_results(entry):
+                yield nested
+        elif isinstance(entry, ReviewResult):
+            yield entry
+
+
+def _iter_session_deep_dive_reviews():
+    for deep_review in _iter_review_results(st.session_state.get("deep_dive_results")):
+        yield "document_deep_dive", deep_review
+    for deep_review in _iter_review_results(st.session_state.get("chapter_deep_dive_results")):
+        yield "chapter_deep_dive", deep_review
+
+
+def _review_with_deep_dive_issues(review: ReviewResult) -> ReviewResult:
+    combined_issues = list(getattr(review, "issues", []) or [])
+    for origin, deep_review in _iter_session_deep_dive_reviews():
+        _tag_review_issues(deep_review, origin)
+        combined_issues.extend(getattr(deep_review, "issues", []) or [])
+    return replace(review, issues=combined_issues)
+
+
+def _rebuild_remediation_plan_for_session(
+    review: ReviewResult,
+    structure_result: StructureCheckResult | None = None,
+) -> RemediationPlan:
+    plan = build_remediation_plan(
+        _review_with_deep_dive_issues(review),
+        structure_result,
+    )
+    st.session_state["remediation_plan"] = plan
+    return plan
+
+
 def _run_chapter_deep_dive(
     doc_name: str,
     chapter: ChapterSection,
@@ -2681,8 +2735,13 @@ def _run_chapter_deep_dive(
                 existing_issues=[*review.issues, *previous_issues],
                 chapter=chapter,
             )
+            _tag_review_issues(deep_review, "chapter_deep_dive")
         chapter_cache.setdefault(cache_key, []).append(deep_review)
         st.session_state.chapter_deep_dive_results = chapter_cache
+        _rebuild_remediation_plan_for_session(
+            review,
+            st.session_state.get("structure_result"),
+        )
         st.session_state.deep_dive_notice = (
             f"{chapter.chapter_label} の深堀りレビューを記録しました。"
         )
@@ -3758,6 +3817,8 @@ if preview_clicked:
         "anonymization_details_visible",
         "anonymization_details_expand_once",
         "review_result",
+        "structure_result",
+        "remediation_plan",
         "review_issue_feedback",
         "review_issue_feedback_notes",
     ):
@@ -4118,6 +4179,8 @@ if preview_docs:
                 st.session_state.preview_docs = preview_docs
 
             st.session_state.pop("review_result", None)
+            st.session_state.pop("structure_result", None)
+            st.session_state.pop("remediation_plan", None)
             st.session_state.pop("deep_dive_results", None)
             st.session_state.pop("chapter_deep_dive_results", None)
             st.session_state.pop("deep_dive_notice", None)
@@ -4278,6 +4341,11 @@ if preview_docs:
     # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
         st.session_state.review_in_progress = True
+        st.session_state.pop("structure_result", None)
+        st.session_state.pop("remediation_plan", None)
+        st.session_state.pop("deep_dive_results", None)
+        st.session_state.pop("chapter_deep_dive_results", None)
+        st.session_state.pop("deep_dive_notice", None)
         _render_workflow_top_panel(
             _operation_assist_slot,
             _status_bar_slot,
@@ -4541,6 +4609,7 @@ if review is not None:
             _preview_docs_for_structure,
             review.document_profile or "",
         )
+        st.session_state["structure_result"] = _structure_result_for_review
         _structure_findings_count = len(
             getattr(_structure_result_for_review, "findings", ()) or ()
         )
@@ -4556,7 +4625,7 @@ if review is not None:
         _structure_result_for_review,
         _deep_dive_candidates,
     )
-    _remediation_plan = build_remediation_plan(
+    _remediation_plan = _rebuild_remediation_plan_for_session(
         review,
         _structure_result_for_review,
     )

@@ -31,6 +31,27 @@ class RemediationPlanTests(unittest.TestCase):
         values.update(overrides)
         return RemediationItem(**values)
 
+    def _issue(self, **overrides) -> ReviewIssue:
+        values = {
+            "severity": "high",
+            "title": "DR設計の未定義",
+            "details": "RPO/RTOがない",
+            "recommendation": "RPO/RTOと切替手順を追記する。",
+            "source_document": "design.pdf",
+            "issue_id": "D-001",
+            "section": "第8章 可用性",
+        }
+        values.update(overrides)
+        return ReviewIssue(**values)
+
+    def _review_with_issues(self, *issues: ReviewIssue) -> ReviewResult:
+        return ReviewResult(
+            summary="summary",
+            issues=list(issues),
+            provider="mock",
+            prompt_preview="",
+        )
+
     def test_remediation_item_origin_defaults_to_initial(self) -> None:
         item = self._sample_item()
 
@@ -112,27 +133,87 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertEqual(plan.re_review_steps[0].label, "必須再レビュー")
 
     def test_review_issue_origin_propagates_to_remediation_item(self) -> None:
-        review = ReviewResult(
-            summary="summary",
-            issues=[
-                ReviewIssue(
-                    severity="high",
-                    title="DR設計の未定義",
-                    details="RPO/RTOがない",
-                    recommendation="RPO/RTOと切替手順を追記する。",
-                    source_document="design.pdf",
-                    issue_id="D-001",
-                    section="第8章 可用性",
-                    origin="document_deep_dive",
-                )
-            ],
-            provider="mock",
-            prompt_preview="",
+        review = self._review_with_issues(
+            self._issue(origin="document_deep_dive")
         )
 
         plan = build_remediation_plan(review)
 
         self.assertEqual(plan.items[0].origin, "document_deep_dive")
+
+    def test_initial_review_issues_build_initial_origin_items(self) -> None:
+        review = self._review_with_issues(
+            self._issue(issue_id="D-001"),
+            self._issue(
+                issue_id="D-002",
+                severity="medium",
+                title="運用体制の未整理",
+                section="第10章 運用",
+            ),
+        )
+
+        plan = build_remediation_plan(review)
+
+        self.assertTrue(plan.items)
+        self.assertTrue(all(item.origin == "initial" for item in plan.items))
+
+    def test_document_deep_dive_origin_is_preserved_in_mixed_plan(self) -> None:
+        review = self._review_with_issues(
+            self._issue(issue_id="D-001", title="初回指摘"),
+            self._issue(
+                issue_id="DD-001",
+                title="文書深堀指摘",
+                origin="document_deep_dive",
+            ),
+        )
+
+        plan = build_remediation_plan(review)
+
+        origins_by_title = {item.title: item.origin for item in plan.items}
+        self.assertEqual(origins_by_title["初回指摘"], "initial")
+        self.assertEqual(origins_by_title["文書深堀指摘"], "document_deep_dive")
+
+    def test_chapter_deep_dive_origin_is_preserved_in_mixed_plan(self) -> None:
+        review = self._review_with_issues(
+            self._issue(issue_id="D-001", title="初回指摘"),
+            self._issue(
+                issue_id="CD-001",
+                title="章深堀指摘",
+                origin="chapter_deep_dive",
+            ),
+        )
+
+        plan = build_remediation_plan(review)
+
+        origins_by_title = {item.title: item.origin for item in plan.items}
+        self.assertEqual(origins_by_title["初回指摘"], "initial")
+        self.assertEqual(origins_by_title["章深堀指摘"], "chapter_deep_dive")
+
+    def test_dedup_does_not_include_origin_in_key(self) -> None:
+        review = self._review_with_issues(
+            self._issue(issue_id="D-001", origin="initial"),
+            self._issue(issue_id="DD-001", origin="document_deep_dive"),
+        )
+
+        plan = build_remediation_plan(review)
+
+        self.assertEqual(len(plan.items), 1)
+        self.assertEqual(plan.items[0].origin, "initial")
+
+    def test_build_remediation_plan_is_idempotent_for_same_review_result(self) -> None:
+        review = self._review_with_issues(
+            self._issue(issue_id="D-001", title="初回指摘"),
+            self._issue(
+                issue_id="CD-001",
+                title="章深堀指摘",
+                origin="chapter_deep_dive",
+            ),
+        )
+
+        first = build_remediation_plan(review)
+        second = build_remediation_plan(review)
+
+        self.assertEqual(first.to_dict(), second.to_dict())
 
     def test_structure_findings_become_templates(self) -> None:
         review = ReviewResult(

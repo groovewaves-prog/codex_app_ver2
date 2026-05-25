@@ -65,58 +65,6 @@ def sort_documents_by_attention(
     return sorted(documents, key=key)
 
 
-def next_action_for_preview(
-    *,
-    has_preview_docs: bool,
-    blocked_count: int,
-    confirmation_count: int,
-    send_approved: bool,
-    review_in_progress: bool,
-    review_done: bool,
-) -> NextAction:
-    if not has_preview_docs:
-        return NextAction(
-            "次: ファイルをアップロードして匿名化してください",
-            "外部LLMへ送る前に、まずローカルでテキスト抽出・匿名化・機密度判定を実行します。",
-            "info",
-        )
-    if blocked_count:
-        return NextAction(
-            "次: 送信禁止の文書を修正してください",
-            f"{blocked_count} 件の文書はこのまま外部レビューへ送信できません。原文側の機密表現を削るか、より厳密に匿名化してください。",
-            "block",
-        )
-    if review_in_progress:
-        return NextAction(
-            "現在: LLMレビューを実行中です",
-            "画面を閉じずに完了を待ってください。複数ファイルでは文書ごとに順次処理されます。",
-            "active",
-        )
-    if review_done:
-        return NextAction(
-            "次: 修正計画カードを確認してください",
-            "レビュー指摘と構成不足は修正計画へ集約済みです。詳細や品質改善ヒントは必要なときだけ開いてください。",
-            "success",
-        )
-    if confirmation_count and not send_approved:
-        return NextAction(
-            "次: 要確認の匿名化結果を確認してください",
-            f"{confirmation_count} 件の文書に未判定・要確認・未確定候補があります。内容を確認してから最終承認に進んでください。",
-            "warn",
-        )
-    if not send_approved:
-        return NextAction(
-            "次: 匿名化結果を確認して最終承認してください",
-            "送信対象は匿名化済みテキストのみです。内容に問題がなければチェックボックスをオンにしてください。",
-            "info",
-        )
-    return NextAction(
-        "次: レビューに送信できます",
-        "送信ボタンを押すと、設定された外部LLMに匿名化済みテキストだけが送信されます。",
-        "success",
-    )
-
-
 def sort_issues_by_importance(issues: Iterable[object]) -> list[object]:
     return sorted(
         issues,

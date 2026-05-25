@@ -5,7 +5,6 @@ import unittest
 from secure_review.models import SanitizationRecord, SanitizedDocument
 from secure_review.ui_viewmodel import (
     document_attention_reasons,
-    next_action_for_preview,
     sort_documents_by_attention,
     structure_fix_guidance,
 )
@@ -61,19 +60,6 @@ class UiViewmodelTests(unittest.TestCase):
 
         self.assertIn("未確定マスク候補あり", reasons)
         self.assertIn("置換 1 件", reasons)
-
-    def test_next_action_prefers_blocked_documents(self) -> None:
-        action = next_action_for_preview(
-            has_preview_docs=True,
-            blocked_count=1,
-            confirmation_count=3,
-            send_approved=False,
-            review_in_progress=False,
-            review_done=False,
-        )
-
-        self.assertEqual(action.tone, "block")
-        self.assertIn("送信禁止", action.title)
 
     def test_structure_fix_guidance_is_author_facing(self) -> None:
         guidance = structure_fix_guidance(

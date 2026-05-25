@@ -63,7 +63,6 @@ from secure_review.structure_check import (
 )
 from secure_review.token_budget import estimate_review_token_budget
 from secure_review.ui_viewmodel import (
-    NextAction,
     document_attention_reasons,
     structure_fix_guidance,
 )
@@ -837,20 +836,6 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
     color: var(--danger);
 }
 
-.next-action-card {
-    border: 1px solid var(--rule);
-    border-left: 5px solid var(--accent);
-    border-radius: 16px;
-    background: rgba(255,253,248,0.86);
-    padding: 0.75rem 1rem;
-    margin: 0.65rem 0 0.85rem;
-    line-height: 1.5;
-    box-shadow: 0 8px 20px rgba(24, 35, 30, 0.06);
-}
-.next-action-card.warn { border-left-color: var(--warn); background: var(--warn-soft); }
-.next-action-card.block { border-left-color: var(--danger); background: var(--danger-soft); }
-.next-action-card.active { border-left-color: #0f7b63; background: #e5f2ee; }
-.next-action-card.success { border-left-color: var(--accent); background: var(--accent-soft); }
 .height-control {
     color: var(--ink-soft);
     font-size: 0.82rem;
@@ -1843,16 +1828,6 @@ def _requires_manual_confirmation_for_doc(
     )
 
 
-def _render_next_action_card(action) -> None:
-    st.markdown(
-        f"<div class='next-action-card {html.escape(action.tone)}'>"
-        f"<b>{html.escape(action.title)}</b><br/>"
-        f"<span>{html.escape(action.detail)}</span>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
-
-
 def _render_insight_panel(
     *,
     kicker: str,
@@ -2799,22 +2774,6 @@ def _render_review_result_dashboard(
         if finding.severity == "high"
     )
     tokens = sum(int(getattr(doc, "estimated_input_tokens", 0) or 0) for doc in preview_docs)
-    if high_count or structure_high:
-        action = "次: 修正計画カードの高重要度項目を確認してください"
-        tone = "block"
-    elif medium_count or deep_candidates:
-        action = "次: 修正計画カードと必要な追記テンプレートを確認してください"
-        tone = "warn"
-    else:
-        action = "次: 必要なら今回レビュー結果JSONを保存してください"
-        tone = "success"
-    _render_next_action_card(
-        NextAction(
-            action,
-            "通常は下の修正計画カードを見れば十分です。章別詳細や元指摘は必要なときだけ開いてください。",
-            tone,
-        )
-    )
     total_high = high_count + structure_high
     if total_high:
         result_title = "高重要度の指摘を優先確認"

@@ -16,6 +16,12 @@ Baseline commit: `eaf605a`.
 - 未使用になった `next_action_for_preview` と専用テストを削除。
 - Verification: `python -m unittest discover tests` passes with 313 tests. Before this cleanup, 314 tests passed; the difference is the removed task-panel-only viewmodel test.
 
+### D-1 step3 — Next action card removed; D-1 complete
+
+- Step 4 冒頭に残っていた `_render_next_action_card` と `NextAction` dataclass を削除し、レビュー後の次アクション案内を AI Display Director に一本化。
+- 専用CSS `.next-action-card` を削除。
+- D-1 計画（次の一手案内の整理）は本ステップで完了。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

@@ -8,6 +8,15 @@ from secure_review.models import SanitizedDocument
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
 
+def remediation_origin_badge(origin: str) -> tuple[str, str] | None:
+    """Return label and CSS class for non-initial remediation origins."""
+    if origin == "document_deep_dive":
+        return ("🔬 文書深堀で追加", "origin-badge-document-deep-dive")
+    if origin == "chapter_deep_dive":
+        return ("📌 章深堀で追加", "origin-badge-chapter-deep-dive")
+    return None
+
+
 def document_attention_reasons(
     document: SanitizedDocument,
     *,

@@ -66,6 +66,7 @@ from secure_review.structure_check import (
 from secure_review.token_budget import estimate_review_token_budget
 from secure_review.ui_viewmodel import (
     document_attention_reasons,
+    remediation_origin_badge,
     structure_fix_guidance,
 )
 
@@ -1204,6 +1205,46 @@ div[data-testid="stExpander"] summary {
     font-size: 0.96rem;
     line-height: 1.4;
     font-weight: 900;
+}
+.origin-badge-row {
+    margin-top: 0.46rem;
+}
+.origin-badge {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.72rem;
+    font-weight: 850;
+    letter-spacing: 0.02em;
+    border: 1px solid transparent;
+}
+.origin-badge-document-deep-dive {
+    color: #145a7a;
+    background: linear-gradient(135deg, #e8f4fb 0%, #dff1f7 100%);
+    border-color: #afd8e8;
+}
+.origin-badge-chapter-deep-dive {
+    color: #27614c;
+    background: linear-gradient(135deg, #edf8ed 0%, #e0f2df 100%);
+    border-color: #b8d9b2;
+}
+.deep-dive-merged-note {
+    border: 1px solid rgba(8,119,96,0.16);
+    border-left: 4px solid var(--accent);
+    border-radius: 15px;
+    background:
+        linear-gradient(135deg, rgba(247,252,248,0.94) 0%, rgba(238,247,232,0.92) 100%);
+    color: var(--ink);
+    padding: 0.58rem 0.72rem;
+    margin: 0.55rem 0 0.42rem;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    box-shadow: 0 6px 16px rgba(24, 35, 30, 0.04);
+}
+.deep-dive-merged-note b {
+    color: var(--accent-strong);
 }
 .remediation-meta {
     color: var(--ink-soft);
@@ -2688,6 +2729,10 @@ def _rebuild_remediation_plan_for_session(
     return plan
 
 
+def _count_review_issues(review_results: list[ReviewResult]) -> int:
+    return sum(len(getattr(result, "issues", []) or []) for result in review_results)
+
+
 def _run_chapter_deep_dive(
     doc_name: str,
     chapter: ChapterSection,
@@ -2861,6 +2906,19 @@ def _render_review_result_dashboard(
     )
 
 
+def _remediation_origin_badge_html(origin: str) -> str:
+    badge = remediation_origin_badge(origin)
+    if badge is None:
+        return ""
+    label, css_class = badge
+    return (
+        "<div class='origin-badge-row'>"
+        f"<span class='origin-badge {html.escape(css_class)}'>"
+        f"{html.escape(label)}</span>"
+        "</div>"
+    )
+
+
 def _render_remediation_plan(plan: RemediationPlan) -> None:
     item_cards = []
     severity_labels = {"high": "高", "medium": "中", "low": "低", "info": "情報"}
@@ -2873,6 +2931,7 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
             """
 <div class="remediation-card {severity}">
   <div class="remediation-card-title">{title}</div>
+  {origin_badge}
   <div class="remediation-meta">{source} / {severity_label} / 工数 {effort}<br/>{target}</div>
   <div class="remediation-text"><b>方針:</b> {fix_policy}</div>
   <div class="remediation-text"><b>再レビュー:</b> {condition}</div>
@@ -2880,6 +2939,7 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
             """.format(
                 severity=html.escape(item.severity),
                 title=html.escape(item.title),
+                origin_badge=_remediation_origin_badge_html(item.origin),
                 source=html.escape(source_labels.get(item.source_type, item.source_type)),
                 severity_label=html.escape(severity_labels.get(item.severity, item.severity)),
                 effort=html.escape(item.effort),
@@ -4928,43 +4988,52 @@ if review is not None:
                                             else "後続候補（現在は無効）"
                                         )
                                 if _chapter_deep_results:
-                                    with st.expander(
-                                        f"📌 この章の深堀結果 ({_pass_count} 回)",
-                                        expanded=True,
-                                    ):
-                                        for _pass_idx, _deep_review in enumerate(
-                                            _chapter_deep_results, 1
+                                    _deep_issue_count = _count_review_issues(
+                                        _chapter_deep_results
+                                    )
+                                    if _deep_issue_count:
+                                        st.markdown(
+                                            f"""
+<div class="deep-dive-merged-note">
+  📌 <b>章深堀で {_deep_issue_count} 件の追加指摘が修正計画に合流しました。</b><br/>
+  詳細は必要なときだけ開き、通常は上の修正計画カードから対応してください。
+</div>
+                                            """,
+                                            unsafe_allow_html=True,
+                                        )
+                                        with st.expander(
+                                            f"詳細を見る（深堀パス {_pass_count} 回）",
+                                            expanded=False,
                                         ):
-                                            st.markdown(f"**深堀パス {_pass_idx}**")
-                                            if _deep_review.summary:
-                                                _summary_label = (
-                                                    "サマリ"
-                                                    if _pass_idx == 1
-                                                    else "追加確認結果"
+                                            for _pass_idx, _deep_review in enumerate(
+                                                _chapter_deep_results, 1
+                                            ):
+                                                st.markdown(f"**深堀パス {_pass_idx}**")
+                                                if _deep_review.summary:
+                                                    _summary_label = (
+                                                        "サマリ"
+                                                        if _pass_idx == 1
+                                                        else "追加確認結果"
+                                                    )
+                                                    st.markdown(
+                                                        f"**{_summary_label}** — {_deep_review.summary}"
+                                                    )
+                                                _sorted_deep_issues = sorted(
+                                                    _deep_review.issues,
+                                                    key=lambda i: severity_order.get(i.severity, 4),
                                                 )
-                                                st.markdown(
-                                                    f"**{_summary_label}** — {_deep_review.summary}"
+                                                for _deep_issue in _sorted_deep_issues:
+                                                    if not getattr(_deep_issue, "section", ""):
+                                                        _deep_issue.section = _ch.chapter_label
+                                                    _render_review_issue(
+                                                        _deep_issue,
+                                                        severity_order,
+                                                    )
+                                            if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
+                                                st.success(
+                                                    "この章は2段階の深堀りを完了しました。"
+                                                    "追加LLM呼び出しより、既存指摘の対応判断へ進むことを推奨します。"
                                                 )
-                                            _sorted_deep_issues = sorted(
-                                                _deep_review.issues,
-                                                key=lambda i: severity_order.get(i.severity, 4),
-                                            )
-                                            if not _sorted_deep_issues:
-                                                st.info(
-                                                    "このパスでは新規指摘はありませんでした。"
-                                                )
-                                            for _deep_issue in _sorted_deep_issues:
-                                                if not getattr(_deep_issue, "section", ""):
-                                                    _deep_issue.section = _ch.chapter_label
-                                                _render_review_issue(
-                                                    _deep_issue,
-                                                    severity_order,
-                                                )
-                                        if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
-                                            st.success(
-                                                "この章は2段階の深堀りを完了しました。"
-                                                "追加LLM呼び出しより、既存指摘の対応判断へ進むことを推奨します。"
-                                            )
                                 if _ch_clicked:
                                     _run_chapter_deep_dive(
                                         _doc_name,

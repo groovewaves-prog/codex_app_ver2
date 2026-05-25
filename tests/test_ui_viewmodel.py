@@ -5,6 +5,7 @@ import unittest
 from secure_review.models import SanitizationRecord, SanitizedDocument
 from secure_review.ui_viewmodel import (
     document_attention_reasons,
+    remediation_origin_badge,
     sort_documents_by_attention,
     structure_fix_guidance,
 )
@@ -70,6 +71,23 @@ class UiViewmodelTests(unittest.TestCase):
 
         self.assertIn("本書の目的", guidance)
         self.assertIn("追記", guidance)
+
+    def test_remediation_origin_badge_for_document_deep_dive(self) -> None:
+        badge = remediation_origin_badge("document_deep_dive")
+
+        self.assertIsNotNone(badge)
+        self.assertIn("文書深堀で追加", badge[0])
+        self.assertEqual(badge[1], "origin-badge-document-deep-dive")
+
+    def test_remediation_origin_badge_for_chapter_deep_dive(self) -> None:
+        badge = remediation_origin_badge("chapter_deep_dive")
+
+        self.assertIsNotNone(badge)
+        self.assertIn("章深堀で追加", badge[0])
+        self.assertEqual(badge[1], "origin-badge-chapter-deep-dive")
+
+    def test_remediation_origin_badge_is_hidden_for_initial(self) -> None:
+        self.assertIsNone(remediation_origin_badge("initial"))
 
 
 if __name__ == "__main__":

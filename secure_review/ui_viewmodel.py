@@ -1,19 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Iterable
 
 from secure_review.models import SanitizedDocument
 
 
 SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
-
-
-@dataclass(frozen=True)
-class NextAction:
-    title: str
-    detail: str
-    tone: str = "info"
 
 
 def document_attention_reasons(

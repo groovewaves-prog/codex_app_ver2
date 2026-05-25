@@ -9,6 +9,13 @@ Baseline commit: `eaf605a`.
 - レビュー後の表示調整は AI Display Director が担当する方針を維持。
 - Verification: `python -m unittest discover tests` passes with 314 tests. Before this cleanup, 317 tests passed; the difference is the removed Review Command Agent-only tests.
 
+### D-1 step2 — Sticky Task Panel and Task Panel for State removed
+
+- Sticky Task Panel / Task Panel for State を削除し、次の一手の案内をレビュー前は AI Operation Co-Pilot、レビュー後は AI Display Director に集約。
+- ステータスバーを Sticky Task Panel から切り離し、Co-Pilot 直下に1回だけ表示する構成へ変更。
+- 未使用になった `next_action_for_preview` と専用テストを削除。
+- Verification: `python -m unittest discover tests` passes with 313 tests. Before this cleanup, 314 tests passed; the difference is the removed task-panel-only viewmodel test.
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

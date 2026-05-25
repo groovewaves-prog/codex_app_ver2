@@ -34,6 +34,12 @@ Baseline commit: `eaf605a`.
 - 旧 `deep_dive_results` に文書深堀結果が存在する場合は `origin="document_deep_dive"` として修正計画に合流できるようにした。
 - 修正計画JSONには、初回レビューと深堀由来の item が origin 別に保持される。
 
+### D-2 step3 — Origin badges and deep-dive section collapse
+
+- 修正計画カードに、深堀由来の item だけ `[🔬 文書深堀で追加]` / `[📌 章深堀で追加]` バッジを表示。
+- 初回レビュー由来の item はバッジ非表示のままにし、通常カードの視覚ノイズを抑制。
+- 章別詳細内の深堀結果は、合流済み件数のサマリ行 + デフォルト閉の詳細 expander に縮退。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

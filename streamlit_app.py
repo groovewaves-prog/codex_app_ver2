@@ -65,7 +65,6 @@ from secure_review.token_budget import estimate_review_token_budget
 from secure_review.ui_viewmodel import (
     NextAction,
     document_attention_reasons,
-    next_action_for_preview,
     structure_fix_guidance,
 )
 
@@ -852,22 +851,6 @@ hr { border: none; border-top: 1px solid var(--rule); margin: 1.2rem 0; }
 .next-action-card.block { border-left-color: var(--danger); background: var(--danger-soft); }
 .next-action-card.active { border-left-color: #0f7b63; background: #e5f2ee; }
 .next-action-card.success { border-left-color: var(--accent); background: var(--accent-soft); }
-
-.task-sticky-panel {
-    position: sticky;
-    top: 0.35rem;
-    z-index: 100;
-    background: rgba(251, 248, 239, 0.84);
-    backdrop-filter: blur(16px);
-    border: 1px solid rgba(8,119,96,0.16);
-    border-radius: 18px;
-    padding: 0.45rem 0.6rem 0.2rem;
-    margin: 0.3rem 0 0.9rem;
-    box-shadow: var(--shadow);
-}
-.task-sticky-panel .next-action-card {
-    margin: 0.15rem 0 0.45rem;
-}
 .height-control {
     color: var(--ink-soft);
     font-size: 0.82rem;
@@ -1915,7 +1898,9 @@ def _render_insight_panel(
 
 def _active_status_for_preview(
     *,
+    has_preview_docs: bool,
     blocked_docs: list[SanitizedDocument],
+    confirmation_docs: list[SanitizedDocument],
     send_approved: bool,
 ) -> str:
     if blocked_docs:
@@ -1926,37 +1911,11 @@ def _active_status_for_preview(
         return "レビュー完了"
     if send_approved:
         return "送信準備完了"
-    return "確認待ち"
-
-
-def _render_sticky_task_panel(action: NextAction, active_status: str) -> None:
-    st.markdown("<div class='task-sticky-panel'>", unsafe_allow_html=True)
-    _render_next_action_card(action)
-    _render_review_status_bar(active_status)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-
-def _render_task_panel_for_state(
-    slot,
-    *,
-    preview_docs: list[SanitizedDocument],
-    blocked_docs: list[SanitizedDocument],
-    confirmation_docs: list[SanitizedDocument],
-    send_approved: bool,
-    active_status: str,
-) -> None:
-    """Render the single source-of-truth workflow task panel."""
-    action = next_action_for_preview(
-        has_preview_docs=bool(preview_docs),
-        blocked_count=len(blocked_docs),
-        confirmation_count=len(confirmation_docs),
-        send_approved=send_approved,
-        review_in_progress=active_status == "レビュー中",
-        review_done=active_status == "レビュー完了",
-    )
-    slot.empty()
-    with slot.container():
-        _render_sticky_task_panel(action, active_status)
+    if not has_preview_docs:
+        return "新規"
+    if confirmation_docs:
+        return "確認待ち"
+    return "匿名化済み"
 
 
 def _render_operation_assist(guide: OperationGuide) -> None:
@@ -2599,6 +2558,48 @@ def _render_review_status_bar(active_status: str) -> None:
         "<div class='status-flow'>" + "".join(parts) + "</div>",
         unsafe_allow_html=True,
     )
+
+
+def _render_workflow_top_panel(
+    assist_slot,
+    status_slot,
+    *,
+    preview_docs: list[SanitizedDocument],
+    blocked_docs: list[SanitizedDocument],
+    confirmation_docs: list[SanitizedDocument],
+    send_approved: bool,
+    token_status: str,
+    can_regenerate_anonymization: bool,
+    force_status: str | None = None,
+) -> str:
+    active_status = force_status or _active_status_for_preview(
+        has_preview_docs=bool(preview_docs),
+        blocked_docs=blocked_docs,
+        confirmation_docs=confirmation_docs,
+        send_approved=send_approved,
+    )
+    if active_status == "レビュー完了":
+        assist_slot.empty()
+    else:
+        assist_slot.empty()
+        with assist_slot.container():
+            _render_operation_assist(
+                build_operation_guide(
+                    upload_count=len(_get_uploads()),
+                    has_preview_docs=bool(preview_docs),
+                    blocked_count=len(blocked_docs),
+                    confirmation_count=len(confirmation_docs),
+                    send_approved=send_approved,
+                    token_status=token_status,
+                    review_in_progress=active_status == "レビュー中",
+                    review_done=False,
+                    can_regenerate_anonymization=can_regenerate_anonymization,
+                )
+            )
+    status_slot.empty()
+    with status_slot.container():
+        _render_review_status_bar(active_status)
+    return active_status
 
 
 def _render_review_issue(issue, severity_order: dict[str, int]) -> None:
@@ -3747,6 +3748,9 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+_operation_assist_slot = st.empty()
+_status_bar_slot = st.empty()
+
 # -- Step 1: Upload --------------------------------------------------------
 
 _render_step_header(
@@ -3932,23 +3936,19 @@ if preview_docs:
     except Exception:
         _operation_token_status = "unknown"
 
-_operation_assist_slot = st.empty()
-with _operation_assist_slot.container():
-    _render_operation_assist(
-        build_operation_guide(
-            upload_count=len(_get_uploads()),
-            has_preview_docs=bool(preview_docs),
-            blocked_count=len(_operation_blocked_docs),
-            confirmation_count=len(_operation_confirmation_docs),
-            send_approved=bool(st.session_state.get("send_approval")),
-            token_status=_operation_token_status,
-            review_in_progress=bool(st.session_state.get("review_in_progress")),
-            review_done=st.session_state.get("review_result") is not None,
-            can_regenerate_anonymization=_has_regeneratable_mask_candidates(
-                _operation_masking_states
-            ),
-        )
-    )
+_operation_can_regenerate = _has_regeneratable_mask_candidates(
+    _operation_masking_states
+)
+_render_workflow_top_panel(
+    _operation_assist_slot,
+    _status_bar_slot,
+    preview_docs=preview_docs,
+    blocked_docs=_operation_blocked_docs,
+    confirmation_docs=_operation_confirmation_docs,
+    send_approved=bool(st.session_state.get("send_approval")),
+    token_status=_operation_token_status,
+    can_regenerate_anonymization=_operation_can_regenerate,
+)
 
 preview_error = st.session_state.get("preview_error")
 if preview_error:
@@ -3980,8 +3980,6 @@ if preview_docs:
         "匿名化結果プレビュー",
         "外部送信前に、匿名化結果・送信規模・要確認候補を確認します。",
     )
-
-    _task_panel_slot = st.empty()
 
     warnings = st.session_state.get("preview_warnings", [])
     if warnings:
@@ -4312,25 +4310,6 @@ if preview_docs:
                 unsafe_allow_html=True,
             )
 
-    if blocked_docs:
-        active_status = "送信不可"
-    elif send_clicked or st.session_state.get("review_in_progress"):
-        active_status = "レビュー中"
-    elif st.session_state.get("review_result") is not None:
-        active_status = "レビュー完了"
-    elif send_approved:
-        active_status = "送信準備完了"
-    else:
-        active_status = "確認待ち"
-    _render_task_panel_for_state(
-        _task_panel_slot,
-        preview_docs=preview_docs,
-        blocked_docs=blocked_docs,
-        confirmation_docs=mask_docs,
-        send_approved=send_approved,
-        active_status=active_status,
-    )
-
     # Q12 (2026-05-08): 「レビューに送信」押下時の処理
     # LLM 送信のみ (文書チェック後の preview_docs を使用)。
     #
@@ -4340,21 +4319,17 @@ if preview_docs:
     # これにより 60〜120 秒の処理中もユーザがフリーズと誤認しない。
     if send_clicked:
         st.session_state.review_in_progress = True
-        _operation_assist_slot.empty()
-        with _operation_assist_slot.container():
-            _render_operation_assist(
-                build_operation_guide(
-                    upload_count=len(_get_uploads()),
-                    has_preview_docs=bool(preview_docs),
-                    blocked_count=len(blocked_docs),
-                    confirmation_count=len(mask_docs),
-                    send_approved=send_approved,
-                    token_status=_operation_token_status,
-                    review_in_progress=True,
-                    review_done=False,
-                    can_regenerate_anonymization=can_regenerate_anonymization,
-                )
-            )
+        _render_workflow_top_panel(
+            _operation_assist_slot,
+            _status_bar_slot,
+            preview_docs=preview_docs,
+            blocked_docs=blocked_docs,
+            confirmation_docs=mask_docs,
+            send_approved=send_approved,
+            token_status=_operation_token_status,
+            can_regenerate_anonymization=can_regenerate_anonymization,
+            force_status="レビュー中",
+        )
         review_progress = st.progress(0.0, text="送信前チェックを開始しています...")
         # 課題 1 拡張 (2026-05-08): ボタン押下時に「本セッションのマスク判断サマリ」を
         # 折りたたむ。Streamlit の st.expander は開閉状態を session_state に自動
@@ -4408,76 +4383,76 @@ if preview_docs:
             st.session_state.pop("review_issue_feedback", None)
             st.session_state.pop("review_issue_feedback_notes", None)
             st.session_state.review_in_progress = False
-            _operation_assist_slot.empty()
-            with _operation_assist_slot.container():
-                _render_operation_assist(
-                    build_operation_guide(
-                        upload_count=len(_get_uploads()),
-                        has_preview_docs=bool(preview_docs),
-                        blocked_count=len(blocked_docs),
-                        confirmation_count=len(mask_docs),
-                        send_approved=send_approved,
-                        token_status=_operation_token_status,
-                        review_in_progress=False,
-                        review_done=True,
-                        can_regenerate_anonymization=can_regenerate_anonymization,
-                    )
-                )
-            _render_task_panel_for_state(
-                _task_panel_slot,
+            _render_workflow_top_panel(
+                _operation_assist_slot,
+                _status_bar_slot,
                 preview_docs=preview_docs,
                 blocked_docs=blocked_docs,
                 confirmation_docs=mask_docs,
                 send_approved=send_approved,
-                active_status="レビュー完了",
+                token_status=_operation_token_status,
+                can_regenerate_anonymization=can_regenerate_anonymization,
+                force_status="レビュー完了",
             )
         except LocalUrlError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_task_panel_for_state(
-                _task_panel_slot,
+            _render_workflow_top_panel(
+                _operation_assist_slot,
+                _status_bar_slot,
                 preview_docs=preview_docs,
                 blocked_docs=blocked_docs,
                 confirmation_docs=mask_docs,
                 send_approved=send_approved,
-                active_status="送信準備完了" if send_approved else "確認待ち",
+                token_status=_operation_token_status,
+                can_regenerate_anonymization=can_regenerate_anonymization,
+                force_status="送信準備完了" if send_approved else "確認待ち",
             )
             st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
         except ValueError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_task_panel_for_state(
-                _task_panel_slot,
+            _render_workflow_top_panel(
+                _operation_assist_slot,
+                _status_bar_slot,
                 preview_docs=preview_docs,
                 blocked_docs=blocked_docs,
                 confirmation_docs=mask_docs,
                 send_approved=send_approved,
-                active_status="送信準備完了" if send_approved else "確認待ち",
+                token_status=_operation_token_status,
+                can_regenerate_anonymization=can_regenerate_anonymization,
+                force_status="送信準備完了" if send_approved else "確認待ち",
             )
             st.error(str(exc))
         except RuntimeError as exc:
             # Gemini quota and similar user-actionable errors come through here.
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_task_panel_for_state(
-                _task_panel_slot,
+            _render_workflow_top_panel(
+                _operation_assist_slot,
+                _status_bar_slot,
                 preview_docs=preview_docs,
                 blocked_docs=blocked_docs,
                 confirmation_docs=mask_docs,
                 send_approved=send_approved,
-                active_status="送信準備完了" if send_approved else "確認待ち",
+                token_status=_operation_token_status,
+                can_regenerate_anonymization=can_regenerate_anonymization,
+                force_status="送信準備完了" if send_approved else "確認待ち",
             )
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_task_panel_for_state(
-                _task_panel_slot,
+            _render_workflow_top_panel(
+                _operation_assist_slot,
+                _status_bar_slot,
                 preview_docs=preview_docs,
                 blocked_docs=blocked_docs,
                 confirmation_docs=mask_docs,
                 send_approved=send_approved,
-                active_status="送信準備完了" if send_approved else "確認待ち",
+                token_status=_operation_token_status,
+                can_regenerate_anonymization=can_regenerate_anonymization,
+                force_status="送信準備完了" if send_approved else "確認待ち",
             )
             request_id = uuid.uuid4().hex[:8]
             st.error(f"レビューに失敗しました ({request_id})。詳細はサーバログを確認してください。")

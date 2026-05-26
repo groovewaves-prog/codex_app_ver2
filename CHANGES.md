@@ -46,6 +46,12 @@ Baseline commit: `eaf605a`.
 - 「短い名前 — いつ・なぜ開くか」の形式に統一し、補助情報を開く判断理由をラベル上で明示。
 - AI Display Director の `keep_collapsed` 表示名も新ラベルの短い名前と同期。
 
+### D-5 — separate remediation plan JSON from audit log JSON naming
+
+- 修正計画直下の保存ボタンを `📒 再レビュー用の修正計画JSONを保存` に改名し、ファイル名を `remediation_plan_YYYYMMDD_HHMM.json` に変更。
+- 証跡エクスポート内の監査用JSONを `audit_` 接頭辞付きのファイル名へ統一。
+- 旧 `remediation_plan.json` も前回修正計画JSONとして読み込める後方互換を維持。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

@@ -36,6 +36,7 @@ from secure_review.agent_planner import (
     build_review_display_policy,
 )
 from secure_review.env_loader import load_dotenv
+from secure_review.export_names import remediation_plan_json_filename
 from secure_review.models import (
     MaskingPipelineState,
     NerCandidate,
@@ -3013,15 +3014,20 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
                 st.code(item.template, language="markdown")
 
     st.download_button(
-        "💾 今回レビュー結果JSONを保存（次回比較用）",
+        "📒 再レビュー用の修正計画JSONを保存",
         data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
-        file_name="remediation_plan.json",
+        file_name=remediation_plan_json_filename(),
         mime="application/json",
+        type="primary",
+        help=(
+            "次回、修正後の文書と一緒に読み込ませると、"
+            "前回指摘の解消状況をローカル照合できます。"
+        ),
         width='stretch',
     )
     st.caption(
-        "修正後の文書と今回の指摘を比較したい場合だけ保存してください。"
-        "通常の作業は、上の修正計画カードと追記テンプレートを見れば進められます。"
+        "これは再レビュー比較用の台帳です。人に渡す作業依頼書や監査ログではありません。"
+        "監査ログを共有・保存する場合は、下の「証跡エクスポート」を開いてください。"
     )
 
     if plan.items:
@@ -3044,10 +3050,10 @@ def _render_review_log_export_panel() -> None:
         st.markdown(
             """
 <div class="export-panel">
-  <div class="export-title">レビュー証跡を保存</div>
+  <div class="export-title">監査ログを保存</div>
   <div class="export-detail">
-    匿名化済みテキスト、マスク候補、送信対象ログ、レビュー結果を JSON として保存します。
-    通常操作では開く必要はありません。検証ログを共有したい場合だけ利用してください。
+    匿名化済みテキスト、マスク候補、送信対象ログ、レビュー結果を audit_ 接頭辞付きの JSON として保存します。
+    再レビュー用の修正計画JSONとは用途が異なります。検証ログを共有したい場合だけ利用してください。
   </div>
 </div>
             """,
@@ -3093,12 +3099,15 @@ def _render_previous_remediation_plan_loader() -> None:
             "今回アップロードした修正文書に改善要素が反映されているかをローカルで照合できます。"
         )
         uploaded_plan = st.file_uploader(
-            "前回保存した remediation_plan.json",
+            "前回保存した修正計画JSON（旧 remediation_plan.json も可）",
             type=["json"],
             accept_multiple_files=False,
             key="previous_remediation_plan_upload",
             label_visibility="collapsed",
-            help="このJSONはレビュー対象文書としては扱いません。前回指摘との照合条件として使います。",
+            help=(
+                "ファイル名には依存しません。旧 remediation_plan.json も、"
+                "新しい remediation_plan_YYYYMMDD_HHMM.json も読み込めます。"
+            ),
         )
         if uploaded_plan is not None:
             try:

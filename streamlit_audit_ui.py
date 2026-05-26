@@ -38,6 +38,7 @@ from secure_review.audit_log import (
     generate_session_id,
     recommend_action,
 )
+from secure_review.export_names import audit_json_filename
 
 CUSTOMERS_DIR = Path("data/customers")
 
@@ -339,13 +340,13 @@ def _persist_term(
 # ============================================================
 
 def render_log_export_button() -> None:
-    """Render a JSON export button for review evidence.
+    """Render audit JSON export buttons for review evidence.
 
     現在の preview_docs (匿名化済み文書) と review_result (LLM レビュー結果)
-    を JSON にシリアライズして download_button で配布。
+    を用途別の監査 JSON にシリアライズして download_button で配布。
 
-    Streamlit Cloud で動作する想定。ユーザはダウンロードした JSON を
-    アシスタントに送付することで、結果を手動で貼り付ける負担が減る。
+    Streamlit Cloud で動作する想定。ユーザはダウンロードした audit_*.json を
+    監査・共有用の証跡として扱う。再レビュー比較用の修正計画JSONとは分ける。
 
     出力 JSON 構造 (代表的な内容):
         {
@@ -427,11 +428,49 @@ def render_log_export_button() -> None:
 
         docs_data.append(doc_data)
 
-    log_data = {
+    exported_at = datetime.now()
+    base_meta = {
         "schema_version": "1",  # R-W-export schema (B2 修正で追加)
-        "exported_at": datetime.now().isoformat(timespec="seconds"),
+        "exported_at": exported_at.isoformat(timespec="seconds"),
         "session_id": session_id,
         "customer_id": customer_id,
+    }
+
+    sanitized_text_data = {
+        **base_meta,
+        "export_type": "audit_sanitized_text",
+        "documents": [
+            {
+                "name": doc.get("name", ""),
+                "sanitized_excerpt": doc.get("sanitized_excerpt", ""),
+                "outbound_text": doc.get("outbound_text", ""),
+                "replacements_count": doc.get("replacements_count", 0),
+                "outbound_risk": doc.get("outbound_risk", ""),
+                "estimated_input_tokens": doc.get("estimated_input_tokens", 0),
+            }
+            for doc in docs_data
+        ],
+    }
+
+    mask_candidates_data = {
+        **base_meta,
+        "export_type": "audit_mask_candidates",
+        "documents": [
+            {
+                "name": doc.get("name", ""),
+                "findings": doc.get("findings", []),
+                "confirmed_findings": doc.get("confirmed_findings", []),
+                "uncertain_candidates": doc.get("uncertain_candidates", []),
+                "local_sensitivity_decision": doc.get("local_sensitivity_decision", ""),
+                "local_sensitivity_reasons": doc.get("local_sensitivity_reasons", []),
+            }
+            for doc in docs_data
+        ],
+    }
+
+    send_log_data = {
+        **base_meta,
+        "export_type": "audit_send_log",
         "documents": docs_data,
     }
 
@@ -464,33 +503,64 @@ def render_log_export_button() -> None:
                     "issues": dd_issues_data,
                 })
             serialized_dd[dd_doc_name] = entries
-        log_data["deep_dive_results"] = serialized_dd
+        send_log_data["deep_dive_results"] = serialized_dd
 
     # LLM レビュー結果が available なら含める
+    review_result_data = {
+        **base_meta,
+        "export_type": "audit_review_result",
+        "documents": [{"name": doc.get("name", "")} for doc in docs_data],
+    }
     review = st.session_state.get("review_result")
     if review is not None:
         if hasattr(review, "to_dict"):
             try:
-                log_data["review_result"] = review.to_dict()
+                review_result_data["review_result"] = review.to_dict()
             except Exception:
-                log_data["review_result"] = repr(review)
+                review_result_data["review_result"] = repr(review)
         else:
-            log_data["review_result"] = repr(review)
+            review_result_data["review_result"] = repr(review)
+    if "deep_dive_results" in send_log_data:
+        review_result_data["deep_dive_results"] = send_log_data["deep_dive_results"]
 
-    # JSON シリアライズ (default=str で datetime や Path を str 化)
-    json_str = json.dumps(log_data, ensure_ascii=False, indent=2, default=str)
-
-    st.download_button(
-        label="📥 レビュー証跡を保存 (JSON)",
-        data=json_str,
-        file_name=f"review_log_{session_id}.json",
-        mime="application/json",
-        help=(
-            "現在のレビュー結果 (匿名化済み文書、マスク候補、LLM レビュー結果) を "
-            "JSON ファイルとして保存します。アシスタントに送付する際の貼り付け負担を軽減できます。"
+    export_specs = (
+        (
+            "sanitized_text",
+            "📦 監査用 — 匿名化テキストJSONを保存",
+            sanitized_text_data,
+            "外部LLMへ送信した匿名化済み本文を監査・共有するためのJSONです。",
         ),
-        key="log_export_button",
+        (
+            "mask_candidates",
+            "📦 監査用 — マスク候補JSONを保存",
+            mask_candidates_data,
+            "自動マスク済み候補、未確定候補、機密度判定理由を監査するためのJSONです。",
+        ),
+        (
+            "send_log",
+            "📦 監査用 — 送信ログJSONを保存",
+            send_log_data,
+            "送信対象文書、トークン概算、深堀結果を含む監査用JSONです。",
+        ),
+        (
+            "review_result",
+            "📦 監査用 — レビュー結果JSONを保存",
+            review_result_data,
+            "LLMレビュー結果と深堀レビュー結果を監査・共有するためのJSONです。",
+        ),
     )
+
+    for kind, label, payload, help_text in export_specs:
+        st.download_button(
+            label=label,
+            data=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            file_name=audit_json_filename(kind, exported_at),
+            mime="application/json",
+            help=help_text + " 再レビュー比較用の修正計画JSONではありません。",
+            key=f"audit_export_{kind}_button",
+            type="secondary",
+            width="stretch",
+        )
 
 
 # ============================================================

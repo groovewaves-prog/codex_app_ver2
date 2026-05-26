@@ -60,7 +60,7 @@ def build_operation_guide(
             checklist=(
                 "修正計画カードを確認",
                 "必要なら追記テンプレートを開く",
-                "次回比較したい場合だけJSONを保存",
+                "次回比較したい場合だけ再レビュー用JSONを保存",
             ),
         )
 
@@ -212,7 +212,7 @@ def build_review_display_policy(
     the UI agent-like while avoiding extra token usage or hidden data transfer.
     """
     base_show = ("修正計画カード", "追記テンプレート", "再レビュー条件")
-    json_label = "今回レビュー結果JSON" if not previous_plan_loaded else "今回JSONと前回比較結果"
+    json_label = "再レビュー用修正計画JSON" if not previous_plan_loaded else "再レビュー用JSONと前回比較結果"
     base_collapsed = [
         "品質改善ヒント",
         "元のレビュー指摘",
@@ -266,7 +266,7 @@ def build_review_display_policy(
     return DisplayPolicy(
         tone="success",
         headline="AI判断: 追加確認は最小限で十分です",
-        primary_action="必要なら今回レビュー結果JSONだけ保存し、レビューを完了してください。",
+        primary_action="次回比較する場合だけ再レビュー用修正計画JSONを保存し、レビューを完了してください。",
         reason="高重要度・中重要度の修正計画や強い品質改善ヒントは目立っていません。",
         show_now=("レビュー結果サマリ", json_label),
         keep_collapsed=tuple(base_collapsed),

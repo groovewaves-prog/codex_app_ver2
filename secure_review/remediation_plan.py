@@ -352,9 +352,46 @@ def _re_review_condition_for_structure(
     )
 
 
+_CURRENT_STATE_FALLBACK = (
+    "（本文から現状の記載を自動抽出できませんでした。"
+    "該当章の元記載を確認の上、現状を簡潔に要約してください。）"
+)
+
+_CURRENT_STATE_PATTERNS = (
+    re.compile(
+        r"【現状】\s*(.+?)(?=(?:\n|\s*)【(?:問題点|影響|推奨対応|詳細|対応)】|\Z)",
+        re.DOTALL,
+    ),
+    re.compile(r"^\s*現状[:：]\s*(.+?)(?=\n|\Z)", re.MULTILINE),
+    re.compile(r"^\s*現状の記載[:：]\s*(.+?)(?=\n|\Z)", re.MULTILINE),
+)
+
+
+def _extract_current_state_from_details(details: str | None) -> str | None:
+    if not details:
+        return None
+    for pattern in _CURRENT_STATE_PATTERNS:
+        match = pattern.search(details)
+        if not match:
+            continue
+        extracted = re.sub(r"\s+", " ", match.group(1)).strip()
+        if extracted:
+            return extracted
+    return None
+
+
+def _resolve_current_state(issue: ReviewIssue) -> str:
+    if issue.current_state and issue.current_state.strip():
+        return issue.current_state.strip()
+    extracted = _extract_current_state_from_details(issue.details)
+    if extracted:
+        return extracted
+    return _CURRENT_STATE_FALLBACK
+
+
 def _template_for_issue(issue: ReviewIssue, fix_policy: str) -> str:
     section = issue.section or "該当章"
-    current_state = issue.current_state or "現状の記載を要約してください。"
+    current_state = _resolve_current_state(issue)
     problem = issue.issue or issue.details or "何が不足・不整合なのかを記載してください。"
     impact = issue.impact or "未対応時の影響を記載してください。"
     return "\n".join(

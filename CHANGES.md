@@ -65,6 +65,12 @@ Baseline commit: `eaf605a`.
 - 先読みレビューを `障害シナリオと予防策` に改名し、未来障害カードは「故障への道筋」と「次の一手」に絞って表示。
 - 証跡エクスポートは開発者モード配下へ移し、4つの監査JSONを `audit_log_YYYYMMDD_HHMM.zip` に統合。
 
+### Fix — Phase 1 low-risk cleanup
+
+- サイドバーの詳細設定直前にあった二重の水平線を1本に整理。
+- ヒーロー説明文を `AIアシスト` の総称表現に変更し、レビュー前後の案内役の違いと矛盾しない文言に更新。
+- Step 2 のヘッダ文言を定数化し、匿名化プレビューの状態にかかわらず1回だけ同じ文言で表示するよう整理。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

@@ -2010,6 +2010,10 @@ def _render_display_policy_assist(policy: DisplayPolicy) -> None:
         st.caption(policy.reason)
 
 
+_STEP2_TITLE = "匿名化結果プレビュー"
+_STEP2_CAPTION = "ローカル匿名化と機密度判定の結果を確認します。"
+
+
 def _render_step_header(step: int, title: str, description: str) -> None:
     st.markdown(
         f"""
@@ -3717,8 +3721,6 @@ with st.sidebar:
     )
 
     st.markdown("---")
-
-    st.markdown("---")
     with st.expander("⚙️ 詳細設定 — 辞書・R-M・開発者表示を切り替えるときに開く", expanded=False):
         st.caption(
             "通常操作では変更不要です。プロジェクト固有のマスク辞書、R-M、"
@@ -3819,7 +3821,7 @@ st.markdown(
   <div class="hero-title">技術文書レビュー支援ツール</div>
   <div class="hero-subtitle">
     アップロード文書をローカルで匿名化し、業界標準に基づいて構成・品質・リスクをレビューします。
-    操作アシストが、送信前の安全境界、トークン規模、次アクションを段階ごとに案内します。
+    AIアシストがフェーズごとに「次にすること」を案内します。
   </div>
 </section>
     """,
@@ -4031,12 +4033,15 @@ _render_workflow_top_panel(
 )
 
 preview_error = st.session_state.get("preview_error")
+_show_step2_header = bool(
+    preview_error
+    or (st.session_state.get("preview_attempted") and not preview_docs)
+    or preview_docs
+)
+if _show_step2_header:
+    _render_step_header(2, _STEP2_TITLE, _STEP2_CAPTION)
+
 if preview_error:
-    _render_step_header(
-        2,
-        "匿名化結果プレビュー",
-        "ローカル匿名化と機密度判定の結果を確認します。",
-    )
     st.error(preview_error)
     st.info(
         "匿名化結果が作成されなかったため、ステップ 3 には進めません。"
@@ -4047,20 +4052,9 @@ if preview_error:
             st.code(st.session_state.preview_trace)
 
 if st.session_state.get("preview_attempted") and not preview_error and not preview_docs:
-    _render_step_header(
-        2,
-        "匿名化結果プレビュー",
-        "ローカル匿名化と機密度判定の結果を確認します。",
-    )
     st.info("匿名化結果はまだ作成されていません。ファイルを確認して、もう一度実行してください。")
 
 if preview_docs:
-    _render_step_header(
-        2,
-        "匿名化結果プレビュー",
-        "外部送信前に、匿名化結果・送信規模・要確認候補を確認します。",
-    )
-
     warnings = st.session_state.get("preview_warnings", [])
     if warnings:
         with st.expander(f"抽出・パイプライン警告 ({len(warnings)} 件)"):

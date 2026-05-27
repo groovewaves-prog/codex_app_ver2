@@ -41,6 +41,20 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertNotIn("📦 監査用 — 匿名化テキストJSONを保存", self.audit_source)
         self.assertNotIn("audit_export_sanitized_text_button", self.audit_source)
 
+    def test_phase1_hero_copy_uses_general_ai_assist_wording(self) -> None:
+        self.assertIn("AIアシストがフェーズごとに「次にすること」を案内します。", self.app_source)
+        self.assertNotIn("操作アシストが、送信前の安全境界", self.app_source)
+        self.assertNotIn("次アクションを段階ごとに案内します", self.app_source)
+
+    def test_phase1_step2_header_is_consolidated(self) -> None:
+        self.assertIn('_STEP2_TITLE = "匿名化結果プレビュー"', self.app_source)
+        self.assertIn('_STEP2_CAPTION = "ローカル匿名化と機密度判定の結果を確認します。"', self.app_source)
+        self.assertEqual(self.app_source.count("_render_step_header(2,"), 1)
+        self.assertNotIn("外部送信前に、匿名化結果・送信規模・要確認候補を確認します。", self.app_source)
+
+    def test_phase1_sidebar_does_not_have_duplicate_rule_before_details(self) -> None:
+        self.assertNotIn('st.markdown("---")\n\n    st.markdown("---")', self.app_source)
+
 
 if __name__ == "__main__":
     unittest.main()

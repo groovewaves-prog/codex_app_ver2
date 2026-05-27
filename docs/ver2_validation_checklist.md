@@ -16,7 +16,7 @@ https://codexappver2-qicnqzha2kbcadvj63j63e.streamlit.app/
 |---|---|---|---|
 | 1 | アプリが起動する | OK / NG |  |
 | 2 | タイトルが「技術文書レビュー支援ツール」になっている | OK / NG |  |
-| 3 | サイドバーに動作環境・文書種別・詳細設定が表示される | OK / NG |  |
+| 3 | サイドバーに動作環境・詳細設定が表示され、文書種別は詳細設定内にある | OK / NG |  |
 | 4 | Streamlit Cloud Secrets が反映されている | OK / NG |  |
 
 ## 2. 標準シナリオ

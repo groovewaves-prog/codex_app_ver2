@@ -1940,32 +1940,25 @@ def _active_status_for_preview(
 
 
 def _render_operation_assist(guide: OperationGuide) -> None:
-    checklist_html = "".join(
-        f"<div class='assist-check'>{html.escape(item)}</div>"
-        for item in guide.checklist
-    )
     st.markdown(
         f"""
 <section class="operation-assist {html.escape(guide.tone)}">
   <div class="assist-kicker">AI Operation Co-Pilot</div>
-  <div class="assist-layout">
-    <div>
-      <div class="assist-title">{html.escape(guide.headline)}</div>
-      <div class="assist-step">{html.escape(guide.step_label)}</div>
-      <div class="assist-action"><b>次にすること:</b> {html.escape(guide.primary_action)}</div>
-      <div class="assist-note"><b>なぜ必要か:</b> {html.escape(guide.reason)}</div>
-      <div class="assist-note"><b>完了の目安:</b> {html.escape(guide.done_when)}</div>
-      <div class="assist-note"><b>注意:</b> {html.escape(guide.watch_out)}</div>
-    </div>
-    <div class="assist-checklist">
-      <div class="assist-checklist-title">この画面で見るポイント</div>
-      {checklist_html}
-    </div>
-  </div>
+  <div class="assist-step">{html.escape(guide.step_label)}</div>
+  <div class="assist-title">{html.escape(guide.headline)}</div>
+  <div class="assist-action"><b>次にすること:</b> {html.escape(guide.primary_action)}</div>
 </section>
         """,
         unsafe_allow_html=True,
     )
+    with st.expander("🔍 操作の詳細 — 理由・完了の目安・注意点", expanded=False):
+        st.markdown(f"**判断理由**: {guide.reason}")
+        st.markdown(f"**完了の目安**: {guide.done_when}")
+        st.markdown(f"**注意点**: {guide.watch_out}")
+        if guide.checklist:
+            st.markdown("**確認チェックリスト**:")
+            for item in guide.checklist:
+                st.markdown(f"- {item}")
 
 
 def _render_display_policy_assist(policy: DisplayPolicy) -> None:
@@ -3835,41 +3828,38 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.markdown('<div class="sidebar-section-label">文書種別</div>', unsafe_allow_html=True)
-    profile_options = [
-        ("(自動判定)", None),
-        ("設計書", "design"),
-        ("変更・切替手順書", "change_runbook"),
-        ("保守・運用手順書", "operations_runbook"),
-        ("ネットワーク機器Config", "network_config"),
-        ("ソースコード", "source_code"),
-    ]
-    profile_label = st.selectbox(
-        "文書種別",
-        [label for label, _ in profile_options],
-        index=0,
-        label_visibility="collapsed",
-        help=(
-            "通常は自動判定のままで利用します。"
-            "自動判定が実際の文書種別と異なる場合だけ、手動で上書きしてください。"
-        ),
-    )
-    document_profile_override = dict(profile_options)[profile_label]
-    st.markdown(
-        '<div class="sidebar-help">通常は自動判定で問題ありません。誤判定時のみ手動で変更します。</div>',
-        unsafe_allow_html=True,
-    )
-
-    st.markdown("---")
-
-    st.markdown("---")
     with st.expander("⚙️ 詳細設定 — 辞書・R-M・開発者表示を切り替えるときに開く", expanded=False):
         st.caption(
             "通常操作では変更不要です。プロジェクト固有のマスク辞書、R-M、"
             "開発者向け表示を切り替える場合だけ使います。"
         )
+        st.markdown('<div class="sidebar-section-label">文書種別</div>', unsafe_allow_html=True)
+        profile_options = [
+            ("(自動判定)", None),
+            ("設計書", "design"),
+            ("変更・切替手順書", "change_runbook"),
+            ("保守・運用手順書", "operations_runbook"),
+            ("ネットワーク機器Config", "network_config"),
+            ("ソースコード", "source_code"),
+        ]
+        profile_label = st.selectbox(
+            "文書種別",
+            [label for label, _ in profile_options],
+            index=0,
+            label_visibility="collapsed",
+            help=(
+                "通常は自動判定のままで利用します。"
+                "自動判定が実際の文書種別と異なる場合だけ、手動で上書きしてください。"
+            ),
+        )
+        document_profile_override = dict(profile_options)[profile_label]
+        st.markdown(
+            '<div class="sidebar-help">通常は自動判定で問題ありません。誤判定時のみ手動で変更します。</div>',
+            unsafe_allow_html=True,
+        )
 
         # R-V (2026-05-08): マスク辞書プロファイル selector
+        st.markdown("---")
         render_customer_selector(sidebar=False)
 
         st.markdown("---")

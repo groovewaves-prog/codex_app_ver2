@@ -5,6 +5,7 @@ from datetime import datetime
 
 from secure_review.export_names import (
     audit_json_filename,
+    audit_log_zip_filename,
     export_timestamp,
     remediation_plan_json_filename,
 )
@@ -38,6 +39,14 @@ class ExportNamesTests(unittest.TestCase):
         self.assertEqual(
             audit_json_filename("send-log", now),
             "audit_send_log_20260526_0905.json",
+        )
+
+    def test_audit_zip_filename_uses_audit_log_prefix(self) -> None:
+        now = datetime(2026, 5, 26, 9, 5)
+
+        self.assertEqual(
+            audit_log_zip_filename(now),
+            "audit_log_20260526_0905.zip",
         )
 
 

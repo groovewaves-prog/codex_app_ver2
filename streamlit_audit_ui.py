@@ -25,6 +25,10 @@ streamlit_app.py からの呼び出しは:
 """
 from __future__ import annotations
 
+import io
+import json
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -38,7 +42,7 @@ from secure_review.audit_log import (
     generate_session_id,
     recommend_action,
 )
-from secure_review.export_names import audit_json_filename
+from secure_review.export_names import audit_json_filename, audit_log_zip_filename
 
 CUSTOMERS_DIR = Path("data/customers")
 
@@ -339,11 +343,26 @@ def _persist_term(
 # R-W-export: レビュー証跡の保存 (チャットでの貼り付け負担軽減)
 # ============================================================
 
+def build_audit_export_zip(
+    export_specs: tuple[tuple[str, Mapping[str, Any]], ...],
+    exported_at: datetime,
+) -> bytes:
+    """Bundle audit JSON payloads into one in-memory ZIP archive."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for kind, payload in export_specs:
+            archive.writestr(
+                audit_json_filename(kind, exported_at),
+                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            )
+    return buffer.getvalue()
+
+
 def render_log_export_button() -> None:
-    """Render audit JSON export buttons for review evidence.
+    """Render one bundled audit ZIP export button for review evidence.
 
     現在の preview_docs (匿名化済み文書) と review_result (LLM レビュー結果)
-    を用途別の監査 JSON にシリアライズして download_button で配布。
+    を用途別の監査 JSON にシリアライズし、1つの ZIP download_button で配布。
 
     Streamlit Cloud で動作する想定。ユーザはダウンロードした audit_*.json を
     監査・共有用の証跡として扱う。再レビュー比較用の修正計画JSONとは分ける。
@@ -375,9 +394,6 @@ def render_log_export_button() -> None:
           "review_result": {...} (LLM レビュー結果、ある場合)
         }
     """
-    import json
-    from datetime import datetime
-
     preview_docs = st.session_state.get("preview_docs")
     if not preview_docs:
         return
@@ -523,44 +539,26 @@ def render_log_export_button() -> None:
     if "deep_dive_results" in send_log_data:
         review_result_data["deep_dive_results"] = send_log_data["deep_dive_results"]
 
-    export_specs = (
-        (
-            "sanitized_text",
-            "📦 監査用 — 匿名化テキストJSONを保存",
-            sanitized_text_data,
-            "外部LLMへ送信した匿名化済み本文を監査・共有するためのJSONです。",
-        ),
-        (
-            "mask_candidates",
-            "📦 監査用 — マスク候補JSONを保存",
-            mask_candidates_data,
-            "自動マスク済み候補、未確定候補、機密度判定理由を監査するためのJSONです。",
-        ),
-        (
-            "send_log",
-            "📦 監査用 — 送信ログJSONを保存",
-            send_log_data,
-            "送信対象文書、トークン概算、深堀結果を含む監査用JSONです。",
-        ),
-        (
-            "review_result",
-            "📦 監査用 — レビュー結果JSONを保存",
-            review_result_data,
-            "LLMレビュー結果と深堀レビュー結果を監査・共有するためのJSONです。",
-        ),
+    export_specs: tuple[tuple[str, Mapping[str, Any]], ...] = (
+        ("sanitized_text", sanitized_text_data),
+        ("mask_candidates", mask_candidates_data),
+        ("send_log", send_log_data),
+        ("review_result", review_result_data),
     )
 
-    for kind, label, payload, help_text in export_specs:
-        st.download_button(
-            label=label,
-            data=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
-            file_name=audit_json_filename(kind, exported_at),
-            mime="application/json",
-            help=help_text + " 再レビュー比較用の修正計画JSONではありません。",
-            key=f"audit_export_{kind}_button",
-            type="secondary",
-            width="stretch",
-        )
+    st.download_button(
+        label="📥 証跡をまとめてダウンロード (ZIP)",
+        data=build_audit_export_zip(export_specs, exported_at),
+        file_name=audit_log_zip_filename(exported_at),
+        mime="application/zip",
+        help=(
+            "匿名化テキスト、マスク候補、送信ログ、レビュー結果の4つの監査用JSONを"
+            "1つのZIPにまとめて保存します。再レビュー比較用の修正計画JSONではありません。"
+        ),
+        key="audit_export_zip_button",
+        type="secondary",
+        width="stretch",
+    )
 
 
 # ============================================================

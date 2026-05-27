@@ -69,12 +69,78 @@ class AgentPlannerTests(unittest.TestCase):
         )
 
         self.assertEqual(policy.tone, "block")
-        self.assertIn("先に対応", policy.headline)
+        self.assertEqual(policy.headline, "まず赤い修正計画カードを確認してください")
+        self.assertNotIn("AI判断:", policy.headline)
         self.assertIn("修正計画カード", policy.show_now)
-        self.assertIn("品質改善ヒント", policy.keep_collapsed)
+        self.assertIn("障害シナリオと予防策", policy.keep_collapsed)
         self.assertIn("元のレビュー指摘", policy.keep_collapsed)
-        self.assertIn("証跡エクスポート", policy.keep_collapsed)
+        self.assertNotIn("証跡エクスポート", policy.keep_collapsed)
         self.assertFalse(policy.expand_quality_hints)
+
+    def test_display_policy_medium_only_uses_yellow_card_headline(self) -> None:
+        policy = build_review_display_policy(
+            remediation_count=2,
+            high_count=0,
+            medium_count=2,
+            structure_finding_count=0,
+            future_hint_count=0,
+            deep_candidate_count=0,
+        )
+
+        self.assertEqual(policy.tone, "warn")
+        self.assertEqual(policy.headline, "黄色の修正計画カードから確認してください")
+        self.assertNotIn("AI判断:", policy.headline)
+
+    def test_display_policy_low_only_uses_sequential_card_headline(self) -> None:
+        policy = build_review_display_policy(
+            remediation_count=1,
+            high_count=0,
+            medium_count=0,
+            structure_finding_count=0,
+            future_hint_count=0,
+            deep_candidate_count=0,
+        )
+
+        self.assertEqual(policy.tone, "success")
+        self.assertEqual(policy.headline, "修正計画カードを順に確認してください")
+        self.assertNotIn("AI判断:", policy.headline)
+
+    def test_display_policy_no_cards_points_to_structure_check(self) -> None:
+        policy = build_review_display_policy(
+            remediation_count=0,
+            high_count=0,
+            medium_count=0,
+            structure_finding_count=2,
+            future_hint_count=0,
+            deep_candidate_count=0,
+        )
+
+        self.assertEqual(policy.headline, "文書構成チェックの結果を確認してください")
+        self.assertNotIn("AI判断:", policy.headline)
+
+    def test_display_policy_audit_export_is_developer_only(self) -> None:
+        normal = build_review_display_policy(
+            remediation_count=1,
+            high_count=1,
+            medium_count=0,
+            structure_finding_count=0,
+            future_hint_count=0,
+            deep_candidate_count=0,
+            developer_mode=False,
+        )
+        developer = build_review_display_policy(
+            remediation_count=1,
+            high_count=1,
+            medium_count=0,
+            structure_finding_count=0,
+            future_hint_count=0,
+            deep_candidate_count=0,
+            developer_mode=True,
+        )
+
+        self.assertNotIn("証跡エクスポート", normal.keep_collapsed)
+        self.assertNotIn("証跡エクスポート", normal.developer_only)
+        self.assertIn("証跡エクスポート", developer.developer_only)
 
     def test_display_policy_expands_quality_hints_when_no_remediation(self) -> None:
         policy = build_review_display_policy(
@@ -88,7 +154,7 @@ class AgentPlannerTests(unittest.TestCase):
 
         self.assertEqual(policy.tone, "info")
         self.assertTrue(policy.expand_quality_hints)
-        self.assertNotIn("品質改善ヒント", policy.keep_collapsed)
+        self.assertNotIn("障害シナリオと予防策", policy.keep_collapsed)
 
 
 if __name__ == "__main__":

@@ -17,3 +17,8 @@ def audit_json_filename(kind: str, now: datetime | None = None) -> str:
     """Filename for audit exports, using a consistent audit_ prefix."""
     safe_kind = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in kind).strip("_")
     return f"audit_{safe_kind or 'log'}_{export_timestamp(now)}.json"
+
+
+def audit_log_zip_filename(now: datetime | None = None) -> str:
+    """Filename for the bundled audit evidence ZIP."""
+    return f"audit_log_{export_timestamp(now)}.zip"

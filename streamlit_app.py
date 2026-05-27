@@ -1990,9 +1990,7 @@ def _render_display_policy_assist(policy: DisplayPolicy) -> None:
         "<div class='assist-layout'>"
         "<div>"
         f"<div class='assist-title'>{html.escape(policy.headline)}</div>"
-        "<div class='assist-step'>表示量を自動調整中</div>"
-        f"<div class='assist-action'><b>次にすること:</b> {html.escape(policy.primary_action)}</div>"
-        f"<div class='assist-note'><b>判断理由:</b> {html.escape(policy.reason)}</div>"
+        f"<div class='assist-action'>{html.escape(policy.primary_action)}</div>"
         f"{developer_html}"
         "</div>"
         "<div class='assist-checklist'>"
@@ -2008,6 +2006,8 @@ def _render_display_policy_assist(policy: DisplayPolicy) -> None:
         html_block,
         unsafe_allow_html=True,
     )
+    with st.expander("📊 AI 判断の詳細を見る", expanded=False):
+        st.caption(policy.reason)
 
 
 def _render_step_header(step: int, title: str, description: str) -> None:
@@ -3000,7 +3000,11 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
     )
 
     if plan.items:
-        with st.expander("🛠 担当者が追記する文章案を開く", expanded=False):
+        with st.expander("📝 この指摘の対応案 — 文書に追記する内容のたたき台", expanded=False):
+            st.caption(
+                "この内容を参考に、担当者が文書本体に書き足す原稿を作ります。"
+                "最終的な文言は、実際の設計内容や関係者合意に合わせて調整してください。"
+            )
             for idx, item in enumerate(plan.items, 1):
                 st.markdown(
                     f"#### {idx}. {item.title} "
@@ -3027,7 +3031,7 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
     )
     st.caption(
         "これは再レビュー比較用の台帳です。人に渡す作業依頼書や監査ログではありません。"
-        "監査ログを共有・保存する場合は、下の「証跡エクスポート」を開いてください。"
+        "監査ログを共有・保存する場合は、開発者モードで「証跡エクスポート」を開いてください。"
     )
 
     if plan.items:
@@ -3046,14 +3050,16 @@ def _render_remediation_plan(plan: RemediationPlan) -> None:
 
 
 def _render_review_log_export_panel() -> None:
+    if not st.session_state.get("developer_mode", False):
+        return
     with st.expander("📦 証跡エクスポート — 監査ログを共有・保存するときに開く", expanded=False):
         st.markdown(
             """
 <div class="export-panel">
-  <div class="export-title">監査ログを保存</div>
+  <div class="export-title">監査ログをまとめて保存</div>
   <div class="export-detail">
-    匿名化済みテキスト、マスク候補、送信対象ログ、レビュー結果を audit_ 接頭辞付きの JSON として保存します。
-    再レビュー用の修正計画JSONとは用途が異なります。検証ログを共有したい場合だけ利用してください。
+    匿名化済みテキスト、マスク候補、送信対象ログ、レビュー結果を 1 つの ZIP にまとめて保存します。
+    再レビュー用の修正計画JSONとは用途が異なります。開発者・監査担当者が検証ログを共有したい場合だけ利用してください。
   </div>
 </div>
             """,
@@ -3194,14 +3200,6 @@ def _future_tone_label(level: str) -> str:
     }.get(level, level or "-")
 
 
-def _trigger_source_label(value: str) -> str:
-    return {
-        "document": "本文由来",
-        "issue": "レビュー指摘由来",
-        "both": "本文＋レビュー指摘由来",
-    }.get(value, value or "-")
-
-
 def _future_card(title: str, meta: str, body: str, action: str, tone: str = "low") -> str:
     return f"""
 <div class="future-card {html.escape(tone)}">
@@ -3214,9 +3212,6 @@ def _future_card(title: str, meta: str, body: str, action: str, tone: str = "low
 
 
 def _premortem_card(item) -> str:
-    confirmed = ", ".join(item.confirmed_elements) if item.confirmed_elements else "なし"
-    missing = ", ".join(item.missing_elements) if item.missing_elements else "なし"
-    hints = " / ".join(item.review_hint) if item.review_hint else "なし"
     return f"""
 <div class="future-card {html.escape(item.risk_level)}">
   <div class="future-card-title">{html.escape(item.title)}</div>
@@ -3224,10 +3219,6 @@ def _premortem_card(item) -> str:
     {html.escape(item.scenario_id)} / {html.escape(item.source_document)} / {html.escape(item.section)} /
     {html.escape(_future_tone_label(item.risk_level))}
   </div>
-  <div class="future-card-text"><b>発火理由:</b> {html.escape(_trigger_source_label(item.trigger_source))}</div>
-  <div class="future-card-text"><b>本文で確認済み:</b> {html.escape(confirmed)}</div>
-  <div class="future-card-text"><b>本文で不足:</b> {html.escape(missing)}</div>
-  <div class="future-card-text"><b>レビュー指摘ヒント:</b> {html.escape(hints)}</div>
   <div class="future-card-text"><b>故障への道筋:</b> {html.escape(item.failure_path)}</div>
   <div class="future-card-text"><b>次の一手:</b> {html.escape(item.prevention)}</div>
 </div>
@@ -3338,7 +3329,7 @@ def _render_future_review_lens(
         )
     )
 
-    with st.expander("💡 品質改善ヒント — 修正計画だけでは満足できないときに開く", expanded=expanded):
+    with st.expander("🔮 障害シナリオと予防策 — 主要な指摘の先にある将来リスク", expanded=expanded):
         st.markdown(
             f"""
 <section class="future-lens">
@@ -3347,8 +3338,8 @@ def _render_future_review_lens(
       <div class="future-lens-kicker">Future Review Lens</div>
       <div class="future-lens-title">先読みレビュー</div>
       <div class="future-lens-copy">
-        修正計画に載せるほどではないものの、文書の質を上げるヒントです。
-        追加の改善余地を探したい場面で確認してください。
+        これは修正計画とは別角度で、将来の障害シナリオと予防策を提示します。
+        指摘対応後も残りそうな運用・復旧・読み手リスクを確認したい場面で開いてください。
       </div>
     </div>
     <div class="future-lens-metrics">
@@ -3401,7 +3392,7 @@ def _render_future_review_lens(
 
         with tabs[2]:
             st.caption(
-                "ここでは追加の外部LLM呼び出しは行いません。本文から不足を確認し、レビュー指摘は発火理由・ヒントとして分けて扱います。"
+                "ここでは追加の外部LLM呼び出しは行いません。修正計画と重なる根拠欄は省き、将来障害への道筋と予防策だけを表示します。"
             )
             if not report.premortem_scenarios:
                 st.success("代表的な未来障害シナリオに直結する予兆は強く検出されませんでした。")
@@ -4961,12 +4952,12 @@ if review is not None:
                                         ).hexdigest()[:12]
                                     )
                                     _button_label = (
-                                        "🔬 この章を深堀"
+                                        "🔬 この章をAIで再分析 — より具体的な指摘を引き出す"
                                         if _pass_count == 0
-                                        else "🔎 未検出観点を追加深堀"
+                                        else "🔎 追加観点をAIで再分析"
                                     )
                                     if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
-                                        _button_label = "✅ 深堀完了"
+                                        _button_label = "✅ AI再分析は完了済み"
                                     _ch_clicked = st.button(
                                         _button_label,
                                         key=_ch_btn_key,
@@ -4985,6 +4976,10 @@ if review is not None:
                                             )
                                         ),
                                         width='stretch',
+                                    )
+                                    st.caption(
+                                        "現在の指摘では不十分なときに使います。"
+                                        "AI に同じ章を再レビューさせ、追加の指摘を取得します。"
                                     )
                                     if _pass_count:
                                         st.caption(
@@ -5056,7 +5051,7 @@ if review is not None:
                 st.markdown(
                     "<div class='issue-row info' style='color:#4a5549;font-size:0.92rem;'>"
                     "✅ <b>この文書に対する LLM 指摘はありません。</b> "
-                    "より詳細な分析が必要なら章別概要レビュー内の「🔬 この章を深堀」をご利用ください。"
+                    "より詳細な分析が必要なら章別概要レビュー内のAI再分析ボタンをご利用ください。"
                     "</div>",
                     unsafe_allow_html=True,
                 )
@@ -5321,7 +5316,7 @@ if review is not None:
                 )
 
     # R-Y (2026-05-08): 深堀レビューは Step 4 の文書ごとグループ表示に統合済み。
-    # 各章カードの「🔬 この章を深堀」ボタンから実行する。
+    # 各章カードの AI 再分析ボタンから実行する。
 
 
 # ----------------------------------------------------------------------

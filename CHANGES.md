@@ -58,6 +58,13 @@ Baseline commit: `eaf605a`.
 - `ReviewIssue.current_state` が空の場合は、`details` 内の `【現状】` / `現状:` / `現状の記載:` から補完し、抽出できない場合はユーザ向けの確認誘導文を表示。
 - LLM プロンプト例と評価方針に `current_state` の出力指示を明示。
 
+### Fix — Step 4 UX improvements
+
+- AI Display Director をアクション起点の見出しに再設計し、詳細理由は `📊 AI 判断の詳細を見る` に退避。
+- 追記案 expander と章別AI再分析ボタンのラベルを明確化し、文書追記と追加レビューの役割を分離。
+- 先読みレビューを `障害シナリオと予防策` に改名し、未来障害カードは「故障への道筋」と「次の一手」に絞って表示。
+- 証跡エクスポートは開発者モード配下へ移し、4つの監査JSONを `audit_log_YYYYMMDD_HHMM.zip` に統合。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

@@ -65,6 +65,12 @@ Baseline commit: `eaf605a`.
 - 先読みレビューを `障害シナリオと予防策` に改名し、未来障害カードは「故障への道筋」と「次の一手」に絞って表示。
 - 証跡エクスポートは開発者モード配下へ移し、4つの監査JSONを `audit_log_YYYYMMDD_HHMM.zip` に統合。
 
+### Fix — Phase 2 deep-dive entry
+
+- Step 4 の章単位深堀ボタンを、文書別詳細表示トグル配下から修正計画直下の独立セクション `章別深堀` に移動。
+- `文書別の詳細表示` トグルは、章別概要・元指摘・深堀結果詳細の表示だけを制御する責務へ縮小。
+- 旧 `章別深堀候補` expander を廃止し、AI Display Director の補助表示からも同項目を削除。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

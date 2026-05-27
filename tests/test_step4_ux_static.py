@@ -20,10 +20,22 @@ class Step4UxStaticTests(unittest.TestCase):
 
     def test_remediation_and_deep_dive_labels_are_distinct(self) -> None:
         self.assertIn("📝 この指摘の対応案 — 文書に追記する内容のたたき台", self.app_source)
-        self.assertIn("🔬 この章をAIで再分析 — より具体的な指摘を引き出す", self.app_source)
+        self.assertIn("### 🔬 章別深堀", self.app_source)
+        self.assertIn("🔬 この章を再分析", self.app_source)
+        self.assertIn("ch_deepdive_entry_btn_", self.app_source)
         self.assertIn("現在の指摘では不十分なときに使います。", self.app_source)
         self.assertNotIn("🛠 担当者が追記する文章案を開く", self.app_source)
         self.assertNotIn("🔬 この章を深堀", self.app_source)
+        self.assertNotIn("🔬 章別深堀候補", self.app_source)
+
+    def test_document_detail_toggle_no_longer_controls_deep_dive_entry(self) -> None:
+        self.assertIn(
+            "🗂 文書別の詳細表示 — 章別概要・元指摘・深堀結果の詳細を確認するときに開く",
+            self.app_source,
+        )
+        self.assertIn("章別深堀は上の「🔬 章別深堀」セクションから実行できます。", self.app_source)
+        self.assertNotIn("_ordered_doc_names = []", self.app_source)
+        self.assertNotIn("🗂 文書別の詳細確認", self.app_source)
 
     def test_future_failure_cards_keep_only_unique_forward_looking_fields(self) -> None:
         self.assertIn("🔮 障害シナリオと予防策 — 主要な指摘の先にある将来リスク", self.app_source)

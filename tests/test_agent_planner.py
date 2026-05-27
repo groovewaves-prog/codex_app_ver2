@@ -74,6 +74,7 @@ class AgentPlannerTests(unittest.TestCase):
         self.assertIn("修正計画カード", policy.show_now)
         self.assertIn("障害シナリオと予防策", policy.keep_collapsed)
         self.assertIn("元のレビュー指摘", policy.keep_collapsed)
+        self.assertNotIn("章別深堀候補", policy.keep_collapsed)
         self.assertNotIn("証跡エクスポート", policy.keep_collapsed)
         self.assertFalse(policy.expand_quality_hints)
 
@@ -155,6 +156,19 @@ class AgentPlannerTests(unittest.TestCase):
         self.assertEqual(policy.tone, "info")
         self.assertTrue(policy.expand_quality_hints)
         self.assertNotIn("障害シナリオと予防策", policy.keep_collapsed)
+
+    def test_display_policy_treats_deep_dive_as_visible_entry_not_collapsed_item(self) -> None:
+        policy = build_review_display_policy(
+            remediation_count=0,
+            high_count=0,
+            medium_count=0,
+            structure_finding_count=0,
+            future_hint_count=0,
+            deep_candidate_count=2,
+        )
+
+        self.assertEqual(policy.headline, "章別深堀で追加確認してください")
+        self.assertNotIn("章別深堀候補", policy.keep_collapsed)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,6 @@ class DisplayPolicy:
     expand_quality_hints: bool = False
     show_document_details: bool = False
     expand_structure_details: bool = False
-    expand_deep_candidates: bool = False
 
 
 def build_operation_guide(
@@ -219,9 +218,6 @@ def build_review_display_policy(
     ]
     if structure_finding_count:
         base_collapsed.append("文書構成チェック詳細")
-    if deep_candidate_count:
-        base_collapsed.append("章別深堀候補")
-
     developer_only = (
         ("証跡エクスポート", "メタレビュー", "プロンプトプレビュー", "LLM生レスポンス")
         if developer_mode else ()
@@ -261,21 +257,25 @@ def build_review_display_policy(
         )
 
     if future_hint_count > 0 or deep_candidate_count > 0:
+        if structure_finding_count:
+            headline = "文書構成チェックの結果を確認してください"
+        elif future_hint_count:
+            headline = "障害シナリオと予防策を確認してください"
+        else:
+            headline = "章別深堀で追加確認してください"
         return DisplayPolicy(
             tone="info",
-            headline=(
-                "文書構成チェックの結果を確認してください"
-                if structure_finding_count else "障害シナリオと予防策を確認してください"
-            ),
+            headline=headline,
             primary_action=(
                 "構成不足や将来リスクを補助情報として確認し、必要なものだけ追記候補にしてください。"
+                if future_hint_count or structure_finding_count
+                else "修正計画に大きなカードがない場合でも、章別深堀で追加確認できます。必要な章だけ再分析してください。"
             ),
             reason="重大な修正計画が少ないため、本文品質を上げる補助情報の確認が有効です。",
             show_now=("レビュー結果サマリ", json_label),
             keep_collapsed=tuple(item for item in base_collapsed if item != "障害シナリオと予防策"),
             developer_only=developer_only,
             expand_quality_hints=True,
-            expand_deep_candidates=bool(deep_candidate_count and remediation_count == 0),
         )
 
     return DisplayPolicy(

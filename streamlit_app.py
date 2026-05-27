@@ -2840,29 +2840,173 @@ def _collect_deep_dive_candidates(
     return candidates
 
 
-def _render_deep_dive_candidate_summary(
-    candidates: list[tuple[str, ChapterSection, str]],
-) -> None:
-    if not candidates:
-        st.success("深堀候補として優先表示すべき章は検出されていません。必要に応じて章順表示から確認できます。")
-        return
-    with st.container(border=True):
-        st.markdown("#### 次に見るべき深堀候補")
-        st.caption(
-            "概要レビューまたは文書構成チェックで追加確認が必要そうな章です。"
-            "通常モードでは最初の候補だけ深堀ボタンが有効になります。"
+def _chapters_for_document(doc: SanitizedDocument) -> tuple[ChapterSection, ...]:
+    """Return cached chapter sections for a sanitized document."""
+    if "chapter_sections_cache" not in st.session_state:
+        st.session_state.chapter_sections_cache = {}
+    cache = st.session_state.chapter_sections_cache
+    if doc.name not in cache:
+        cache[doc.name] = extract_chapters_from_text(doc.outbound_text)
+    return tuple(cache.get(doc.name) or ())
+
+
+def _chapter_needs_deep_dive(
+    review,
+    doc_name: str,
+    chapter: ChapterSection,
+    structure_result: StructureCheckResult | None,
+) -> tuple[bool, str]:
+    overview = _find_chapter_overview(review, doc_name, chapter)
+    if bool(getattr(overview, "needs_deep_dive", False)):
+        reason = getattr(overview, "review", "") or "概要レビューで深堀候補と判定されました。"
+        return True, reason
+    structure_findings = _structure_findings_for_chapter(
+        structure_result,
+        doc_name,
+        chapter,
+    )
+    if structure_findings:
+        return (
+            True,
+            f"文書構成チェックで {len(structure_findings)} 件の追加確認点があります。",
         )
-        for idx, (doc_name, chapter, reason) in enumerate(candidates[:5], 1):
-            st.markdown(
-                f"<div class='issue-row medium'>"
-                f"<b>{idx}. {html.escape(chapter.chapter_label)}</b> "
-                f"<span class='doc-meta'> · {html.escape(doc_name)}</span><br/>"
-                f"{html.escape(reason[:220])}"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-        if len(candidates) > 5:
-            st.caption(f"ほか {len(candidates) - 5} 件の候補があります。章順表示で確認できます。")
+    return False, "概要レビューでは深堀候補としては扱っていません。"
+
+
+def _render_chapter_deep_dive_entry_section(
+    review,
+    preview_docs: list[SanitizedDocument],
+    structure_result: StructureCheckResult | None,
+    document_profile_override: str | None,
+) -> None:
+    docs_with_chapters = [
+        (doc, _chapters_for_document(doc))
+        for doc in preview_docs
+    ]
+    docs_with_chapters = [
+        (doc, chapters)
+        for doc, chapters in docs_with_chapters
+        if len(chapters) >= 3
+    ]
+    if not docs_with_chapters:
+        return
+
+    st.markdown("### 🔬 章別深堀")
+    st.caption(
+        "修正計画とは別に、特定の章を AI に再分析させて追加指摘を取得できます。"
+        "取得した追加指摘は修正アクションプランに合流します。"
+    )
+    _chapter_deep_results_all = st.session_state.get("chapter_deep_dive_results") or {}
+    _developer_deep_dive_all = bool(st.session_state.get("developer_mode", False))
+
+    for doc, chapters in docs_with_chapters:
+        candidate_indices = [
+            idx
+            for idx, chapter in enumerate(chapters)
+            if _chapter_needs_deep_dive(
+                review,
+                doc.name,
+                chapter,
+                structure_result,
+            )[0]
+        ]
+        enabled_deep_idx = (
+            None
+            if _developer_deep_dive_all
+            else (candidate_indices[0] if candidate_indices else None)
+        )
+        with st.expander(f"📄 {doc.name} — {len(chapters)}章", expanded=False):
+            if _developer_deep_dive_all:
+                st.caption(
+                    "開発者モード ON のため、検証用に全章の再分析ボタンを有効化しています。"
+                )
+            elif enabled_deep_idx is None:
+                st.caption(
+                    "深堀候補がないため、通常モードでは章単位の再分析ボタンは無効です。"
+                )
+            else:
+                st.caption(
+                    "トークン消費と判定矛盾を抑えるため、通常モードでは最初の深堀候補章"
+                    f"（{chapters[enabled_deep_idx].chapter_label}）のみ再分析できます。"
+                )
+
+            for chapter_idx, chapter in enumerate(chapters):
+                needs_deep, reason = _chapter_needs_deep_dive(
+                    review,
+                    doc.name,
+                    chapter,
+                    structure_result,
+                )
+                chapter_key = _chapter_cache_key(doc.name, chapter)
+                pass_count = len(_chapter_deep_results_all.get(chapter_key, []))
+                can_run_chapter = _developer_deep_dive_all or chapter_idx == enabled_deep_idx
+                can_deep_dive_more = (
+                    can_run_chapter
+                    and pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES
+                )
+                if pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
+                    button_label = "✅ AI再分析は完了済み"
+                elif pass_count:
+                    button_label = "🔎 追加観点をAIで再分析"
+                else:
+                    button_label = "🔬 この章を再分析"
+                badge = (
+                    "<span class='decision-badge decision-mask'>深堀候補</span>"
+                    if needs_deep
+                    else (
+                        "<span class='decision-badge decision-safe'>開発者深堀可</span>"
+                        if _developer_deep_dive_all
+                        else ""
+                    )
+                )
+                row_col, button_col = st.columns([5, 2])
+                with row_col:
+                    st.markdown(
+                        f"**{html.escape(chapter.chapter_label)}** "
+                        f"<span class='doc-meta'>({html.escape(str(chapter.chapter_id))}, "
+                        f"{len(chapter.extracted_text)} chars)</span> {badge}",
+                        unsafe_allow_html=True,
+                    )
+                    st.caption(reason[:240])
+                with button_col:
+                    btn_key = (
+                        "ch_deepdive_entry_btn_"
+                        + hashlib.sha256(
+                            f"{doc.name}|{chapter.chapter_id}|{chapter_idx}".encode("utf-8")
+                        ).hexdigest()[:12]
+                    )
+                    clicked = st.button(
+                        button_label,
+                        key=btn_key,
+                        disabled=not can_deep_dive_more,
+                        help=(
+                            f"{chapter.chapter_label} を対象にAI再分析します。"
+                            if can_deep_dive_more
+                            else (
+                                "この章は再分析上限に到達しました。既存結果を確認してください。"
+                                if can_run_chapter
+                                else (
+                                    "この章は深堀候補ではないため、通常モードでは対象外です。"
+                                    if not needs_deep
+                                    else "通常モードでは最初の深堀候補章のみ再分析できます。"
+                                )
+                            )
+                        ),
+                        width="stretch",
+                    )
+                    st.caption(
+                        "現在の指摘では不十分なときに使います。追加指摘は修正計画に合流します。"
+                    )
+                    if pass_count:
+                        st.caption(f"深堀り済み: {pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}")
+                    if clicked:
+                        _run_chapter_deep_dive(
+                            doc.name,
+                            chapter,
+                            review,
+                            document_profile_override,
+                        )
+                st.divider()
 
 
 def _render_review_result_dashboard(
@@ -4720,6 +4864,12 @@ if review is not None:
     )
     _render_display_policy_assist(_display_policy)
     _render_remediation_plan(_remediation_plan)
+    _render_chapter_deep_dive_entry_section(
+        review,
+        _preview_docs_for_structure,
+        _structure_result_for_review,
+        document_profile_override,
+    )
     if _structure_findings_count:
         with st.expander(
             f"📐 文書構成チェック詳細 ({_structure_findings_count}件) — 章立て不足の根拠を確認するときに開く",
@@ -4732,12 +4882,6 @@ if review is not None:
         expanded=_display_policy.expand_quality_hints,
     )
     _render_review_log_export_panel()
-    if _deep_dive_candidates:
-        with st.expander(
-            "🔬 章別深堀候補 — 特定章を追加レビューしたいときに開く",
-            expanded=_display_policy.expand_deep_candidates,
-        ):
-            _render_deep_dive_candidate_summary(_deep_dive_candidates)
 
     severity_order = {"high": 0, "medium": 1, "low": 2, "info": 3}
 
@@ -4762,13 +4906,11 @@ if review is not None:
             _ordered_doc_names.append(_n)
 
     _show_doc_details = st.toggle(
-        "🗂 文書別の詳細確認 — 修正計画では特定文書の状況が把握しきれないときに開く",
+        "🗂 文書別の詳細表示 — 章別概要・元指摘・深堀結果の詳細を確認するときに開く",
         value=_display_policy.show_document_details,
         key="show_document_detail_sections",
-        help="修正計画カードで足りる場合は開く必要はありません。章別概要や元指摘を確認したい場合だけオンにします。",
+        help="章別概要、元のレビュー指摘、深堀結果の詳細を確認したい場合だけオンにします。章別深堀ボタンは上の独立セクションから使えます。",
     )
-    if not _show_doc_details:
-        _ordered_doc_names = []
     _step4_container = st.container()
 
     # 深堀結果 (章キー -> [ReviewResult, ...]) を session_state から取得。
@@ -4778,10 +4920,9 @@ if review is not None:
         st.info(_deep_dive_notice)
 
     with _step4_container:
-        if _show_doc_details:
-            st.caption(
-                "修正計画カードに集約する前の詳細です。章別概要、元のLLM指摘、深堀結果を確認したい場合だけ確認してください。"
-            )
+        st.caption(
+            "文書別の概要ヘッダは常に表示します。章別概要、元のLLM指摘、深堀結果の詳細はトグルをオンにした場合だけ表示します。"
+        )
         for _doc_name in _ordered_doc_names:
             # Q4 修正: issues_by_doc に存在しない文書 (= LLM 指摘なし) は空リスト
             _doc_issues = sorted(
@@ -4790,6 +4931,9 @@ if review is not None:
             )
 
             st.markdown(f"### 📄 {_doc_name}")
+            if not _show_doc_details:
+                st.caption("詳細表示はオフです。章別深堀は上の「🔬 章別深堀」セクションから実行できます。")
+                continue
 
             # Phase 7 段階 2-C (2026-05-08): 章境界検出 + 章単位深堀り UI
             # Q35=A: 3 章以上検出時のみ「複数章ファイル」と判定して章サブグループ表示。
@@ -4825,45 +4969,9 @@ if review is not None:
                     _developer_deep_dive_all = bool(
                         st.session_state.get("developer_mode", False)
                     )
-                    _deep_candidate_indices = [
-                        _idx
-                        for _idx, _candidate_ch in enumerate(_chapters)
-                        if bool(
-                            getattr(
-                                _find_chapter_overview(review, _doc_name, _candidate_ch),
-                                "needs_deep_dive",
-                                False,
-                            )
-                        )
-                        or bool(
-                            _structure_findings_for_chapter(
-                                _structure_result_for_review,
-                                _doc_name,
-                                _candidate_ch,
-                            )
-                        )
-                    ]
-                    _enabled_deep_idx = (
-                        None
-                        if _developer_deep_dive_all
-                        else (_deep_candidate_indices[0] if _deep_candidate_indices else None)
+                    st.caption(
+                        "概要レビューは全章を表示します。AI再分析の実行は、上の独立した「🔬 章別深堀」セクションから行います。"
                     )
-                    if _developer_deep_dive_all:
-                        st.caption(
-                            "概要レビューは全章を表示します。開発者モード ON のため、"
-                            "検証用に全章の深堀りボタンを有効化しています。"
-                        )
-                    elif _enabled_deep_idx is None:
-                        st.caption(
-                            "概要レビューは全章を表示します。深堀候補がないため、"
-                            "章単位の深堀りボタンは無効です。"
-                        )
-                    else:
-                        st.caption(
-                            "概要レビューは全章を表示します。トークン消費と判定矛盾を抑えるため、"
-                            f"深堀り実行は最初の深堀候補章（{_chapters[_enabled_deep_idx].chapter_label}）"
-                            "のみ有効です。"
-                        )
                     _chapter_height = (
                         _scroll_height_control(
                             f"{_doc_name} の章別概要表示高さ",
@@ -4912,7 +5020,6 @@ if review is not None:
                                     else ""
                                 )
                             )
-                            _is_enabled_deep_candidate = _ch_idx == _enabled_deep_idx
                             _chapter_key = _chapter_cache_key(_doc_name, _ch)
                             _chapter_deep_results = _chapter_deep_results_all.get(
                                 _chapter_key, []
@@ -4920,77 +5027,24 @@ if review is not None:
                             _pass_count = len(_chapter_deep_results)
 
                             with st.container(border=True):
-                                _ch_col1, _ch_col2 = st.columns([5, 2])
-                                with _ch_col1:
-                                    st.markdown(
-                                        f"**{_ch.chapter_label}** "
-                                        f"<span class='doc-meta'>({_ch.chapter_id}, "
-                                        f"{len(_ch.extracted_text)} chars)</span> "
-                                        f"{_deep_badge}",
-                                        unsafe_allow_html=True,
+                                st.markdown(
+                                    f"**{_ch.chapter_label}** "
+                                    f"<span class='doc-meta'>({_ch.chapter_id}, "
+                                    f"{len(_ch.extracted_text)} chars)</span> "
+                                    f"{_deep_badge}",
+                                    unsafe_allow_html=True,
+                                )
+                                _render_compact_field("章の概要", _summary)
+                                _render_compact_field("概要レビュー", _overview_review)
+                                if _structure_ch_findings:
+                                    _render_compact_field(
+                                        "構成チェック",
+                                        f"{len(_structure_ch_findings)}件の重要/要確認あり",
                                     )
-                                    _render_compact_field("章の概要", _summary)
-                                    _render_compact_field("概要レビュー", _overview_review)
-                                    if _structure_ch_findings:
-                                        _render_compact_field(
-                                            "構成チェック",
-                                            f"{len(_structure_ch_findings)}件の重要/要確認あり",
-                                        )
-                                with _ch_col2:
-                                    _can_run_chapter = (
-                                        _developer_deep_dive_all
-                                        or _is_enabled_deep_candidate
-                                    )
-                                    _can_deep_dive_more = (
-                                        _can_run_chapter
-                                        and _pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES
-                                    )
-                                    _ch_btn_key = (
-                                        "ch_deepdive_btn_"
-                                        + hashlib.sha256(
-                                            f"{_doc_name}|{_ch.chapter_id}|{_ch_idx}".encode("utf-8")
-                                        ).hexdigest()[:12]
-                                    )
-                                    _button_label = (
-                                        "🔬 この章をAIで再分析 — より具体的な指摘を引き出す"
-                                        if _pass_count == 0
-                                        else "🔎 追加観点をAIで再分析"
-                                    )
-                                    if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
-                                        _button_label = "✅ AI再分析は完了済み"
-                                    _ch_clicked = st.button(
-                                        _button_label,
-                                        key=_ch_btn_key,
-                                        disabled=not _can_deep_dive_more,
-                                        help=(
-                                            f"{_ch.chapter_label} を対象に深堀りします。"
-                                            if _can_deep_dive_more
-                                            else (
-                                                "この章は深堀り上限に到達しました。既存結果を確認してください。"
-                                                if _can_run_chapter
-                                                else (
-                                                    "この章は概要レビューで深堀候補ではないため、深堀り対象外です。"
-                                                    if not _needs_deep
-                                                    else "トークン制限対策として、最初の深堀候補章のみ深堀りできます。"
-                                                )
-                                            )
-                                        ),
-                                        width='stretch',
-                                    )
+                                if _pass_count:
                                     st.caption(
-                                        "現在の指摘では不十分なときに使います。"
-                                        "AI に同じ章を再レビューさせ、追加の指摘を取得します。"
+                                        f"深堀り済み: {_pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}"
                                     )
-                                    if _pass_count:
-                                        st.caption(
-                                            f"深堀り済み: {_pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}"
-                                        )
-                                    elif not _can_run_chapter:
-                                        st.caption(
-                                            "深堀り対象外"
-                                            if not _needs_deep
-                                            else "後続候補（現在は無効）"
-                                        )
                                 if _chapter_deep_results:
                                     _deep_issue_count = _count_review_issues(
                                         _chapter_deep_results
@@ -5038,13 +5092,6 @@ if review is not None:
                                                     "この章は2段階の深堀りを完了しました。"
                                                     "追加LLM呼び出しより、既存指摘の対応判断へ進むことを推奨します。"
                                                 )
-                                if _ch_clicked:
-                                    _run_chapter_deep_dive(
-                                        _doc_name,
-                                        _ch,
-                                        review,
-                                        document_profile_override,
-                                    )
 
             # Q4 修正 (2026-05-08): 指摘なしの場合の表示
             if not _doc_issues:

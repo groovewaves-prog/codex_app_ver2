@@ -5,6 +5,7 @@ import unittest
 from secure_review.models import ReviewIssue, ReviewResult, SanitizedDocument
 from secure_review.remediation_plan import (
     RemediationItem,
+    _extract_current_state_from_details,
     build_remediation_plan,
     compare_remediation_plan_to_documents,
     remediation_plan_from_dict,
@@ -131,6 +132,63 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertIn("DR設計の未定義", plan.items[0].re_review_condition)
         self.assertIn("第8章 可用性", plan.items[0].re_review_condition)
         self.assertEqual(plan.re_review_steps[0].label, "必須再レビュー")
+
+    def test_template_uses_current_state_when_available(self) -> None:
+        review = self._review_with_issues(
+            self._issue(
+                current_state="バックアップ取得方針のみが記載されています。",
+                issue="RPO/RTOが未定義。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+
+        self.assertIn(
+            "バックアップ取得方針のみが記載されています。",
+            plan.items[0].template,
+        )
+        self.assertNotIn("現状の記載を要約してください", plan.items[0].template)
+
+    def test_template_extracts_current_state_from_details(self) -> None:
+        review = self._review_with_issues(
+            self._issue(
+                current_state="",
+                details="【現状】バックアップの取得頻度のみ記載されています。【問題点】復旧目標が未定義です。",
+                issue="復旧目標が未定義です。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+
+        self.assertIn("バックアップの取得頻度のみ記載されています。", plan.items[0].template)
+        self.assertNotIn("【問題点】", plan.items[0].template)
+
+    def test_template_uses_actionable_fallback_without_legacy_instruction(self) -> None:
+        review = self._review_with_issues(
+            self._issue(current_state="", details="", issue="復旧目標が未定義です。")
+        )
+
+        plan = build_remediation_plan(review)
+
+        self.assertIn("本文から現状の記載を自動抽出できませんでした", plan.items[0].template)
+        self.assertIn("該当章の元記載を確認", plan.items[0].template)
+        self.assertNotIn("現状の記載を要約してください", plan.items[0].template)
+
+    def test_extract_current_state_from_details_supports_multiple_patterns(self) -> None:
+        self.assertEqual(
+            _extract_current_state_from_details("【現状】状態A\n【問題点】問題B"),
+            "状態A",
+        )
+        self.assertEqual(
+            _extract_current_state_from_details("現状: 状態B\n問題点: 問題C"),
+            "状態B",
+        )
+        self.assertEqual(
+            _extract_current_state_from_details("現状の記載：状態C\n影響: 影響D"),
+            "状態C",
+        )
+        self.assertIsNone(_extract_current_state_from_details(""))
+        self.assertIsNone(_extract_current_state_from_details(None))
 
     def test_review_issue_origin_propagates_to_remediation_item(self) -> None:
         review = self._review_with_issues(

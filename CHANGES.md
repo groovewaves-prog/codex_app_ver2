@@ -52,6 +52,12 @@ Baseline commit: `eaf605a`.
 - 証跡エクスポート内の監査用JSONを `audit_` 接頭辞付きのファイル名へ統一。
 - 旧 `remediation_plan.json` も前回修正計画JSONとして読み込める後方互換を維持。
 
+### Fix — remediation current_state fallback
+
+- 追記テンプレートの「現状」欄で、内部指示文がそのまま表示される問題を修正。
+- `ReviewIssue.current_state` が空の場合は、`details` 内の `【現状】` / `現状:` / `現状の記載:` から補完し、抽出できない場合はユーザ向けの確認誘導文を表示。
+- LLM プロンプト例と評価方針に `current_state` の出力指示を明示。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

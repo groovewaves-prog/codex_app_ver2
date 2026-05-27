@@ -76,6 +76,12 @@ Baseline commit: `eaf605a`.
 - AI Operation Co-Pilot の常時表示をステップ、見出し、次アクションに絞り、理由、完了目安、注意点、チェックリストは折りたたみ詳細へ移動。
 - サイドバー上部の文書種別セレクタを詳細設定 expander 内の先頭へ移動し、通常利用時のサイドバーを簡素化。
 
+### Fix — Phase 4 mask decision history pagination
+
+- The all-period mask decision history keeps the existing aggregation logic, but now defaults to the top 10 terms by decision count.
+- Histories with 11 or more terms show a "show more" control and can be collapsed back to the top 10 view.
+- The history expander title and caption now expose the total term count, while category metrics continue to summarize all terms.
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

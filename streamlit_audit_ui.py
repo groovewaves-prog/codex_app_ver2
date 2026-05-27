@@ -45,6 +45,59 @@ from secure_review.audit_log import (
 from secure_review.export_names import audit_json_filename, audit_log_zip_filename
 
 CUSTOMERS_DIR = Path("data/customers")
+HISTORY_DEFAULT_LIMIT = 10
+HISTORY_EXPANDED_STATE_KEY = "history_expanded"
+
+
+def _sort_history_terms(
+    agg: Mapping[str, Mapping[str, Any]],
+) -> list[tuple[str, Mapping[str, Any]]]:
+    """Sort mask-decision history terms by decision count descending."""
+    return sorted(
+        agg.items(),
+        key=lambda kv: (
+            -int(kv[1].get("total", 0) or 0),
+            str(kv[0]),
+        ),
+    )
+
+
+def _select_history_terms_for_display(
+    sorted_terms: list[tuple[str, Mapping[str, Any]]],
+    *,
+    expanded: bool,
+    limit: int = HISTORY_DEFAULT_LIMIT,
+) -> tuple[list[tuple[str, Mapping[str, Any]]], int, bool]:
+    """Return visible terms, remaining count, and whether display is limited."""
+    total_terms = len(sorted_terms)
+    if total_terms > limit and not expanded:
+        return sorted_terms[:limit], total_terms - limit, True
+    return sorted_terms, 0, False
+
+
+def _split_history_terms_by_recommendation(
+    terms: list[tuple[str, Mapping[str, Any]]],
+) -> tuple[
+    list[tuple[str, Mapping[str, Any]]],
+    list[tuple[str, Mapping[str, Any]]],
+    list[tuple[str, Mapping[str, Any]]],
+    list[tuple[str, Mapping[str, Any]]],
+]:
+    promote_mask = []
+    promote_skip = []
+    context_dep = []
+    insufficient = []
+    for term, entry in terms:
+        rec = recommend_action(entry)
+        if rec == "promote_seed_mask":
+            promote_mask.append((term, entry))
+        elif rec == "promote_seed_skip":
+            promote_skip.append((term, entry))
+        elif rec == "context_dependent":
+            context_dep.append((term, entry))
+        else:
+            insufficient.append((term, entry))
+    return promote_mask, promote_skip, context_dep, insufficient
 
 
 # ============================================================
@@ -577,8 +630,9 @@ def render_history_panel() -> None:
 
     agg = aggregate_decisions(customer_id=customer_id)
 
+    total_terms = len(agg)
     with st.expander(
-        f"📈 全期間のマスク判断履歴と推奨 (辞書プロファイル: {customer_id}, 語 {len(agg)} 種類)",
+        f"📈 全期間のマスク判断履歴と推奨 ({total_terms} 件 / 辞書プロファイル: {customer_id})",
         expanded=False,
     ):
         if not agg:
@@ -590,39 +644,43 @@ def render_history_panel() -> None:
             )
             return
 
+        sorted_terms = _sort_history_terms(agg)
+        history_expanded = bool(st.session_state.get(HISTORY_EXPANDED_STATE_KEY, False))
+        display_terms, remaining_terms, is_limited = _select_history_terms_for_display(
+            sorted_terms,
+            expanded=history_expanded,
+            limit=HISTORY_DEFAULT_LIMIT,
+        )
+        if is_limited:
+            st.caption(f"全 {total_terms} 件中、上位 {HISTORY_DEFAULT_LIMIT} 件を表示")
+        elif total_terms > HISTORY_DEFAULT_LIMIT:
+            st.caption(f"全 {total_terms} 件を表示中")
+
         # 推奨カテゴリ別サマリ
-        promote_mask = []
-        promote_skip = []
-        context_dep = []
-        insufficient = []
-        for term, e in agg.items():
-            rec = recommend_action(e)
-            if rec == "promote_seed_mask":
-                promote_mask.append((term, e))
-            elif rec == "promote_seed_skip":
-                promote_skip.append((term, e))
-            elif rec == "context_dependent":
-                context_dep.append((term, e))
-            else:
-                insufficient.append((term, e))
+        all_promote_mask, all_promote_skip, all_context_dep, all_insufficient = (
+            _split_history_terms_by_recommendation(sorted_terms)
+        )
+        promote_mask, promote_skip, context_dep, insufficient = (
+            _split_history_terms_by_recommendation(display_terms)
+        )
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("⚡ マスク確定推奨", len(promote_mask))
-        c2.metric("⚡ 素通し確定推奨", len(promote_skip))
-        c3.metric("🤔 文脈依存", len(context_dep))
-        c4.metric("📉 データ不足", len(insufficient))
+        c1.metric("⚡ マスク確定推奨", len(all_promote_mask))
+        c2.metric("⚡ 素通し確定推奨", len(all_promote_skip))
+        c3.metric("🤔 文脈依存", len(all_context_dep))
+        c4.metric("📉 データ不足", len(all_insufficient))
 
         st.divider()
 
         # 強い推奨 (⚡) を優先表示
         if promote_mask:
             st.markdown("### ⚡ マスク確定推奨 (90%+ がマスク判断)")
-            for term, e in sorted(promote_mask, key=lambda kv: -kv[1]["total"]):
+            for term, e in promote_mask:
                 _render_term_card(term, e, customer_id, key_prefix="hist_pm")
 
         if promote_skip:
             st.markdown("### ⚡ 素通し確定推奨 (90%+ が素通し判断)")
-            for term, e in sorted(promote_skip, key=lambda kv: -kv[1]["total"]):
+            for term, e in promote_skip:
                 _render_term_card(term, e, customer_id, key_prefix="hist_ps")
 
         if context_dep:
@@ -630,7 +688,7 @@ def render_history_panel() -> None:
                 f"🤔 文脈依存 ({len(context_dep)} 種類) - 表示するには展開",
                 expanded=False,
             ):
-                for term, e in sorted(context_dep, key=lambda kv: -kv[1]["total"]):
+                for term, e in context_dep:
                     _render_term_card(term, e, customer_id, key_prefix="hist_cd")
 
         if insufficient:
@@ -638,5 +696,20 @@ def render_history_panel() -> None:
                 f"📉 データ不足 ({len(insufficient)} 種類、5 件未満) - 表示するには展開",
                 expanded=False,
             ):
-                for term, e in sorted(insufficient, key=lambda kv: -kv[1]["total"]):
+                for term, e in insufficient:
                     _render_term_card(term, e, customer_id, key_prefix="hist_id")
+
+        if is_limited:
+            if st.button(
+                f"📂 もっと見る (残り {remaining_terms} 件)",
+                key="history_expand_btn",
+            ):
+                st.session_state[HISTORY_EXPANDED_STATE_KEY] = True
+                st.rerun()
+        elif total_terms > HISTORY_DEFAULT_LIMIT:
+            if st.button(
+                f"📁 上位 {HISTORY_DEFAULT_LIMIT} 件のみ表示に戻す",
+                key="history_collapse_btn",
+            ):
+                st.session_state[HISTORY_EXPANDED_STATE_KEY] = False
+                st.rerun()

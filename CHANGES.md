@@ -71,6 +71,11 @@ Baseline commit: `eaf605a`.
 - `文書別の詳細表示` トグルは、章別概要・元指摘・深堀結果詳細の表示だけを制御する責務へ縮小。
 - 旧 `章別深堀候補` expander を廃止し、AI Display Director の補助表示からも同項目を削除。
 
+### Fix — Phase 3 Co-Pilot compression and selector relocation
+
+- AI Operation Co-Pilot の常時表示をステップ、見出し、次アクションに絞り、理由、完了目安、注意点、チェックリストは折りたたみ詳細へ移動。
+- サイドバー上部の文書種別セレクタを詳細設定 expander 内の先頭へ移動し、通常利用時のサイドバーを簡素化。
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

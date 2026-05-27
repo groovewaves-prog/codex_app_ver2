@@ -53,7 +53,7 @@ def build_operation_guide(
             tone="success",
             step_label="ステップ 4 / レビュー結果確認",
             headline="レビュー結果を確認できます",
-            primary_action="まず修正計画カードを確認してください。詳細ログや品質改善ヒントは、監査・追加確認を行う場面で開けば十分です。",
+            primary_action="まず修正計画カードを確認してください。詳細ログや障害シナリオは、監査・追加確認を行う場面で開けば十分です。",
             reason="レビュー指摘と構成不足は修正計画へ集約済みです。重複情報を順番に読むより、次に直す内容から確認する方が迷いません。",
             done_when="修正担当に渡す項目、追記する文章案、再レビュー条件を把握できた状態です。",
             watch_out="深堀や詳細表示は補助情報です。通常は赤いカード、黄色いカード、追記テンプレートの順に確認してください。",
@@ -214,9 +214,8 @@ def build_review_display_policy(
     base_show = ("修正計画カード", "追記テンプレート", "再レビュー条件")
     json_label = "再レビュー用修正計画JSON" if not previous_plan_loaded else "再レビュー用JSONと前回比較結果"
     base_collapsed = [
-        "品質改善ヒント",
+        "障害シナリオと予防策",
         "元のレビュー指摘",
-        "証跡エクスポート",
     ]
     if structure_finding_count:
         base_collapsed.append("文書構成チェック詳細")
@@ -224,27 +223,38 @@ def build_review_display_policy(
         base_collapsed.append("章別深堀候補")
 
     developer_only = (
-        ("メタレビュー", "プロンプトプレビュー", "LLM生レスポンス")
+        ("証跡エクスポート", "メタレビュー", "プロンプトプレビュー", "LLM生レスポンス")
         if developer_mode else ()
     )
 
     if high_count > 0:
         return DisplayPolicy(
             tone="block",
-            headline="AI判断: 先に対応すべき指摘があります",
-            primary_action="赤い修正計画カードを確認し、誰が・何を追記するか・再レビュー条件を決めてください。",
-            reason="影響が大きい指摘があります。詳細ログや品質改善ヒントより、先に修正が必要な項目を確認すると迷いにくくなります。",
+            headline="まず赤い修正計画カードを確認してください",
+            primary_action="高重要度の指摘から先に対応すると、追記方針と再レビュー条件を素早く決められます。",
+            reason="影響が大きい指摘があります。詳細ログや障害シナリオより、先に修正が必要な項目を確認すると迷いにくくなります。",
             show_now=(*base_show, json_label),
             keep_collapsed=tuple(base_collapsed),
             developer_only=developer_only,
         )
 
-    if remediation_count > 0 or medium_count > 0:
+    if medium_count > 0:
         return DisplayPolicy(
             tone="warn",
-            headline="AI判断: 修正計画だけ見れば次の作業に進めます",
-            primary_action="黄色いカードを確認し、必要な追記だけ文書へ反映してください。",
+            headline="黄色の修正計画カードから確認してください",
+            primary_action="中重要度の指摘を先に整理すると、必要な追記と確認範囲をすぐ決められます。",
             reason="元レビュー指摘は修正計画に集約済みです。通常は詳細ログを開かなくても対応できます。",
+            show_now=(*base_show, json_label),
+            keep_collapsed=tuple(base_collapsed),
+            developer_only=developer_only,
+        )
+
+    if remediation_count > 0:
+        return DisplayPolicy(
+            tone="success",
+            headline="修正計画カードを順に確認してください",
+            primary_action="低重要度の改善提案は、リリース前の確認や次フェーズ改善として扱えます。",
+            reason="高重要度・中重要度の修正計画は目立っていません。修正計画カードの内容を順に確認し、必要なものだけ文書へ反映してください。",
             show_now=(*base_show, json_label),
             keep_collapsed=tuple(base_collapsed),
             developer_only=developer_only,
@@ -253,11 +263,16 @@ def build_review_display_policy(
     if future_hint_count > 0 or deep_candidate_count > 0:
         return DisplayPolicy(
             tone="info",
-            headline="AI判断: 大きな修正は少なく、品質改善ヒントが中心です",
-            primary_action="修正計画が少ない場合は品質改善ヒントを開き、曖昧表現や読み手リスクだけ確認してください。",
+            headline=(
+                "文書構成チェックの結果を確認してください"
+                if structure_finding_count else "障害シナリオと予防策を確認してください"
+            ),
+            primary_action=(
+                "構成不足や将来リスクを補助情報として確認し、必要なものだけ追記候補にしてください。"
+            ),
             reason="重大な修正計画が少ないため、本文品質を上げる補助情報の確認が有効です。",
             show_now=("レビュー結果サマリ", json_label),
-            keep_collapsed=tuple(item for item in base_collapsed if item != "品質改善ヒント"),
+            keep_collapsed=tuple(item for item in base_collapsed if item != "障害シナリオと予防策"),
             developer_only=developer_only,
             expand_quality_hints=True,
             expand_deep_candidates=bool(deep_candidate_count and remediation_count == 0),
@@ -265,9 +280,9 @@ def build_review_display_policy(
 
     return DisplayPolicy(
         tone="success",
-        headline="AI判断: 追加確認は最小限で十分です",
-        primary_action="次回比較する場合だけ再レビュー用修正計画JSONを保存し、レビューを完了してください。",
-        reason="高重要度・中重要度の修正計画や強い品質改善ヒントは目立っていません。",
+        headline="文書構成チェックの結果を確認してください",
+        primary_action="大きな修正候補は少ないため、構成チェックと再レビュー用JSONの要否だけ確認すれば十分です。",
+        reason="高重要度・中重要度の修正計画や強い将来リスクの兆候は目立っていません。",
         show_now=("レビュー結果サマリ", json_label),
         keep_collapsed=tuple(base_collapsed),
         developer_only=developer_only,

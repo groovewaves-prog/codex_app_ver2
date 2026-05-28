@@ -24,16 +24,15 @@ import re
 import traceback
 import uuid
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
 
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
 from secure_review.agent_planner import (
-    DisplayPolicy,
     OperationGuide,
     build_operation_guide,
-    build_review_display_policy,
 )
 from secure_review.env_loader import load_dotenv
 from secure_review.export_names import remediation_plan_json_filename
@@ -1581,6 +1580,110 @@ div[data-testid="stExpander"] summary {
     font-weight: 900;
     margin-top: 0.1rem;
 }
+.step4-v2 {
+    display: flex;
+    flex-direction: column;
+    gap: 1.05rem;
+}
+.step4-summary-note {
+    border: 1px solid rgba(8,119,96,0.14);
+    border-radius: var(--sr-radius-md);
+    background: rgba(255,253,248,0.72);
+    color: var(--sr-text-secondary);
+    padding: 0.8rem 0.9rem;
+    line-height: 1.7;
+}
+.step4-chip-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    align-items: center;
+}
+.step4-section-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    margin-top: 0.7rem;
+}
+.step4-section-title {
+    color: var(--sr-text-primary);
+    font-size: 1.35rem;
+    font-weight: 900;
+    letter-spacing: -0.02em;
+}
+.step4-section-caption {
+    color: var(--sr-text-secondary);
+    font-size: 0.86rem;
+    line-height: 1.6;
+    margin-top: 0.2rem;
+}
+.step4-card-body {
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-lg);
+    background: rgba(255,253,248,0.70);
+    padding: 0.85rem;
+    margin-top: 0.55rem;
+}
+.step4-field-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+.step4-field {
+    border: 1px solid rgba(8,119,96,0.11);
+    border-radius: var(--sr-radius-md);
+    background: rgba(247,247,245,0.78);
+    padding: 0.72rem 0.78rem;
+}
+.step4-field-label {
+    color: var(--sr-text-tertiary);
+    font-size: 0.74rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
+    margin-bottom: 0.35rem;
+}
+.step4-field-value {
+    color: var(--sr-text-primary);
+    font-size: 0.9rem;
+    line-height: 1.65;
+    white-space: pre-wrap;
+}
+.step4-copy-note {
+    color: var(--sr-text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.55;
+}
+.step4-aux-list {
+    display: grid;
+    gap: 0.7rem;
+}
+.step4-guide-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+}
+.step4-guide-card {
+    border: 1px solid rgba(8,119,96,0.12);
+    border-radius: var(--sr-radius-md);
+    background: rgba(255,253,248,0.72);
+    padding: 0.75rem 0.8rem;
+}
+.step4-guide-title {
+    color: var(--sr-text-primary);
+    font-weight: 900;
+}
+.step4-guide-body {
+    color: var(--sr-text-secondary);
+    font-size: 0.84rem;
+    line-height: 1.6;
+    margin-top: 0.35rem;
+}
+@media (max-width: 760px) {
+    .step4-section-head { display: block; }
+    .step4-field-grid { grid-template-columns: 1fr; }
+    .step4-guide-grid { grid-template-columns: 1fr; }
+}
 @media (max-width: 760px) {
     .remediation-head { display: block; }
     .remediation-summary { margin-top: 0.45rem; }
@@ -1740,7 +1843,6 @@ def _reset_state() -> None:
         "remediation_plan",
         "review_issue_feedback",
         "review_issue_feedback_notes",
-        "show_document_detail_sections",
         # R-M (PR-D2)
         "masking_states",
         "user_decisions",
@@ -2136,48 +2238,6 @@ def _render_operation_assist(guide: OperationGuide) -> None:
             st.markdown("**確認チェックリスト**:")
             for item in guide.checklist:
                 st.markdown(f"- {item}")
-
-
-def _render_display_policy_assist(policy: DisplayPolicy) -> None:
-    show_html = "".join(
-        f"<div class='assist-check'>{html.escape(item)}</div>"
-        for item in policy.show_now
-    )
-    collapsed_html = "".join(
-        f"<div class='assist-check'>{html.escape(item)}</div>"
-        for item in policy.keep_collapsed
-    ) or "<div class='assist-check'>必要時に開く詳細はありません</div>"
-    developer_html = ""
-    if policy.developer_only:
-        developer_items = " / ".join(policy.developer_only)
-        developer_html = (
-            "<div class='assist-note'><b>開発者モード:</b> "
-            f"{html.escape(developer_items)} は開発者モード時だけ表示します。</div>"
-        )
-    html_block = (
-        f"<section class='operation-assist {html.escape(policy.tone)}'>"
-        "<div class='assist-kicker'>AI Display Director</div>"
-        "<div class='assist-layout'>"
-        "<div>"
-        f"<div class='assist-title'>{html.escape(policy.headline)}</div>"
-        f"<div class='assist-action'>{html.escape(policy.primary_action)}</div>"
-        f"{developer_html}"
-        "</div>"
-        "<div class='assist-checklist'>"
-        "<div class='assist-checklist-title'>今見るもの</div>"
-        f"{show_html}"
-        "<div class='assist-checklist-title' style='margin-top:0.75rem;'>補助で見るもの</div>"
-        f"{collapsed_html}"
-        "</div>"
-        "</div>"
-        "</section>"
-    )
-    st.markdown(
-        html_block,
-        unsafe_allow_html=True,
-    )
-    with st.expander("📊 AI 判断の詳細を見る", expanded=False):
-        st.caption(policy.reason)
 
 
 def _render_step_header(step: int, title: str, description: str) -> None:
@@ -2771,6 +2831,8 @@ def _render_workflow_top_panel(
     )
     if active_status == "レビュー完了":
         assist_slot.empty()
+        status_slot.empty()
+        return active_status
     else:
         assist_slot.empty()
         with assist_slot.container():
@@ -3043,8 +3105,319 @@ def _chapter_needs_deep_dive(
     return False, "概要レビューでは深堀候補としては扱っていません。"
 
 
-def _render_chapter_deep_dive_entry_section(
-    review,
+def _remediation_origin_badge_html(origin: str) -> str:
+    badge = remediation_origin_badge(origin)
+    if badge is None:
+        return ""
+    label, css_class = badge
+    return (
+        "<div class='origin-badge-row'>"
+        f"<span class='origin-badge {html.escape(css_class)}'>"
+        f"{html.escape(label)}</span>"
+        "</div>"
+    )
+
+
+def _step4_document_label(preview_docs: list[SanitizedDocument]) -> str:
+    if not preview_docs:
+        return "対象文書なし"
+    if len(preview_docs) == 1:
+        return preview_docs[0].name
+    return f"{len(preview_docs)} 文書"
+
+
+def _step4_review_timestamp() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+
+def _step4_future_hint_count(report: FutureReviewReport | None) -> int:
+    if report is None:
+        return 0
+    return (
+        getattr(report, "ambiguous_count", 0)
+        + len(getattr(report, "reader_risks", ()) or ())
+        + len(getattr(report, "premortem_scenarios", ()) or ())
+    )
+
+
+def _step4_structure_finding_count(result: StructureCheckResult | None) -> int:
+    if result is None:
+        return 0
+    return len(getattr(result, "findings", ()) or ())
+
+
+def _step4_severity_counts(plan: RemediationPlan) -> dict[str, int]:
+    counts = {"high": 0, "medium": 0, "low": 0, "neutral": 0}
+    for item in plan.items:
+        key = item.severity if item.severity in counts else "neutral"
+        counts[key] += 1
+    return counts
+
+
+def _step4_overall_comment(review: ReviewResult) -> str:
+    summary_structured = getattr(review, "summary_structured", None)
+    if summary_structured and not summary_structured.is_empty():
+        for value in (
+            getattr(summary_structured, "overall_evaluation", ""),
+            getattr(summary_structured, "content_outline", ""),
+            getattr(summary_structured, "purpose", ""),
+        ):
+            value = (value or "").strip()
+            if value:
+                return value[:260] + ("..." if len(value) > 260 else "")
+    summary = (getattr(review, "summary", "") or "").strip()
+    return summary[:260] + ("..." if len(summary) > 260 else "")
+
+
+def _step4_effort_rank(effort: str) -> int:
+    return {"large": 0, "medium": 1, "small": 2}.get((effort or "").lower(), 3)
+
+
+def _sorted_step4_items(plan: RemediationPlan) -> list:
+    severity_rank = {"high": 0, "medium": 1, "low": 2, "info": 3}
+    return sorted(
+        plan.items,
+        key=lambda item: (
+            severity_rank.get(item.severity, 4),
+            _step4_effort_rank(item.effort),
+            item.item_id,
+        ),
+    )
+
+
+def _extract_template_section(template: str, label: str) -> str:
+    if not template:
+        return ""
+    pattern = re.compile(
+        rf"-\s*{re.escape(label)}[:：]\s*(.*?)(?=\n-\s*[^:\n]+[:：]|\Z)",
+        re.DOTALL,
+    )
+    match = pattern.search(template)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    value = re.sub(r"^\s*-\s*", "", value, flags=re.MULTILINE).strip()
+    return value
+
+
+def _step4_item_fields(item) -> dict[str, str]:
+    return {
+        "現状": _extract_template_section(item.template, "現状"),
+        "問題点": item.problem,
+        "修正方針": item.fix_policy,
+        "影響と判断基準": _extract_template_section(item.template, "影響と判断基準"),
+        "完了条件": _extract_template_section(item.template, "完了条件"),
+        "再レビュー条件": item.re_review_condition,
+    }
+
+
+def _normalize_chapter_match_text(value: str) -> str:
+    return re.sub(r"[\s　_\-・:：/／()（）\[\]【】]+", "", (value or "").lower())
+
+
+def _find_chapter_for_remediation_item(
+    item,
+    preview_docs: list[SanitizedDocument],
+) -> tuple[str, ChapterSection] | None:
+    joined_for_match = " ".join(
+        str(part or "")
+        for part in (
+            item.target_section,
+            item.title,
+            item.problem,
+            item.fix_policy,
+            item.re_review_scope,
+        )
+    )
+    candidate_text = _normalize_chapter_match_text(joined_for_match)
+    chapter_number_match = re.search(r"第\s*(\d+)\s*章", joined_for_match)
+    document_candidates = [
+        doc
+        for doc in preview_docs
+        if item.target_document and item.target_document in doc.name
+    ] or list(preview_docs)
+    for doc in document_candidates:
+        for chapter in _chapters_for_document(doc):
+            chapter_text = _normalize_chapter_match_text(
+                f"{chapter.chapter_id} {chapter.chapter_label} {chapter.chapter_name}"
+            )
+            if chapter_text and chapter_text in candidate_text:
+                return doc.name, chapter
+            if chapter_number_match and chapter_number_match.group(1) in chapter.chapter_label:
+                return doc.name, chapter
+            if chapter.chapter_id and _normalize_chapter_match_text(chapter.chapter_id) in candidate_text:
+                return doc.name, chapter
+    return None
+
+
+def _render_step4_status_and_summary(
+    review: ReviewResult,
+    preview_docs: list[SanitizedDocument],
+    remediation_plan: RemediationPlan,
+    structure_result: StructureCheckResult | None,
+    future_report: FutureReviewReport | None,
+) -> None:
+    issue_count = len(remediation_plan.items)
+    lead = (
+        "この文書には対応が必要な指摘があります"
+        if issue_count
+        else "対応が必要な指摘はありませんでした"
+    )
+    st.markdown(
+        sr_ui.status_bar(
+            f"レビュー完了 · {_step4_review_timestamp()}",
+            _step4_document_label(preview_docs),
+            "✓",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        sr_ui.big_number_summary(issue_count, "件の指摘", lead),
+        unsafe_allow_html=True,
+    )
+    overall_comment = _step4_overall_comment(review)
+    if overall_comment:
+        st.markdown(
+            f"<div class='step4-summary-note'>{html.escape(overall_comment)}</div>",
+            unsafe_allow_html=True,
+        )
+    counts = _step4_severity_counts(remediation_plan)
+    chips = []
+    if counts.get("high"):
+        chips.append(sr_ui.severity_chip("high", counts["high"]))
+    if counts.get("medium"):
+        chips.append(sr_ui.severity_chip("medium", counts["medium"]))
+    structure_count = _step4_structure_finding_count(structure_result)
+    if structure_count:
+        chips.append(
+            f"<span class='sr-chip sr-severity-neutral'>不足章<span>{structure_count}</span></span>"
+        )
+    future_count = _step4_future_hint_count(future_report)
+    if future_count:
+        chips.append(
+            f"<span class='sr-chip sr-severity-neutral'>将来リスク<span>{future_count}</span></span>"
+        )
+    if chips:
+        st.markdown(
+            "<div class='step4-chip-row'>" + "".join(chips) + "</div>",
+            unsafe_allow_html=True,
+        )
+
+
+def _render_step4_field_grid(fields: dict[str, str]) -> None:
+    html_fields = []
+    for label, value in fields.items():
+        if not value:
+            value = "該当情報はまだ明確ではありません。修正文書で補足してください。"
+        html_fields.append(
+            "<div class='step4-field'>"
+            f"<div class='step4-field-label'>{html.escape(label)}</div>"
+            f"<div class='step4-field-value'>{html.escape(str(value))}</div>"
+            "</div>"
+        )
+    st.markdown(
+        "<div class='step4-field-grid'>" + "".join(html_fields) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_step4_issue_card(
+    item,
+    *,
+    index: int,
+    expanded: bool,
+    review: ReviewResult,
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+) -> None:
+    label = f"{item.item_id or index} · {item.title}"
+    with st.expander(label, expanded=expanded):
+        matched_chapter = _find_chapter_for_remediation_item(item, preview_docs)
+        header_col, action_col = st.columns([5, 1.35])
+        with header_col:
+            st.markdown(
+                sr_ui.issue_card_header(
+                    item.severity,
+                    item.effort,
+                    item.item_id,
+                    item.target_section,
+                    item.title,
+                ),
+                unsafe_allow_html=True,
+            )
+            origin_badge = _remediation_origin_badge_html(item.origin)
+            if origin_badge:
+                st.markdown(origin_badge, unsafe_allow_html=True)
+        with action_col:
+            if matched_chapter is not None:
+                doc_name, chapter = matched_chapter
+                button_key = (
+                    "step4_issue_deepdive_"
+                    + hashlib.sha256(
+                        f"{item.item_id}|{doc_name}|{chapter.chapter_id}".encode("utf-8")
+                    ).hexdigest()[:12]
+                )
+                if st.button("🔬 章を再分析", key=button_key, width="stretch"):
+                    _run_chapter_deep_dive(
+                        doc_name,
+                        chapter,
+                        review,
+                        document_profile_override,
+                    )
+        st.markdown("<div class='step4-card-body'>", unsafe_allow_html=True)
+        _render_step4_field_grid(_step4_item_fields(item))
+        st.markdown("</div>", unsafe_allow_html=True)
+        copy_key = f"step4_template_copy_{index}_{item.item_id}"
+        if st.button("追記の雛形をコピー", key=copy_key):
+            st.info("下のコードブロック右上のコピー操作で、追記案を文書へ転記できます。")
+        st.code(item.template, language="markdown")
+
+
+def _render_step4_issue_cards(
+    plan: RemediationPlan,
+    review: ReviewResult,
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+) -> None:
+    left, right = st.columns([4, 1.55])
+    with left:
+        st.markdown(
+            "<div class='step4-section-title'>対応すべき指摘</div>"
+            "<div class='step4-section-caption'>重要度の高いものから、担当者・追記内容・再レビュー条件を確認します。</div>",
+            unsafe_allow_html=True,
+        )
+    with right:
+        st.download_button(
+            "📒 修正計画 JSON",
+            data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
+            file_name=remediation_plan_json_filename(),
+            mime="application/json",
+            type="primary",
+            width="stretch",
+            help="次回、修正後の文書と一緒に読み込ませると、前回指摘の解消状況を照合できます。",
+        )
+    items = _sorted_step4_items(plan)
+    if not items:
+        st.success("対応が必要な修正計画カードはありません。補助セクションで構成チェックや将来リスクだけ確認してください。")
+        return
+    first_high_opened = False
+    for index, item in enumerate(items, 1):
+        expanded = False
+        if item.severity == "high" and not first_high_opened:
+            expanded = True
+            first_high_opened = True
+        _render_step4_issue_card(
+            item,
+            index=index,
+            expanded=expanded,
+            review=review,
+            preview_docs=preview_docs,
+            document_profile_override=document_profile_override,
+        )
+
+
+def _render_step4_chapter_auxiliary(
+    review: ReviewResult,
     preview_docs: list[SanitizedDocument],
     structure_result: StructureCheckResult | None,
     document_profile_override: str | None,
@@ -3059,308 +3432,227 @@ def _render_chapter_deep_dive_entry_section(
         if len(chapters) >= 3
     ]
     if not docs_with_chapters:
+        st.caption("3章以上を検出した文書がないため、章単位の追加レビューは表示していません。")
         return
-
-    st.markdown("### 🔬 章別深堀")
-    st.caption(
-        "修正計画とは別に、特定の章を AI に再分析させて追加指摘を取得できます。"
-        "取得した追加指摘は修正アクションプランに合流します。"
-    )
-    _chapter_deep_results_all = st.session_state.get("chapter_deep_dive_results") or {}
-    _developer_deep_dive_all = bool(st.session_state.get("developer_mode", False))
-
+    developer_all = bool(st.session_state.get("developer_mode", False))
     for doc, chapters in docs_with_chapters:
+        st.markdown(
+            sr_ui.collapsed_list_row(
+                "📄",
+                f"{doc.name} · {len(chapters)}章",
+                "章の概要を確認し、必要な章だけAIで再分析できます。",
+            ),
+            unsafe_allow_html=True,
+        )
         candidate_indices = [
-            idx
-            for idx, chapter in enumerate(chapters)
-            if _chapter_needs_deep_dive(
+            idx for idx, candidate in enumerate(chapters)
+            if _chapter_needs_deep_dive(review, doc.name, candidate, structure_result)[0]
+        ]
+        enabled_idx = None if developer_all else (candidate_indices[0] if candidate_indices else None)
+        for chapter_idx, chapter in enumerate(chapters):
+            overview = _find_chapter_overview(review, doc.name, chapter)
+            summary = (
+                getattr(overview, "summary", "") if overview is not None else ""
+            ) or _chapter_excerpt(chapter.extracted_text)
+            needs_deep, reason = _chapter_needs_deep_dive(
                 review,
                 doc.name,
                 chapter,
                 structure_result,
-            )[0]
-        ]
-        enabled_deep_idx = (
-            None
-            if _developer_deep_dive_all
-            else (candidate_indices[0] if candidate_indices else None)
-        )
-        with st.expander(f"📄 {doc.name} — {len(chapters)}章", expanded=False):
-            if _developer_deep_dive_all:
-                st.caption(
-                    "開発者モード ON のため、検証用に全章の再分析ボタンを有効化しています。"
-                )
-            elif enabled_deep_idx is None:
-                st.caption(
-                    "深堀候補がないため、通常モードでは章単位の再分析ボタンは無効です。"
-                )
-            else:
-                st.caption(
-                    "トークン消費と判定矛盾を抑えるため、通常モードでは最初の深堀候補章"
-                    f"（{chapters[enabled_deep_idx].chapter_label}）のみ再分析できます。"
-                )
-
-            for chapter_idx, chapter in enumerate(chapters):
-                needs_deep, reason = _chapter_needs_deep_dive(
-                    review,
-                    doc.name,
-                    chapter,
-                    structure_result,
-                )
-                chapter_key = _chapter_cache_key(doc.name, chapter)
-                pass_count = len(_chapter_deep_results_all.get(chapter_key, []))
-                can_run_chapter = _developer_deep_dive_all or chapter_idx == enabled_deep_idx
-                can_deep_dive_more = (
-                    can_run_chapter
-                    and pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES
-                )
-                if pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
-                    button_label = "✅ AI再分析は完了済み"
-                elif pass_count:
-                    button_label = "🔎 追加観点をAIで再分析"
-                else:
-                    button_label = "🔬 この章を再分析"
-                badge = (
-                    "<span class='decision-badge decision-mask'>深堀候補</span>"
-                    if needs_deep
-                    else (
-                        "<span class='decision-badge decision-safe'>開発者深堀可</span>"
-                        if _developer_deep_dive_all
-                        else ""
-                    )
-                )
-                row_col, button_col = st.columns([5, 2])
-                with row_col:
-                    st.markdown(
-                        f"**{html.escape(chapter.chapter_label)}** "
-                        f"<span class='doc-meta'>({html.escape(str(chapter.chapter_id))}, "
-                        f"{len(chapter.extracted_text)} chars)</span> {badge}",
-                        unsafe_allow_html=True,
-                    )
-                    st.caption(reason[:240])
-                with button_col:
-                    btn_key = (
-                        "ch_deepdive_entry_btn_"
-                        + hashlib.sha256(
-                            f"{doc.name}|{chapter.chapter_id}|{chapter_idx}".encode("utf-8")
-                        ).hexdigest()[:12]
-                    )
-                    clicked = st.button(
-                        button_label,
-                        key=btn_key,
-                        disabled=not can_deep_dive_more,
-                        help=(
-                            f"{chapter.chapter_label} を対象にAI再分析します。"
-                            if can_deep_dive_more
-                            else (
-                                "この章は再分析上限に到達しました。既存結果を確認してください。"
-                                if can_run_chapter
-                                else (
-                                    "この章は深堀候補ではないため、通常モードでは対象外です。"
-                                    if not needs_deep
-                                    else "通常モードでは最初の深堀候補章のみ再分析できます。"
-                                )
-                            )
-                        ),
-                        width="stretch",
-                    )
-                    st.caption(
-                        "現在の指摘では不十分なときに使います。追加指摘は修正計画に合流します。"
-                    )
-                    if pass_count:
-                        st.caption(f"深堀り済み: {pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}")
-                    if clicked:
-                        _run_chapter_deep_dive(
-                            doc.name,
-                            chapter,
-                            review,
-                            document_profile_override,
-                        )
-                st.divider()
-
-
-def _render_review_result_dashboard(
-    review,
-    preview_docs: list[SanitizedDocument],
-    structure_result: StructureCheckResult | None,
-    deep_candidates: list[tuple[str, ChapterSection, str]],
-) -> None:
-    high_count = sum(1 for issue in review.issues if issue.severity == "high")
-    medium_count = sum(1 for issue in review.issues if issue.severity == "medium")
-    structure_high = sum(
-        1
-        for finding in getattr(structure_result, "findings", ()) or ()
-        if finding.severity == "high"
-    )
-    tokens = sum(int(getattr(doc, "estimated_input_tokens", 0) or 0) for doc in preview_docs)
-    total_high = high_count + structure_high
-    if total_high:
-        result_title = "高重要度の指摘を優先確認"
-        result_detail = "レビュー指摘と文書構成チェックは修正計画カードに集約しています。赤いカードから対応してください。"
-        result_tone = "block"
-    elif medium_count or deep_candidates:
-        result_title = "確認候補があります"
-        result_detail = "中重要度指摘や深堀候補は、修正計画カードと必要時の補助情報で確認できます。"
-        result_tone = "warn"
-    else:
-        result_title = "レビュー結果は概ね良好です"
-        result_detail = "重大な指摘は検出されていません。次回比較が必要な場合だけJSONを保存してください。"
-        result_tone = "safe"
-    _render_insight_panel(
-        kicker="Review Result",
-        title=result_title,
-        detail=result_detail,
-        tone=result_tone,
-        metrics=[
-            {"label": "対象ファイル", "value": len(preview_docs), "tone": "info", "note": "レビュー束の件数"},
-            {"label": "高重要度", "value": total_high, "tone": "block" if total_high else "safe", "note": "構成不足を含む"},
-            {"label": "中重要度", "value": medium_count, "tone": "warn" if medium_count else "safe", "note": "確認推奨"},
-            {"label": "深堀候補", "value": len(deep_candidates), "tone": "warn" if deep_candidates else "safe", "note": "章別に追加確認"},
-            {"label": "本文トークン", "value": f"{tokens:,}", "tone": "info", "note": "匿名化済み本文の概算"},
-        ],
-    )
-
-
-def _remediation_origin_badge_html(origin: str) -> str:
-    badge = remediation_origin_badge(origin)
-    if badge is None:
-        return ""
-    label, css_class = badge
-    return (
-        "<div class='origin-badge-row'>"
-        f"<span class='origin-badge {html.escape(css_class)}'>"
-        f"{html.escape(label)}</span>"
-        "</div>"
-    )
-
-
-def _render_remediation_plan(plan: RemediationPlan) -> None:
-    item_cards = []
-    severity_labels = {"high": "高", "medium": "中", "low": "低", "info": "情報"}
-    source_labels = {
-        "review_issue": "レビュー指摘",
-        "structure_check": "構成チェック",
-    }
-    for item in plan.items[:6]:
-        item_cards.append(
-            """
-<div class="remediation-card {severity}">
-  <div class="remediation-card-title">{title}</div>
-  {origin_badge}
-  <div class="remediation-meta">{source} / {severity_label} / 工数 {effort}<br/>{target}</div>
-  <div class="remediation-text"><b>方針:</b> {fix_policy}</div>
-  <div class="remediation-text"><b>再レビュー:</b> {condition}</div>
-</div>
-            """.format(
-                severity=html.escape(item.severity),
-                title=html.escape(item.title),
-                origin_badge=_remediation_origin_badge_html(item.origin),
-                source=html.escape(source_labels.get(item.source_type, item.source_type)),
-                severity_label=html.escape(severity_labels.get(item.severity, item.severity)),
-                effort=html.escape(item.effort),
-                target=html.escape(f"{item.target_document} / {item.target_section}"),
-                fix_policy=html.escape(item.fix_policy[:180]),
-                condition=html.escape(item.re_review_condition),
             )
+            chapter_key = _chapter_cache_key(doc.name, chapter)
+            pass_count = len((st.session_state.get("chapter_deep_dive_results") or {}).get(chapter_key, []))
+            can_run = developer_all or chapter_idx == enabled_idx
+            can_run = can_run and pass_count < MAX_CHAPTER_DEEP_DIVE_PASSES
+            row_col, button_col = st.columns([5, 1.4])
+            with row_col:
+                st.markdown(f"**{chapter.chapter_label}**")
+                st.caption(f"{summary[:180]} / {reason[:160]}")
+            with button_col:
+                button_key = (
+                    "ch_deepdive_entry_btn_"
+                    + hashlib.sha256(
+                        f"{doc.name}|{chapter.chapter_id}|{chapter_idx}".encode("utf-8")
+                    ).hexdigest()[:12]
+                )
+                if st.button(
+                    "🔬 この章を再分析",
+                    key=button_key,
+                    disabled=not can_run,
+                    width="stretch",
+                    help="この章をAIで再レビューし、追加指摘を修正計画に合流します。",
+                ):
+                    _run_chapter_deep_dive(
+                        doc.name,
+                        chapter,
+                        review,
+                        document_profile_override,
+                    )
+
+
+def _render_step4_future_auxiliary(report: FutureReviewReport | None) -> None:
+    if report is None:
+        st.caption("将来リスクの解析結果はありません。")
+        return
+    if not _step4_future_hint_count(report):
+        st.success("将来リスク・読み手リスク・曖昧表現の大きな補助指摘はありません。")
+        return
+    for item in (getattr(report, "premortem_scenarios", ()) or ())[:4]:
+        st.markdown(
+            sr_ui.collapsed_list_row(
+                "🔮",
+                item.title,
+                f"{item.failure_path} / 次の一手: {item.prevention}",
+            ),
+            unsafe_allow_html=True,
         )
-    re_review_html = "".join(
-        """
-<div class="re-review-step">
-  <div class="re-review-label">{label}</div>
-  <div class="re-review-detail">{detail}</div>
-  <div class="re-review-detail"><b>契機:</b> {trigger}</div>
-</div>
-        """.format(
-            label=html.escape(step.label),
-            detail=html.escape(step.detail),
-            trigger=html.escape(step.trigger),
+    for item in (getattr(report, "reader_risks", ()) or ())[:3]:
+        st.markdown(
+            sr_ui.collapsed_list_row(
+                "👥",
+                f"{item.persona} の誤読リスク",
+                f"{item.reason} / {item.recommendation}",
+            ),
+            unsafe_allow_html=True,
         )
-        for step in plan.re_review_steps
-    )
+    for item in (getattr(report, "ambiguous_findings", ()) or ())[:3]:
+        st.markdown(
+            sr_ui.collapsed_list_row(
+                "？",
+                f"曖昧表現: {item.expression}",
+                item.recommendation,
+            ),
+            unsafe_allow_html=True,
+        )
+
+
+def _render_step4_usage_guide(plan: RemediationPlan) -> None:
+    guide_cards = [
+        ("1. 担当割当", "赤いカードから担当者を決め、対象章と修正方針を共有します。"),
+        ("2. テンプレ反映", "追記の雛形を文書本体に転記し、実案件に合わせて具体化します。"),
+        ("3. 再確認", "再レビュー条件に書かれた章・観点だけを確認します。"),
+        ("必須再レビュー", "高重要度の修正後は、該当章だけを再アップロードして確認します。"),
+        ("差分レビュー", "中重要度は、追記箇所と関連箇所を中心に確認します。"),
+        ("完了確認", "修正後の文書で構成チェック、概要レビュー、深堀候補が矛盾しないか確認します。"),
+    ]
+    html_cards = []
+    for title, body in guide_cards:
+        html_cards.append(
+            "<div class='step4-guide-card'>"
+            f"<div class='step4-guide-title'>{html.escape(title)}</div>"
+            f"<div class='step4-guide-body'>{html.escape(body)}</div>"
+            "</div>"
+        )
     st.markdown(
-        f"""
-<section class="remediation-panel">
-  <div class="remediation-head">
-    <div>
-      <div class="remediation-kicker">Remediation Planner</div>
-      <div class="remediation-title">{html.escape(plan.headline)}</div>
-    </div>
-    <div class="remediation-summary">{html.escape(plan.summary)}</div>
-  </div>
-  <div class="remediation-purpose">
-    <b>このパネルの目的:</b>
-    レビュー結果を読んで終わりにせず、修正担当者が次に文書へ追記する内容、再レビューの範囲、
-    上長確認へ進む条件まで整理します。まず赤いカード、次に黄色いカードの順で対応してください。
-  </div>
-  <div class="remediation-grid">{''.join(item_cards) if item_cards else '<div class="remediation-text">大きな修正アクションはありません。</div>'}</div>
-  <div class="next-work-lane">
-    <div class="next-work-step">
-      <div class="next-work-label">1. 修正担当へ割当</div>
-      <div class="next-work-detail">カード単位で担当者を決め、対象章と方針を共有します。</div>
-    </div>
-    <div class="next-work-step">
-      <div class="next-work-label">2. テンプレートを反映</div>
-      <div class="next-work-detail">下の追記テンプレートを文書に貼り、内容を実態に合わせて修正します。</div>
-    </div>
-    <div class="next-work-step">
-      <div class="next-work-label">3. 条件に沿って再確認</div>
-      <div class="next-work-detail">再レビュー条件に書かれた章・観点だけを再確認します。</div>
-    </div>
-  </div>
-  <div class="re-review-lane">{re_review_html}</div>
-</section>
-        """,
+        "<div class='step4-guide-grid'>" + "".join(html_cards) + "</div>",
         unsafe_allow_html=True,
     )
-
-    if plan.items:
-        with st.expander("📝 この指摘の対応案 — 文書に追記する内容のたたき台", expanded=False):
-            st.caption(
-                "この内容を参考に、担当者が文書本体に書き足す原稿を作ります。"
-                "最終的な文言は、実際の設計内容や関係者合意に合わせて調整してください。"
+    if plan.re_review_steps:
+        st.caption("再レビュー種別")
+        for step in plan.re_review_steps:
+            st.markdown(
+                sr_ui.collapsed_list_row("↻", step.label, f"{step.detail} / 契機: {step.trigger}"),
+                unsafe_allow_html=True,
             )
-            for idx, item in enumerate(plan.items, 1):
+
+
+def _render_step4_auxiliary_sections(
+    review: ReviewResult,
+    preview_docs: list[SanitizedDocument],
+    structure_result: StructureCheckResult | None,
+    remediation_plan: RemediationPlan,
+    future_report: FutureReviewReport | None,
+    document_profile_override: str | None,
+) -> None:
+    st.markdown(
+        "<div class='step4-section-title'>補助で見るもの</div>"
+        "<div class='step4-section-caption'>必要な根拠や追加確認だけを、機能別に開いて確認します。</div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("文書構成チェック — 章立て不足の根拠を確認", expanded=False):
+        count = _step4_structure_finding_count(structure_result)
+        st.markdown(
+            sr_ui.collapsed_list_row("📐", "文書構成チェック", f"{count}件の確認点"),
+            unsafe_allow_html=True,
+        )
+        if structure_result is not None:
+            _render_document_structure_check(structure_result)
+        checklist_results = getattr(review, "checklist_results", ()) or ()
+        if checklist_results:
+            st.caption("チェック項目評価")
+            for result in checklist_results[:12]:
                 st.markdown(
-                    f"#### {idx}. {item.title} "
-                    f"<span class='doc-meta'>({item.item_id} / {item.target_document})</span>",
+                    sr_ui.collapsed_list_row(
+                        "✓",
+                        f"{getattr(result, 'item_name', '')} · {getattr(result, 'status', '')}",
+                        f"{getattr(result, 'source_document', '')} / {getattr(result, 'reason', '')}",
+                    ),
                     unsafe_allow_html=True,
                 )
-                _render_compact_field("対象", f"{item.target_document} / {item.target_section}")
-                _render_compact_field("問題", item.problem)
-                _render_compact_field("修正方針", item.fix_policy)
-                _render_compact_field("再レビュー条件", item.re_review_condition)
-                st.code(item.template, language="markdown")
+    with st.expander("章単位の追加レビュー — 指摘カード以外の章を直接選ぶ", expanded=False):
+        _render_step4_chapter_auxiliary(
+            review,
+            preview_docs,
+            structure_result,
+            document_profile_override,
+        )
+    with st.expander("将来の障害リスク — 主要指摘の先にある予防策を確認", expanded=False):
+        _render_step4_future_auxiliary(future_report)
+    with st.expander("修正計画の使い方 — 担当割当から再レビューまで", expanded=False):
+        _render_step4_usage_guide(remediation_plan)
 
-    st.download_button(
-        "📒 再レビュー用の修正計画JSONを保存",
-        data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
-        file_name=remediation_plan_json_filename(),
-        mime="application/json",
-        type="primary",
-        help=(
-            "次回、修正後の文書と一緒に読み込ませると、"
-            "前回指摘の解消状況をローカル照合できます。"
-        ),
-        width='stretch',
-    )
-    st.caption(
-        "これは再レビュー比較用の台帳です。人に渡す作業依頼書や監査ログではありません。"
-        "監査ログを共有・保存する場合は、開発者モードで「証跡エクスポート」を開いてください。"
-    )
 
-    if plan.items:
-        review_issue_items = [item for item in plan.items if item.source_type == "review_issue"]
-        if st.session_state.get("developer_mode", False) and review_issue_items:
-            with st.expander("🔎 元のレビュー指摘 — LLM の生指摘を監査・照合したいときに開く", expanded=False):
-                st.caption(
-                    "上の修正計画カードへ変換する前の指摘情報です。通常は修正計画カードを見れば足りますが、"
-                    "根拠確認やレビュー会議での説明に使えます。"
-                )
-                for idx, item in enumerate(review_issue_items, 1):
-                    st.markdown(f"#### {idx}. {item.title} ({item.item_id})")
-                    _render_compact_field("対象", f"{item.target_document} / {item.target_section}")
-                    _render_compact_field("前回または今回の問題", item.problem)
-                    _render_compact_field("推奨対応", item.fix_policy)
+def _render_step4_dev_footer(review: ReviewResult) -> None:
+    _render_review_log_export_panel()
+    if not st.session_state.get("developer_mode", False):
+        return
+    with st.expander("🧪 LLM メタ情報・プロンプト（開発者向け）", expanded=False):
+        st.markdown(
+            sr_ui.metric_pair("LLM", provider_display_name(review.provider, review.model)),
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            sr_ui.metric_pair("Rubric", review.rubric_name or review.rubric_id or "-"),
+            unsafe_allow_html=True,
+        )
+        st.code(review.prompt_preview or "(prompt preview なし)", language="markdown")
+        if review.raw_response:
+            st.code(review.raw_response, language="json")
+
+
+def _render_step4_v2(
+    *,
+    review: ReviewResult,
+    preview_docs: list[SanitizedDocument],
+    structure_result: StructureCheckResult | None,
+    remediation_plan: RemediationPlan,
+    future_report: FutureReviewReport | None,
+    document_profile_override: str | None,
+) -> None:
+    st.markdown("<div class='step4-v2'>", unsafe_allow_html=True)
+    _render_step4_status_and_summary(
+        review,
+        preview_docs,
+        remediation_plan,
+        structure_result,
+        future_report,
+    )
+    _render_step4_issue_cards(
+        remediation_plan,
+        review,
+        preview_docs,
+        document_profile_override,
+    )
+    _render_step4_auxiliary_sections(
+        review,
+        preview_docs,
+        structure_result,
+        remediation_plan,
+        future_report,
+        document_profile_override,
+    )
+    _render_step4_dev_footer(review)
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_review_log_export_panel() -> None:
@@ -4901,140 +5193,14 @@ if preview_docs:
 
 review = st.session_state.get("review_result")
 if review is not None:
-    _render_step_header(
-        4,
-        "レビュー結果",
-        "文書全体の概要、構成チェック、章別指摘、深堀候補を確認します。",
-    )
-
-    left, right = st.columns([4, 2])
-    with left:
-        # B3: render structured summary (4 sections + verdict) when present;
-        # fall back to legacy single-line summary when summary_structured is empty.
-        ss = review.summary_structured
-        if not ss.is_empty():
-            # New structured summary - render 4 sections with verdict badge.
-            if ss.purpose:
-                st.markdown(f"**目的** — {ss.purpose}")
-
-            # PR-I: classify the four cases of purpose_section_in_document
-            # and purpose_divergence to give the user the right kind of
-            # feedback:
-            # - section present + no divergence: just show the section ref
-            # - section present + divergence: show both as warning
-            # - section missing + AI-derived purpose available: prompt the
-            #   author to add a purpose section, with the AI's purpose as
-            #   a starter draft
-            # - both empty: nothing to show
-            _has_section = bool(ss.purpose_section_in_document)
-            _has_divergence = bool(ss.purpose_divergence)
-            _has_purpose = bool(ss.purpose)
-
-            if _has_section:
-                # Document has a "目的" section — show its location and any
-                # divergence the LLM detected.
-                divergence_parts = [
-                    f"_文書記載箇所_: {ss.purpose_section_in_document}"
-                ]
-                if _has_divergence:
-                    divergence_parts.append(f"_乖離_: {ss.purpose_divergence}")
-                color = "#a04a00" if _has_divergence else "#5a5040"
-                st.markdown(
-                    f"<div style='margin-top:0.3rem;color:{color};font-size:0.9rem;'>"
-                    + " · ".join(divergence_parts)
-                    + "</div>",
-                    unsafe_allow_html=True,
-                )
-            elif _has_purpose:
-                # PR-I: no "目的" section in the document but the LLM did
-                # derive a purpose from the content. Recommend the author
-                # add one and offer the LLM's purpose as a starter draft.
-                with st.container(border=True):
-                    st.markdown(
-                        "⚠️ **ドキュメントに「目的」項目が見当たりません。**"
-                        "冒頭(第1章または「はじめに」直後)に目的セクションを追記する"
-                        "ことを推奨します。以下は本ドキュメントの内容から推定した目的の"
-                        "草案です。必要に応じて加筆・修正のうえ反映してください。"
-                    )
-                    st.code(ss.purpose, language=None)
-
-            if ss.content_outline:
-                st.markdown(f"**内容要約** — {ss.content_outline}")
-            if ss.overall_evaluation:
-                # Render overall evaluation alongside the verdict badge.
-                badge = _verdict_badge(ss.verdict)
-                st.markdown(
-                    f"**全体評価** — {ss.overall_evaluation} {badge}",
-                    unsafe_allow_html=True,
-                )
-            elif ss.verdict:
-                # Edge case: verdict supplied but no overall_evaluation.
-                badge = _verdict_badge(ss.verdict)
-                st.markdown(f"**総合判定**: {badge}", unsafe_allow_html=True)
-        else:
-            # Legacy: plain-text summary in a single line.
-            st.markdown(f"**サマリ** — {review.summary}")
-        # R-B + R-C (ε): show the concrete model identifier alongside the
-        # internal provider slug so operators can see at a glance which
-        # model produced this review.
-        meta_parts = [
-            f"レビューLLM: {provider_display_name(review.provider, review.model)}"
-        ]
-        meta_parts.append(f"ルーブリック: {review.rubric_name or review.rubric_id or '-'}")
-        meta_parts.append(
-            f"プロファイル: {_profile_label(review.document_profile)} "
-            f"({review.classification_confidence or '-'})"
-        )
-        st.markdown(
-            f'<div class="provider-line">{" · ".join(meta_parts)}</div>',
-            unsafe_allow_html=True,
-        )
-        # R-K: surface profile-detection conflicts so operators can decide
-        # whether to override via the sidebar selector.
-        if review.classification_confidence == "conflict":
-            st.warning(
-                f"⚠️ プロファイル自動判定で **競合** が検出されました。"
-                f"暫定的に「{_profile_label(review.document_profile)}」を選択していますが、"
-                f"サイドバーから手動で別のプロファイルを選ぶこともできます。\n\n"
-                f"**判定根拠**: {review.classification_reason}"
-            )
-    with right:
-        severity_counts = {"high": 0, "medium": 0, "low": 0, "info": 0}
-        for issue in review.issues:
-            severity_counts[issue.severity] = severity_counts.get(issue.severity, 0) + 1
-        st.markdown(
-            f"<div style='text-align:right;'>"
-            f"<span class='decision-badge decision-block'>高 {severity_counts.get('high', 0)}</span> "
-            f"<span class='decision-badge decision-mask'>中 {severity_counts.get('medium', 0)}</span> "
-            f"<span class='decision-badge decision-safe'>低 {severity_counts.get('low', 0)}</span>"
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
     _preview_docs_for_structure = st.session_state.get("preview_docs") or []
     _structure_result_for_review = None
-    _structure_findings_count = 0
     if _preview_docs_for_structure:
         _structure_result_for_review = build_structure_check_result(
             _preview_docs_for_structure,
             review.document_profile or "",
         )
         st.session_state["structure_result"] = _structure_result_for_review
-        _structure_findings_count = len(
-            getattr(_structure_result_for_review, "findings", ()) or ()
-        )
-
-    _deep_dive_candidates = _collect_deep_dive_candidates(
-        review,
-        _preview_docs_for_structure,
-        _structure_result_for_review,
-    )
-    _render_review_result_dashboard(
-        review,
-        _preview_docs_for_structure,
-        _structure_result_for_review,
-        _deep_dive_candidates,
-    )
     _remediation_plan = _rebuild_remediation_plan_for_session(
         review,
         _structure_result_for_review,
@@ -5043,533 +5209,18 @@ if review is not None:
         _preview_docs_for_structure,
         review,
     )
-    _remediation_high_count = sum(
-        1 for item in _remediation_plan.items if item.severity == "high"
-    )
-    _remediation_medium_count = sum(
-        1 for item in _remediation_plan.items if item.severity == "medium"
-    )
-    _future_hint_count = (
-        _future_report.ambiguous_count
-        + sum(
-            1
-            for item in _future_report.reader_risks
-            if item.risk_level in {"high", "medium"}
-        )
-        + len(_future_report.premortem_scenarios)
-    )
-    _display_policy = build_review_display_policy(
-        remediation_count=len(_remediation_plan.items),
-        high_count=_remediation_high_count,
-        medium_count=_remediation_medium_count,
-        structure_finding_count=_structure_findings_count,
-        future_hint_count=_future_hint_count,
-        deep_candidate_count=len(_deep_dive_candidates),
-        previous_plan_loaded=bool(st.session_state.get("previous_remediation_plan")),
-        developer_mode=bool(st.session_state.get("developer_mode", False)),
-    )
-    _render_display_policy_assist(_display_policy)
-    _render_remediation_plan(_remediation_plan)
-    _render_chapter_deep_dive_entry_section(
-        review,
-        _preview_docs_for_structure,
-        _structure_result_for_review,
-        document_profile_override,
-    )
-    if _structure_findings_count:
-        with st.expander(
-            f"📐 文書構成チェック詳細 ({_structure_findings_count}件) — 章立て不足の根拠を確認するときに開く",
-            expanded=_display_policy.expand_structure_details,
-        ):
-            _render_document_structure_check(_structure_result_for_review)
-    _render_future_review_lens(
-        _future_report,
-        review,
-        expanded=_display_policy.expand_quality_hints,
-    )
-    _render_review_log_export_panel()
-
-    severity_order = {"high": 0, "medium": 1, "low": 2, "info": 3}
-
-    # R-Y (2026-05-08): 文書ごとにグループ化して表示する。
-    # 章別概要レビューを全章表示し、深堀り結果は同じ文書グループ内に
-    # 追加表示する (蓄積式)。
-    issues_by_doc: dict[str, list] = {}
-    for _issue in review.issues:
-        _key = getattr(_issue, "source_document", "") or "(出典不明)"
-        issues_by_doc.setdefault(_key, []).append(_issue)
-
-    # Q4 修正 (2026-05-08): preview_docs にある全文書を表示する。
-    # LLM が指摘を出さなかった文書は issues_by_doc に入らないため、
-    # 旧実装ではその文書のヘッダも深堀ボタンも表示されなかった。
-    # 全文書のレビュー状況を一覧する + 指摘なしの文書も深堀対象にできるよう、
-    # preview_docs ベースで順序リストを構築する。
-    _preview_docs_for_order = st.session_state.get("preview_docs") or []
-    _ordered_doc_names = [d.name for d in _preview_docs_for_order]
-    # preview_docs にない出典 (例: "(出典不明)") は最後に追加
-    for _n in issues_by_doc:
-        if _n not in _ordered_doc_names:
-            _ordered_doc_names.append(_n)
-
-    _show_doc_details = st.toggle(
-        "🗂 文書別の詳細表示 — 章別概要・元指摘・深堀結果の詳細を確認するときに開く",
-        value=_display_policy.show_document_details,
-        key="show_document_detail_sections",
-        help="章別概要、元のレビュー指摘、深堀結果の詳細を確認したい場合だけオンにします。章別深堀ボタンは上の独立セクションから使えます。",
-    )
-    _step4_container = st.container()
-
-    # 深堀結果 (章キー -> [ReviewResult, ...]) を session_state から取得。
-    _chapter_deep_results_all = st.session_state.get("chapter_deep_dive_results") or {}
     _deep_dive_notice = st.session_state.pop("deep_dive_notice", "")
     if _deep_dive_notice:
         st.info(_deep_dive_notice)
+    _render_step4_v2(
+        review=review,
+        preview_docs=_preview_docs_for_structure,
+        structure_result=_structure_result_for_review,
+        remediation_plan=_remediation_plan,
+        future_report=_future_report,
+        document_profile_override=document_profile_override,
+    )
 
-    with _step4_container:
-        st.caption(
-            "文書別の概要ヘッダは常に表示します。章別概要、元のLLM指摘、深堀結果の詳細はトグルをオンにした場合だけ表示します。"
-        )
-        for _doc_name in _ordered_doc_names:
-            # Q4 修正: issues_by_doc に存在しない文書 (= LLM 指摘なし) は空リスト
-            _doc_issues = sorted(
-                issues_by_doc.get(_doc_name, []),
-                key=lambda i: severity_order.get(i.severity, 4),
-            )
-
-            st.markdown(f"### 📄 {_doc_name}")
-            if not _show_doc_details:
-                st.caption("詳細表示はオフです。章別深堀は上の「🔬 章別深堀」セクションから実行できます。")
-                continue
-
-            # Phase 7 段階 2-C (2026-05-08): 章境界検出 + 章単位深堀り UI
-            # Q35=A: 3 章以上検出時のみ「複数章ファイル」と判定して章サブグループ表示。
-            # 検出は preview_docs から (LLM 結果ではなく入力テキストベース)。
-            # キャッシュ: session_state.chapter_sections_cache に文書名→ChapterSection
-            # の dict を保持。preview リセット時にクリアされる。
-            _preview_docs_for_chapter = st.session_state.get("preview_docs") or []
-            _doc_for_chapter = next(
-                (d for d in _preview_docs_for_chapter if d.name == _doc_name), None
-            )
-            _chapters: tuple = ()
-            if _doc_for_chapter is not None:
-                # キャッシュチェック (rerun ごとの再計算回避)
-                if "chapter_sections_cache" not in st.session_state:
-                    st.session_state.chapter_sections_cache = {}
-                _cache = st.session_state.chapter_sections_cache
-                if _doc_name not in _cache:
-                    _cache[_doc_name] = extract_chapters_from_text(
-                        _doc_for_chapter.outbound_text
-                    )
-                _chapters = _cache[_doc_name]
-
-            if len(_chapters) >= 3:
-                st.markdown(
-                    f"<div style='margin-top:0.6rem;padding:0.5rem 0.8rem;"
-                    f"background:#f5f5f0;border-left:3px solid #888;'>"
-                    f"📖 <b>このファイルから {len(_chapters)} 章を検出しました。</b> "
-                    f"章ごとの概要と深堀候補を確認できます。</div>",
-                    unsafe_allow_html=True,
-                )
-
-                with st.expander(f"🧭 章別概要レビュー ({len(_chapters)} 章)", expanded=True):
-                    _developer_deep_dive_all = bool(
-                        st.session_state.get("developer_mode", False)
-                    )
-                    st.caption(
-                        "概要レビューは全章を表示します。AI再分析の実行は、上の独立した「🔬 章別深堀」セクションから行います。"
-                    )
-                    _chapter_height = (
-                        _scroll_height_control(
-                            f"{_doc_name} の章別概要表示高さ",
-                            key="chapter_overview_scroll_height_"
-                            + hashlib.sha256(_doc_name.encode("utf-8")).hexdigest()[:10],
-                            default=640,
-                            min_value=360,
-                            max_value=1100,
-                        )
-                        if len(_chapters) >= 4 else None
-                    )
-                    _chapter_container = (
-                        st.container(height=_chapter_height)
-                        if _chapter_height is not None else st.container()
-                    )
-                    with _chapter_container:
-                        for _ch_idx, _ch in enumerate(_chapters):
-                            _overview = _find_chapter_overview(review, _doc_name, _ch)
-                            _summary = (
-                                getattr(_overview, "summary", "") if _overview is not None else ""
-                            ) or _chapter_excerpt(_ch.extracted_text)
-                            _overview_review = (
-                                getattr(_overview, "review", "") if _overview is not None else ""
-                            ) or "LLM から章別概要が返らなかったため、章本文の抜粋を表示しています。"
-                            _needs_deep = bool(
-                                getattr(_overview, "needs_deep_dive", False)
-                                if _overview is not None else False
-                            )
-                            _structure_ch_findings = _structure_findings_for_chapter(
-                                _structure_result_for_review,
-                                _doc_name,
-                                _ch,
-                            )
-                            _needs_deep = _needs_deep or bool(_structure_ch_findings)
-                            if _structure_ch_findings and "文書構成チェック" not in _overview_review:
-                                _overview_review = (
-                                    f"{_overview_review}。ただし文書構成チェックで"
-                                    "追加確認点があります。"
-                                )
-                            _deep_badge = (
-                                "<span class='decision-badge decision-mask'>深堀候補</span>"
-                                if _needs_deep
-                                else (
-                                    "<span class='decision-badge decision-safe'>開発者深堀可</span>"
-                                    if _developer_deep_dive_all
-                                    else ""
-                                )
-                            )
-                            _chapter_key = _chapter_cache_key(_doc_name, _ch)
-                            _chapter_deep_results = _chapter_deep_results_all.get(
-                                _chapter_key, []
-                            )
-                            _pass_count = len(_chapter_deep_results)
-
-                            with st.container(border=True):
-                                st.markdown(
-                                    f"**{_ch.chapter_label}** "
-                                    f"<span class='doc-meta'>({_ch.chapter_id}, "
-                                    f"{len(_ch.extracted_text)} chars)</span> "
-                                    f"{_deep_badge}",
-                                    unsafe_allow_html=True,
-                                )
-                                _render_compact_field("章の概要", _summary)
-                                _render_compact_field("概要レビュー", _overview_review)
-                                if _structure_ch_findings:
-                                    _render_compact_field(
-                                        "構成チェック",
-                                        f"{len(_structure_ch_findings)}件の重要/要確認あり",
-                                    )
-                                if _pass_count:
-                                    st.caption(
-                                        f"深堀り済み: {_pass_count}/{MAX_CHAPTER_DEEP_DIVE_PASSES}"
-                                    )
-                                if _chapter_deep_results:
-                                    _deep_issue_count = _count_review_issues(
-                                        _chapter_deep_results
-                                    )
-                                    if _deep_issue_count:
-                                        st.markdown(
-                                            f"""
-<div class="deep-dive-merged-note">
-  📌 <b>章深堀で {_deep_issue_count} 件の追加指摘が修正計画に合流しました。</b><br/>
-  詳細は監査や経緯確認の場面で開き、通常は上の修正計画カードから対応してください。
-</div>
-                                            """,
-                                            unsafe_allow_html=True,
-                                        )
-                                        with st.expander(
-                                            f"詳細を見る（深堀パス {_pass_count} 回）",
-                                            expanded=False,
-                                        ):
-                                            for _pass_idx, _deep_review in enumerate(
-                                                _chapter_deep_results, 1
-                                            ):
-                                                st.markdown(f"**深堀パス {_pass_idx}**")
-                                                if _deep_review.summary:
-                                                    _summary_label = (
-                                                        "サマリ"
-                                                        if _pass_idx == 1
-                                                        else "追加確認結果"
-                                                    )
-                                                    st.markdown(
-                                                        f"**{_summary_label}** — {_deep_review.summary}"
-                                                    )
-                                                _sorted_deep_issues = sorted(
-                                                    _deep_review.issues,
-                                                    key=lambda i: severity_order.get(i.severity, 4),
-                                                )
-                                                for _deep_issue in _sorted_deep_issues:
-                                                    if not getattr(_deep_issue, "section", ""):
-                                                        _deep_issue.section = _ch.chapter_label
-                                                    _render_review_issue(
-                                                        _deep_issue,
-                                                        severity_order,
-                                                    )
-                                            if _pass_count >= MAX_CHAPTER_DEEP_DIVE_PASSES:
-                                                st.success(
-                                                    "この章は2段階の深堀りを完了しました。"
-                                                    "追加LLM呼び出しより、既存指摘の対応判断へ進むことを推奨します。"
-                                                )
-
-            # Q4 修正 (2026-05-08): 指摘なしの場合の表示
-            if not _doc_issues:
-                st.markdown(
-                    "<div class='issue-row info' style='color:#4a5549;font-size:0.92rem;'>"
-                    "✅ <b>この文書に対する LLM 指摘はありません。</b> "
-                    "より詳細な分析が必要なら章別概要レビュー内のAI再分析ボタンをご利用ください。"
-                    "</div>",
-                    unsafe_allow_html=True,
-                )
-            else:
-                st.caption(
-                    "以下は概要レビューで検出された主な指摘です。"
-                    f"指摘IDの接頭辞は {_issue_id_prefix_help(review.document_profile)} を示し、"
-                    "番号はこのレビュー内の管理番号です。"
-                )
-
-            # 既存指摘の表示 (severity 順)
-            for issue in _doc_issues:
-                if not getattr(issue, "section", ""):
-                    issue.section = _infer_issue_chapter(issue, _chapters)
-                severity_jp = SEVERITY_LABELS.get(issue.severity, issue.severity)
-                # B3: prefer structured display when issue has new fields (current_state,
-                # issue, impact, etc.); fall back to legacy details/recommendation only.
-                if issue.has_structured_fields():
-                    # New structured display.
-                    id_prefix = f"<b>{issue.issue_id}</b> · " if issue.issue_id else ""
-                    section_suffix = (
-                        f' · 章: {issue.section}' if issue.section else ''
-                    )
-                    timing_badge = _required_timing_badge(issue.required_timing)
-                    re_review_badge = _re_review_badge(issue.re_review_required)
-                    badges = " ".join(b for b in (timing_badge, re_review_badge) if b)
-                    badges_html = f"<div style='margin-top:0.4rem;'>{badges}</div>" if badges else ""
-
-                    body_parts = []
-                    if issue.current_state:
-                        body_parts.append(
-                            f"<div style='margin-top:0.3rem;'>"
-                            f"<b>現状:</b> {issue.current_state}</div>"
-                        )
-                    if issue.issue:
-                        body_parts.append(
-                            f"<div style='margin-top:0.2rem;'>"
-                            f"<b>問題点:</b> {issue.issue}</div>"
-                        )
-                    if issue.impact:
-                        body_parts.append(
-                            f"<div style='margin-top:0.2rem;'>"
-                            f"<b>影響:</b> {issue.impact}</div>"
-                        )
-                    if not (issue.current_state or issue.issue or issue.impact) and issue.details:
-                        body_parts.append(
-                            f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
-                        )
-                    if issue.recommendation:
-                        body_parts.append(
-                            f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.92rem;'>"
-                            f"<b>推奨対応:</b> {issue.recommendation}</div>"
-                        )
-
-                    st.markdown(
-                        f"<div class='issue-row {issue.severity}'>"
-                        f"{id_prefix}<b>[{severity_jp}]</b> {issue.title} "
-                        f'<span class="doc-meta">{section_suffix}</span>'
-                        + "".join(body_parts)
-                        + badges_html
-                        + "</div>",
-                        unsafe_allow_html=True,
-                    )
-                else:
-                    # Legacy display.
-                    st.markdown(
-                        f"<div class='issue-row {issue.severity}'>"
-                        f"<b>[{severity_jp}]</b> {issue.title}<br/>"
-                        f"<div style='margin-top:0.3rem;'>{issue.details}</div>"
-                        f"<div style='margin-top:0.3rem;color:#4a5549;font-size:0.88rem;'>"
-                        f"<b>推奨対応:</b> {issue.recommendation}</div>"
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-                if st.session_state.get("developer_mode", False):
-                    _render_issue_feedback_control(issue)
-
-            # Phase 7 (2026-05-08): この文書のチェック項目評価表示。
-            # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。
-            # Phase 6 で構築したロジックを温存し、深堀り側で活用する設計。
-            _doc_checklists = [
-                cr for cr in (review.checklist_results or ())
-                if cr.source_document == _doc_name
-            ]
-            if _doc_checklists:
-                # 集計: status 別カウント
-                _status_counts = {
-                    "excellent": 0, "good": 0, "acceptable": 0,
-                    "needs_improvement": 0, "unacceptable": 0, "not_applicable": 0,
-                }
-                for _cr in _doc_checklists:
-                    _status_counts[_cr.status] = _status_counts.get(_cr.status, 0) + 1
-                # 「X 充足 / Y 注意 / Z 不充足」の表示用集計
-                _ok_count = _status_counts["excellent"] + _status_counts["good"] + _status_counts["acceptable"]
-                _warn_count = _status_counts["needs_improvement"]
-                _bad_count = _status_counts["unacceptable"]
-                _na_count = _status_counts["not_applicable"]
-
-                _summary_label = (
-                    f"✅ チェック項目評価 "
-                    f"({_ok_count} 充足 / {_warn_count} 注意 / {_bad_count} 不充足"
-                    + (f" / {_na_count} 該当なし" if _na_count else "")
-                    + ")"
-                )
-                with st.expander(_summary_label, expanded=False):
-                    st.caption(
-                        "構造定義書 v0.2 の 15 章 78 項目から、この文書に該当する項目を "
-                        "LLM が 5 段階で評価した結果です。問題のある項目が上に表示されます。"
-                    )
-                    # Q19=A: status 重要度順 (問題駆動型 UI)
-                    _status_order = {
-                        "unacceptable": 0,
-                        "needs_improvement": 1,
-                        "acceptable": 2,
-                        "good": 3,
-                        "excellent": 4,
-                        "not_applicable": 5,
-                    }
-                    _status_emoji = {
-                        "excellent": "🌟",
-                        "good": "✅",
-                        "acceptable": "🟡",
-                        "needs_improvement": "⚠️",
-                        "unacceptable": "❌",
-                        "not_applicable": "➖",
-                    }
-                    _status_label_jp = {
-                        "excellent": "模範",
-                        "good": "充足",
-                        "acceptable": "可",
-                        "needs_improvement": "要改善",
-                        "unacceptable": "不充足",
-                        "not_applicable": "該当なし",
-                    }
-                    # 重要度順にソート、同 status 内では item_id で安定化
-                    _sorted_crs = sorted(
-                        _doc_checklists,
-                        key=lambda c: (
-                            _status_order.get(c.status, 99),
-                            tuple(int(p) for p in c.item_id.split(".") if p.isdigit())
-                            if c.item_id else (99,),
-                        ),
-                    )
-                    for _cr in _sorted_crs:
-                        _emoji = _status_emoji.get(_cr.status, "❓")
-                        _slabel = _status_label_jp.get(_cr.status, _cr.status)
-                        _evidence_html = (
-                            f' <span style="color:#888;font-size:0.85rem;">'
-                            f'(根拠: {_cr.evidence})</span>'
-                            if _cr.evidence else ""
-                        )
-                        st.markdown(
-                            f"<div style='padding:0.4rem 0.6rem;margin:0.3rem 0;"
-                            f"border-left:3px solid #ccc;background:#fafaf7;'>"
-                            f"<b>{_emoji} {_cr.item_id} {_cr.item_name}</b> "
-                            f"<span style='color:#666;font-size:0.85rem;'>[{_slabel}]</span>"
-                            f"{_evidence_html}<br/>"
-                            f"<span style='color:#444;font-size:0.92rem;'>{_cr.reason}</span>"
-                            f"</div>",
-                            unsafe_allow_html=True,
-                        )
-
-            st.markdown("")  # 文書間の余白
-
-    # Phase 7 (2026-05-08): 欠落章サジェスチョン表示
-    # 一段目では空 tuple なので非表示、深堀り後 (Phase 7-B) に表示される。
-    # Phase 6 で構築したロジックを温存し、深堀り側で活用する設計。
-    _missing_chapters = review.missing_chapters or ()
-    # out_of_scope は表示しない (UI からは見せない、LLM の判断は記録に残す)
-    _displayable_mc = [
-        mc for mc in _missing_chapters
-        if mc.verdict in ("should_have", "recommended")
-    ]
-    if _displayable_mc:
-        st.markdown("---")
-        st.markdown("### 📋 欠落章へのサジェスチョン")
-        st.caption(
-            "構造定義書 v0.2 の 15 章のうち、この文書群が **明らかにカバーしていない章** を "
-            "LLM が判定した結果です。設計書として完成度を上げるための参考としてご活用ください。"
-        )
-
-        # verdict 別にグループ化 (should_have を上に、recommended を下に)
-        _should_have = [mc for mc in _displayable_mc if mc.verdict == "should_have"]
-        _recommended = [mc for mc in _displayable_mc if mc.verdict == "recommended"]
-
-        if _should_have:
-            st.markdown(
-                f"<div style='margin-top:0.6rem;font-weight:bold;color:#a02020;'>"
-                f"🔴 重要欠落 ({len(_should_have)} 件) — 設計書として本来必要"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            for _mc in _should_have:
-                _suggested_html = (
-                    f"<div style='margin-top:0.4rem;color:#4a5549;font-size:0.92rem;'>"
-                    f"<b>本来書かれるべき内容:</b><br/>"
-                    f"{_mc.suggested_content}</div>"
-                    if _mc.suggested_content else ""
-                )
-                st.markdown(
-                    f"<div style='padding:0.6rem 0.8rem;margin:0.4rem 0;"
-                    f"border-left:4px solid #c04040;background:#fff5f5;'>"
-                    f"<b>📕 {_mc.chapter_id} {_mc.chapter_name}</b><br/>"
-                    f"<span style='color:#444;font-size:0.92rem;'>"
-                    f"<b>判定理由:</b> {_mc.justification}</span>"
-                    f"{_suggested_html}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-        if _recommended:
-            st.markdown(
-                f"<div style='margin-top:0.8rem;font-weight:bold;color:#a07020;'>"
-                f"🟡 推奨欠落 ({len(_recommended)} 件) — あればよい (Optional)"
-                f"</div>",
-                unsafe_allow_html=True,
-            )
-            for _mc in _recommended:
-                _suggested_html = (
-                    f"<div style='margin-top:0.4rem;color:#4a5549;font-size:0.92rem;'>"
-                    f"<b>本来書かれるべき内容:</b><br/>"
-                    f"{_mc.suggested_content}</div>"
-                    if _mc.suggested_content else ""
-                )
-                st.markdown(
-                    f"<div style='padding:0.6rem 0.8rem;margin:0.4rem 0;"
-                    f"border-left:4px solid #c0a040;background:#fffaf0;'>"
-                    f"<b>📒 {_mc.chapter_id} {_mc.chapter_name}</b><br/>"
-                    f"<span style='color:#444;font-size:0.92rem;'>"
-                    f"<b>判定理由:</b> {_mc.justification}</span>"
-                    f"{_suggested_html}"
-                    f"</div>",
-                    unsafe_allow_html=True,
-                )
-
-    # 開発者モード ON 時のみ表示 (2026-05-08): プロンプト・LLM 生レスポンスの確認用
-    if st.session_state.get("developer_mode", False):
-        st.markdown("---")
-        st.markdown(
-            "<div style='color:#888;font-size:0.85rem;'>"
-            "⚙️ 以下は <b>開発者モード ON 時のみ表示</b>される実装検証用 UI です。"
-            "</div>",
-            unsafe_allow_html=True,
-        )
-        with st.expander("プロンプトプレビュー (先頭 2000 文字)"):
-            st.code(review.prompt_preview or "(空)", language="text")
-
-        with st.expander("LLM の生レスポンス (デバッグ用)"):
-            raw = getattr(review, "raw_response", "") or ""
-            if raw.strip():
-                st.caption(
-                    "LLM プロバイダから返ってきた未加工のレスポンスです。"
-                    "指摘表示が空の場合や形式が崩れている場合の原因調査に使用します。"
-                )
-                st.code(raw[:8000], language="json")
-                if len(raw) > 8000:
-                    st.caption(f"全 {len(raw)} 文字中、先頭 8000 文字のみ表示しています。")
-            else:
-                st.caption(
-                    "生レスポンスは記録されていません (mock プロバイダ使用時、または "
-                    "プロバイダ実装が raw_response を保持していない場合)。"
-                )
-
-    # R-Y (2026-05-08): 深堀レビューは Step 4 の文書ごとグループ表示に統合済み。
-    # 各章カードの AI 再分析ボタンから実行する。
 
 
 # ----------------------------------------------------------------------

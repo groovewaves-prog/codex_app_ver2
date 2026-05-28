@@ -13,44 +13,41 @@ class Step4UxStaticTests(unittest.TestCase):
         cls.app_source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
         cls.audit_source = (ROOT / "streamlit_audit_ui.py").read_text(encoding="utf-8")
 
-    def test_display_director_uses_action_first_copy(self) -> None:
-        self.assertIn("📊 AI 判断の詳細を見る", self.app_source)
-        self.assertNotIn("AI判断:", self.app_source)
-        self.assertNotIn("表示量を自動調整中", self.app_source)
+    def test_step4_v2_uses_design_foundation_components(self) -> None:
+        self.assertIn("def _render_step4_v2", self.app_source)
+        self.assertIn("sr_ui.status_bar", self.app_source)
+        self.assertIn("sr_ui.big_number_summary", self.app_source)
+        self.assertIn("sr_ui.severity_chip", self.app_source)
+        self.assertIn("sr_ui.issue_card_header", self.app_source)
+        self.assertIn("sr_ui.collapsed_list_row", self.app_source)
+        self.assertIn("不足章", self.app_source)
+        self.assertIn("将来リスク", self.app_source)
 
-    def test_remediation_and_deep_dive_labels_are_distinct(self) -> None:
-        self.assertIn("📝 この指摘の対応案 — 文書に追記する内容のたたき台", self.app_source)
-        self.assertIn("### 🔬 章別深堀", self.app_source)
-        self.assertIn("🔬 この章を再分析", self.app_source)
+    def test_step4_v2_has_core_sections(self) -> None:
+        self.assertIn("対応すべき指摘", self.app_source)
+        self.assertIn("補助で見るもの", self.app_source)
+        self.assertIn("文書構成チェック", self.app_source)
+        self.assertIn("章単位の追加レビュー", self.app_source)
+        self.assertIn("将来の障害リスク", self.app_source)
+        self.assertIn("修正計画の使い方", self.app_source)
+        self.assertIn("対応が必要な指摘はありませんでした", self.app_source)
+
+    def test_step4_v2_integrates_chapter_reanalysis(self) -> None:
+        self.assertIn("章を再分析", self.app_source)
+        self.assertIn("_find_chapter_for_remediation_item", self.app_source)
         self.assertIn("ch_deepdive_entry_btn_", self.app_source)
-        self.assertIn("現在の指摘では不十分なときに使います。", self.app_source)
-        self.assertNotIn("🛠 担当者が追記する文章案を開く", self.app_source)
-        self.assertNotIn("🔬 この章を深堀", self.app_source)
-        self.assertNotIn("🔬 章別深堀候補", self.app_source)
+        self.assertIn("step4_issue_deepdive_", self.app_source)
 
-    def test_document_detail_toggle_no_longer_controls_deep_dive_entry(self) -> None:
-        self.assertIn(
-            "🗂 文書別の詳細表示 — 章別概要・元指摘・深堀結果の詳細を確認するときに開く",
-            self.app_source,
-        )
-        self.assertIn("章別深堀は上の「🔬 章別深堀」セクションから実行できます。", self.app_source)
-        self.assertNotIn("_ordered_doc_names = []", self.app_source)
-        self.assertNotIn("🗂 文書別の詳細確認", self.app_source)
-
-    def test_future_failure_cards_keep_only_unique_forward_looking_fields(self) -> None:
-        self.assertIn("🔮 障害シナリオと予防策 — 主要な指摘の先にある将来リスク", self.app_source)
-        self.assertIn("故障への道筋:", self.app_source)
-        self.assertIn("次の一手:", self.app_source)
-        self.assertNotIn("発火理由:", self.app_source)
-        self.assertNotIn("本文で確認済み:", self.app_source)
-        self.assertNotIn("本文で不足:", self.app_source)
-        self.assertNotIn("レビュー指摘ヒント:", self.app_source)
+    def test_step4_no_longer_imports_display_policy(self) -> None:
+        self.assertNotIn("DisplayPolicy,", self.app_source)
+        self.assertNotIn("build_review_display_policy,", self.app_source)
+        self.assertNotIn("def _render_display_policy_assist", self.app_source)
 
     def test_audit_export_is_zip_and_developer_only(self) -> None:
         self.assertIn('st.session_state.get("developer_mode", False)', self.app_source)
-        self.assertIn("📥 証跡をまとめてダウンロード (ZIP)", self.audit_source)
+        self.assertIn("証跡をまとめてダウンロード (ZIP)", self.audit_source)
         self.assertIn("audit_log_zip_filename", self.audit_source)
-        self.assertNotIn("📦 監査用 — 匿名化テキストJSONを保存", self.audit_source)
+        self.assertNotIn("監査用 — 匿名化テキストJSONを保存", self.audit_source)
         self.assertNotIn("audit_export_sanitized_text_button", self.audit_source)
 
 

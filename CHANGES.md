@@ -2,6 +2,14 @@
 
 Baseline commit: `eaf605a`.
 
+### G-2 — Step 4 review result rebuild
+
+- Rebuilt Step 4 around a conclusion-first layout: status bar, big-number issue summary, severity chips, issue cards, and auxiliary sections.
+- Removed the active Step 4 path for AI Display Director / Remediation Planner / per-document detail grouping. The main user path is now "対応すべき指摘"; supporting information is grouped under "補助で見るもの".
+- Integrated chapter re-analysis into issue cards when the target chapter can be matched, while preserving direct chapter selection under the auxiliary "章単位の追加レビュー" section.
+- Kept remediation-plan JSON as the primary review ledger download and kept audit ZIP behind developer mode.
+- Verification: `python -m unittest discover tests` passes with 358 tests.
+
 ### D-1 step1 — Review Command Agent removed
 
 - Step 2 に表示していた Review Command Agent / レビュー管制エージェントを削除し、レビュー前の次アクション案内を AI Operation Co-Pilot に一本化。

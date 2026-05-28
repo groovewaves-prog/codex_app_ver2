@@ -50,6 +50,52 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertNotIn("監査用 — 匿名化テキストJSONを保存", self.audit_source)
         self.assertNotIn("audit_export_sanitized_text_button", self.audit_source)
 
+    def test_g2_old_planner_and_director_copy_is_not_rendered(self) -> None:
+        self.assertNotIn("REMEDIATION PLANNER", self.app_source)
+        self.assertNotIn("このパネルの目的", self.app_source)
+        self.assertNotIn("まず赤い", self.app_source)
+        self.assertNotIn("AI DISPLAY DIRECTOR", self.app_source)
+
+    def test_g2_big_number_summary_renders_total_issue_count(self) -> None:
+        self.assertIn("issue_count = len(remediation_plan.items)", self.app_source)
+        self.assertIn('sr_ui.big_number_summary(issue_count, "件の指摘", lead)', self.app_source)
+        self.assertIn("この文書には対応が必要な指摘があります", self.app_source)
+
+    def test_g2_issue_card_header_contains_required_metadata(self) -> None:
+        self.assertIn("sr_ui.issue_card_header(", self.app_source)
+        self.assertIn("item.severity", self.app_source)
+        self.assertIn("item.effort", self.app_source)
+        self.assertIn("item.item_id", self.app_source)
+        self.assertIn("item.target_section", self.app_source)
+        self.assertIn("item.title", self.app_source)
+
+    def test_g2_issue_cards_have_chapter_reanalysis_entry(self) -> None:
+        self.assertIn("matched_chapter = _find_chapter_for_remediation_item", self.app_source)
+        self.assertIn("if matched_chapter is not None:", self.app_source)
+        self.assertIn("step4_issue_deepdive_", self.app_source)
+        self.assertIn('st.button("🔬 章を再分析"', self.app_source)
+
+    def test_g2_auxiliary_section_has_four_entries(self) -> None:
+        self.assertIn("文書構成チェック — 章立て不足の根拠を確認", self.app_source)
+        self.assertIn("章単位の追加レビュー — 指摘カード以外の章を直接選ぶ", self.app_source)
+        self.assertIn("将来の障害リスク — 主要指摘の先にある予防策を確認", self.app_source)
+        self.assertIn("修正計画の使い方 — 担当割当から再レビューまで", self.app_source)
+
+    def test_g2_document_detail_toggle_is_removed_from_step4(self) -> None:
+        self.assertNotIn("文書別の詳細表示", self.app_source)
+        self.assertNotIn("文書別の詳細確認", self.app_source)
+        self.assertNotIn("show_document_detail_sections", self.app_source)
+
+    def test_g2_per_document_legacy_grouping_is_removed(self) -> None:
+        self.assertNotIn("_render_review_result_dashboard", self.app_source)
+        self.assertNotIn("_render_remediation_plan", self.app_source)
+        self.assertNotIn("_render_chapter_deep_dive_entry_section", self.app_source)
+        self.assertNotIn("文書別の元指摘", self.app_source)
+
+    def test_g2_zero_issue_message_is_preserved(self) -> None:
+        self.assertIn("対応が必要な指摘はありませんでした", self.app_source)
+        self.assertIn("対応が必要な修正計画カードはありません", self.app_source)
+
 
 if __name__ == "__main__":
     unittest.main()

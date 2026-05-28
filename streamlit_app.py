@@ -65,6 +65,7 @@ from secure_review.structure_check import (
     build_structure_check_result,
 )
 from secure_review.token_budget import estimate_review_token_budget
+from secure_review import ui_components as sr_ui
 from secure_review.ui_viewmodel import (
     document_attention_reasons,
     remediation_origin_badge,
@@ -136,6 +137,26 @@ STYLE = """
     --danger-soft: #f8ded8;
     --rule: #d7cbb8;
     --shadow: 0 18px 45px rgba(24, 35, 30, 0.10);
+
+    /* G-1 design foundation tokens. Keep these as aliases so future theme
+       adjustments flow through the existing visual system. */
+    --sr-danger-bg: var(--danger-soft);
+    --sr-danger-fg: var(--danger);
+    --sr-warning-bg: var(--warn-soft);
+    --sr-warning-fg: var(--warn);
+    --sr-success-bg: var(--accent-soft);
+    --sr-success-fg: var(--accent);
+    --sr-text-primary: var(--ink);
+    --sr-text-secondary: var(--ink-soft);
+    --sr-text-tertiary: var(--ink-soft);
+    --sr-bg-primary: var(--bg-card);
+    --sr-bg-secondary: var(--bg-base);
+    --sr-border: var(--rule);
+    --sr-space-section: 3rem;
+    --sr-space-card: 1.5rem;
+    --sr-radius-sm: 6px;
+    --sr-radius-md: 10px;
+    --sr-radius-lg: 14px;
 }
 
 .stApp {
@@ -1403,6 +1424,162 @@ div[data-testid="stExpander"] summary {
     font-size: 0.84rem;
     line-height: 1.55;
     margin-top: 0.35rem;
+}
+.sr-design-preview {
+    display: grid;
+    gap: 0.75rem;
+    margin-top: 0.6rem;
+}
+.sr-chip,
+.sr-effort-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: fit-content;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    padding: 0.22rem 0.62rem;
+    font-size: 0.76rem;
+    font-weight: 900;
+    line-height: 1.2;
+}
+.sr-severity-high {
+    background: var(--sr-danger-bg);
+    color: var(--sr-danger-fg);
+    border-color: rgba(157,47,47,0.18);
+}
+.sr-severity-medium {
+    background: var(--sr-warning-bg);
+    color: var(--sr-warning-fg);
+    border-color: rgba(167,103,0,0.18);
+}
+.sr-severity-low {
+    background: var(--sr-success-bg);
+    color: var(--sr-success-fg);
+    border-color: rgba(8,119,96,0.18);
+}
+.sr-severity-neutral {
+    background: var(--sr-bg-secondary);
+    color: var(--sr-text-secondary);
+    border-color: var(--sr-border);
+}
+.sr-effort-large {
+    background: var(--sr-danger-bg);
+    color: var(--sr-danger-fg);
+    border-color: rgba(157,47,47,0.18);
+}
+.sr-effort-medium {
+    background: var(--sr-warning-bg);
+    color: var(--sr-warning-fg);
+    border-color: rgba(167,103,0,0.18);
+}
+.sr-effort-small {
+    background: var(--sr-success-bg);
+    color: var(--sr-success-fg);
+    border-color: rgba(8,119,96,0.18);
+}
+.sr-status-bar {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    align-items: center;
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-lg);
+    background: var(--sr-bg-primary);
+    color: var(--sr-text-primary);
+    padding: 0.72rem 0.85rem;
+    box-shadow: 0 10px 24px rgba(24,35,30,0.055);
+}
+.sr-status-main { font-weight: 900; }
+.sr-status-meta {
+    color: var(--sr-text-secondary);
+    font-size: 0.78rem;
+}
+.sr-big-number {
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-lg);
+    background: var(--sr-bg-primary);
+    padding: 0.75rem 0.85rem;
+}
+.sr-big-number-lead {
+    color: var(--sr-text-tertiary);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 800;
+}
+.sr-big-number-value {
+    color: var(--sr-text-primary);
+    font-size: 1.75rem;
+    font-weight: 900;
+    line-height: 1.1;
+}
+.sr-issue-card-header {
+    border: 1px solid var(--sr-border);
+    border-left: 5px solid var(--sr-warning-fg);
+    border-radius: var(--sr-radius-lg);
+    background: var(--sr-bg-primary);
+    padding: 0.85rem 0.95rem;
+}
+.sr-issue-card-header.high { border-left-color: var(--sr-danger-fg); }
+.sr-issue-card-header.medium { border-left-color: var(--sr-warning-fg); }
+.sr-issue-card-header.low { border-left-color: var(--sr-success-fg); }
+.sr-issue-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+.sr-issue-card-submeta {
+    color: var(--sr-text-tertiary);
+    font-size: 0.75rem;
+    font-weight: 800;
+}
+.sr-issue-card-title {
+    color: var(--sr-text-primary);
+    font-size: 0.98rem;
+    font-weight: 900;
+    line-height: 1.45;
+}
+.sr-collapsed-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 0.65rem;
+    align-items: start;
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-md);
+    background: var(--sr-bg-primary);
+    padding: 0.65rem 0.72rem;
+}
+.sr-collapsed-row-title {
+    color: var(--sr-text-primary);
+    font-weight: 900;
+    line-height: 1.35;
+}
+.sr-collapsed-row-subtitle {
+    color: var(--sr-text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.45;
+    margin-top: 0.14rem;
+}
+.sr-metric-pair {
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-md);
+    background: var(--sr-bg-primary);
+    padding: 0.62rem 0.7rem;
+}
+.sr-metric-label {
+    color: var(--sr-text-tertiary);
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+}
+.sr-metric-value {
+    color: var(--sr-text-primary);
+    font-size: 1.05rem;
+    font-weight: 900;
+    margin-top: 0.1rem;
 }
 @media (max-width: 760px) {
     .remediation-head { display: block; }
@@ -3772,6 +3949,40 @@ def _render_uncertain_candidates_card(
                     user_decisions[key] = choice == "マスクする (推奨)"
 
 
+def _render_design_foundation_preview() -> None:
+    """Developer-only preview for G-1 reusable UI components."""
+    st.caption("G-1 で追加した共通HTMLコンポーネントの目視確認用です。通常ユーザには表示されません。")
+    st.markdown(
+        "\n".join(
+            [
+                '<div class="sr-design-preview">',
+                sr_ui.severity_chip("high", 3),
+                sr_ui.severity_chip("medium", 2),
+                sr_ui.severity_chip("low", 1),
+                sr_ui.effort_badge("large"),
+                sr_ui.effort_badge("medium"),
+                sr_ui.status_bar("レビュー結果を確認中", "Step 4 / Design foundation", "🎨"),
+                sr_ui.big_number_summary(12, "件", "Review Issues"),
+                sr_ui.issue_card_header(
+                    "high",
+                    "large",
+                    "D-001",
+                    "第 3 章 システム構成",
+                    "可用性設計の前提が不足しています",
+                ),
+                sr_ui.collapsed_list_row(
+                    "🗂",
+                    "文書別詳細",
+                    "修正計画では把握しきれない文書単位の状況を確認します。",
+                ),
+                sr_ui.metric_pair("予定 call", "3"),
+                "</div>",
+            ]
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 # ------------------------------------------------------------------- sidebar
 
 with st.sidebar:
@@ -3942,6 +4153,11 @@ with st.sidebar:
         st.caption(
             "詳細は社内ドキュメント「設計書 構造定義書」を参照してください。"
         )
+
+    if st.session_state.get("developer_mode", False):
+        st.markdown("---")
+        with st.expander("🎨 デザイン基盤プレビュー", expanded=False):
+            _render_design_foundation_preview()
 
 
 # --------------------------------------------------------------------- main

@@ -82,6 +82,12 @@ Baseline commit: `eaf605a`.
 - Histories with 11 or more terms show a "show more" control and can be collapsed back to the top 10 view.
 - The history expander title and caption now expose the total term count, while category metrics continue to summarize all terms.
 
+### G-1 — design foundation tokens and reusable UI components
+
+- Added `--sr-*` design tokens as aliases to the existing Streamlit theme variables, preserving the current visual tone while preparing shared UI building blocks.
+- Added `secure_review/ui_components.py` with pure HTML builders for severity chips, effort badges, status bars, summary numbers, issue headers, collapsed rows, and metric pairs.
+- Added a developer-mode-only design foundation preview in the sidebar; existing production UI paths are not replaced in this phase.
+
 ## For the GitHub push chat
 
 This document is designed to serve as the PR body for the upcoming GitHub

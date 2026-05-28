@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated: 2026-05-26
+Last updated: 2026-05-28
 
 この文書は、現在の `codex_app_ver2` モックで作業を継続する人が、
 最短で状況を復元できるようにするための引き継ぎ書です。
@@ -24,7 +24,7 @@ Last updated: 2026-05-26
 
 | 領域 | 現状 |
 |---|---|
-| UI | Streamlit。日本語UI。ヒーロー表示、AI Operation Co-Pilot、AI Display Director、ステータスバー、送信前チェック、カード型サマリ、折りたたみ・スクロール表示を実装済み |
+| UI | Streamlit。日本語UI。ヒーロー表示、AI Operation Co-Pilot、AI Display Director、ステータスバー、送信前チェック、カード型サマリ、折りたたみ・スクロール表示を実装済み。G-1 で `--sr-*` デザイントークンと共通HTMLコンポーネントを追加し、G-2以降の段階的置換に備えている |
 | 文書アップロード | PDF / DOCX / XLSX / PPTX / TXT 等を受付。複数PDFは「同一種類の文書を複数ファイルで構成」として一括レビュー。Office/PDF は抽出形式メタ情報と抽出上の注意をLLMプロンプトへ渡す。Excel はブック診断としてシート数、非表示シート、数式、リンク、結合セル、コメント本文を抽出 |
 | 匿名化 | regex + heuristic + NER/R-M補助。外部LLMへ送る前に匿名化済みテキストを確認可能 |
 | マスク判断履歴 | 全期間の判断履歴を集計し、初期表示は判断回数上位10件に制限。11件以上ある場合は「もっと見る」で全件確認可能 |
@@ -241,6 +241,7 @@ Streamlit Cloud に接続する場合は、以下を確認する。
 |---|---|
 | `streamlit_app.py` | メインUI |
 | `streamlit_audit_ui.py` | マスク判断履歴、顧客プロファイル等の補助UI |
+| `secure_review/ui_components.py` | G-1 デザイン基盤。重要度チップ、工数バッジ、ステータスバー等のHTML生成用純粋関数。G-2以降で既存UIを段階的に置換予定 |
 | `secure_review/reviewer.py` | Gemini/Gemma呼び出し、プロンプト、JSONパース、深堀 |
 | `secure_review/rubric.py` | 文書種別プロファイル、章抽出、レビュー基準 |
 | `secure_review/structure_check.py` | 文書構成チェック |

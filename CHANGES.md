@@ -2,6 +2,12 @@
 
 Baseline commit: `eaf605a`.
 
+### G-4.5 fix — title, reset button contrast, and status spacing
+
+- Upgraded the main app title to a 28px shield-icon title row with a thin divider and no subtitle.
+- Forced the sidebar `↻ 新しいレビューを始める` primary button to use a dark background and light text for reliable contrast.
+- Removed numeric status-bar icons from Step 1/2/3 and added spacing for status icons so labels no longer appear as `1準備中`.
+
 ### G-4.5 — App title and sidebar reset guidance
 
 - Restored a concise main-area app title (`技術文書レビュー支援ツール`) without bringing back the old hero banner or long subtitle.

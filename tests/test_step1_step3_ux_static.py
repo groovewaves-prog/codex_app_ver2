@@ -20,6 +20,18 @@ class Step1Step3UxStaticTests(unittest.TestCase):
             return self.app_source[start:]
         return self.app_source[start:next_def]
 
+    def _sidebar_block(self) -> str:
+        start = self.app_source.index("with st.sidebar:")
+        end = self.app_source.index("# --------------------------------------------------------------------- main")
+        return self.app_source[start:end]
+
+    def test_main_area_restores_concise_app_title(self) -> None:
+        main_start = self.app_source.index("# --------------------------------------------------------------------- main")
+        main_block = self.app_source[main_start:]
+        self.assertIn("sr-app-title", self.app_source)
+        self.assertIn('<div class="sr-app-title">技術文書レビュー支援ツール</div>', main_block)
+        self.assertNotIn("Document Review Command Center", self.app_source)
+
     def test_step1_v2_has_upload_first_layout(self) -> None:
         body = self._function_body("_render_step1_v2")
         self.assertIn("def _render_step1_v2", self.app_source)
@@ -38,6 +50,20 @@ class Step1Step3UxStaticTests(unittest.TestCase):
         self.assertIn("重複ファイル", list_body)
         self.assertIn("削除してから匿名化プレビューを実行", list_body)
         self.assertIn("upload-file-row warn", list_body)
+
+    def test_sidebar_does_not_duplicate_app_name(self) -> None:
+        sidebar = self._sidebar_block()
+        self.assertNotIn("sidebar-brand", self.app_source)
+        self.assertNotIn("sidebar-title", self.app_source)
+        self.assertNotIn("Review Cockpit", sidebar)
+        self.assertNotIn("技術文書レビュー支援ツール", sidebar)
+
+    def test_new_review_button_is_primary_with_explanation(self) -> None:
+        sidebar = self._sidebar_block()
+        self.assertIn("新しいレビューを始める", sidebar)
+        self.assertIn('type="primary"', sidebar)
+        self.assertIn("アップロード済みの文書、マスク判断、レビュー結果をクリア", sidebar)
+        self.assertIn("最初からやり直します", sidebar)
 
     def test_hero_and_copilot_are_not_rendered(self) -> None:
         self.assertNotIn("app-hero", self.app_source)

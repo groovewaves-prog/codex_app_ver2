@@ -2,6 +2,12 @@
 
 Baseline commit: `eaf605a`.
 
+### G-4.5 — App title and sidebar reset guidance
+
+- Restored a concise main-area app title (`技術文書レビュー支援ツール`) without bringing back the old hero banner or long subtitle.
+- Removed the duplicate app-name brand card from the sidebar so the title appears only in the main area.
+- Promoted `新しいレビューを始める` to a primary sidebar action and added a short explanation that it clears uploaded documents, mask decisions, and review results for a fresh start.
+
 ### G-4 — Step 1 upload and Step 3 send rebuild
 
 - Rebuilt Step 1 around a compact upload-first layout with direct status bar, previous-review comparison expander, selected-file list, duplicate warnings, and `匿名化してプレビュー`.

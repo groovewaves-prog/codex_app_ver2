@@ -102,6 +102,9 @@ class Step1Step3UxStaticTests(unittest.TestCase):
         self.assertIn("レビューを実行", body)
         self.assertIn("disabled=not can_send", body)
         self.assertIn("ステップ 2 に戻る", body)
+        self.assertIn("on_click=_reset_step3_send_state_for_step2", body)
+        self.assertNotIn("st.session_state.send_approval = False", body)
+        self.assertNotIn("st.rerun()", body)
 
     def test_review_runtime_status_preserves_progress_and_error_states(self) -> None:
         self.assertIn("def _render_review_runtime_status", self.app_source)

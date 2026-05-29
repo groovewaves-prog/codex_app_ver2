@@ -2,6 +2,14 @@
 
 Baseline commit: `eaf605a`.
 
+### G-3 — Step 2 anonymization review rebuild
+
+- Rebuilt Step 2 around a review-before-send layout: status bar, Step 2 heading, anonymization summary chips, top-priority mask decision section, compact per-document detail list, and next-action controls.
+- Promoted uncertain mask candidates from per-document cards to the top of Step 2 so users decide mask/no-mask before external review. Existing R-W decision persistence (`_decision_key`, `user_decisions`, `apply_user_decisions`) is reused.
+- Gated `送信準備を完了する` while uncertain candidates remain. After `匿名化結果を再生成`, resolved masking states clear `uncertain_candidates`, allowing Step 3 confirmation to proceed.
+- Removed the active Step 2 path for duplicate bundle/check/card UI and Step 2 Co-Pilot; Step 1 and Step 3 still use the existing operation assist path.
+- Verification: `python -m unittest discover tests` passes with 374 tests, including 8 new Step 2 static regression tests.
+
 ### G-2 — Step 4 review result rebuild
 
 - Rebuilt Step 4 around a conclusion-first layout: status bar, big-number issue summary, severity chips, issue cards, and auxiliary sections.

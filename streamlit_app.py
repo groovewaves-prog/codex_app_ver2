@@ -66,7 +66,6 @@ from secure_review.structure_check import (
 from secure_review.token_budget import estimate_review_token_budget
 from secure_review import ui_components as sr_ui
 from secure_review.ui_viewmodel import (
-    document_attention_reasons,
     remediation_origin_badge,
     structure_fix_guidance,
 )
@@ -1494,6 +1493,112 @@ div[data-testid="stExpander"] summary {
     color: var(--sr-text-secondary);
     font-size: 0.78rem;
 }
+.step2-v2 {
+    margin: 0.7rem 0 1.2rem;
+}
+.step2-heading {
+    margin: 0.9rem 0 0.85rem;
+}
+.step2-kicker {
+    color: var(--sr-text-tertiary);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.76rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+.step2-title {
+    color: var(--sr-text-primary);
+    font-size: 1.65rem;
+    font-weight: 900;
+    line-height: 1.25;
+    margin-top: 0.12rem;
+}
+.step2-subtitle {
+    color: var(--sr-text-secondary);
+    font-size: 0.92rem;
+    line-height: 1.55;
+    margin-top: 0.25rem;
+}
+.step2-summary-lead {
+    color: var(--sr-text-primary);
+    font-size: 1.08rem;
+    font-weight: 900;
+    margin-top: 0.35rem;
+}
+.step2-mask-band {
+    border: 1px solid rgba(167,103,0,0.22);
+    border-left: 6px solid var(--warn);
+    border-radius: var(--sr-radius-lg);
+    background: linear-gradient(135deg, #fffdf8 0%, #fff4d8 100%);
+    padding: 0.95rem 1rem;
+    margin: 1rem 0 0.85rem;
+    box-shadow: 0 12px 28px rgba(24,35,30,0.06);
+}
+.step2-mask-band.safe {
+    border-left-color: var(--accent);
+    border-color: rgba(8,119,96,0.16);
+    background: linear-gradient(135deg, rgba(255,253,248,0.95) 0%, rgba(234,245,231,0.92) 100%);
+}
+.step2-mask-title {
+    color: var(--sr-text-primary);
+    font-size: 1.18rem;
+    font-weight: 900;
+}
+.step2-mask-detail {
+    color: var(--sr-text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.55;
+    margin-top: 0.28rem;
+}
+.step2-candidate-card {
+    border: 1px solid rgba(217, 209, 192, 0.85);
+    border-radius: var(--sr-radius-md);
+    background: rgba(255,255,255,0.72);
+    padding: 0.75rem 0.85rem;
+    margin-top: 0.65rem;
+}
+.step2-candidate-word {
+    color: var(--sr-text-primary);
+    font-size: 1rem;
+    font-weight: 900;
+}
+.step2-candidate-meta {
+    color: var(--sr-text-secondary);
+    font-size: 0.8rem;
+    margin-top: 0.18rem;
+}
+.step2-candidate-context {
+    color: var(--sr-text-secondary);
+    background: rgba(247,247,245,0.72);
+    border-radius: var(--sr-radius-sm);
+    font-size: 0.84rem;
+    line-height: 1.55;
+    margin-top: 0.45rem;
+    padding: 0.45rem 0.55rem;
+}
+.step2-doc-detail-head {
+    color: var(--sr-text-secondary);
+    font-size: 0.86rem;
+    line-height: 1.55;
+    margin-bottom: 0.55rem;
+}
+.step2-next-action {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-radius: var(--sr-radius-lg);
+    background: rgba(255,253,248,0.76);
+    padding: 0.85rem 1rem;
+    margin: 0.9rem 0 0.8rem;
+}
+.step2-next-title {
+    color: var(--sr-text-primary);
+    font-weight: 900;
+}
+.step2-next-detail {
+    color: var(--sr-text-secondary);
+    font-size: 0.88rem;
+    line-height: 1.55;
+    margin-top: 0.2rem;
+}
 .sr-big-number {
     border: 1px solid var(--sr-border);
     border-radius: var(--sr-radius-lg);
@@ -1777,20 +1882,6 @@ REQUIRED_TIMING_CSS_CLASS = {
 }
 
 
-def _decision_badge(decision: str) -> str:
-    css = DECISION_CLASSES.get(decision, "decision-mask")
-    label = DECISION_LABELS.get(decision, decision)
-    return f'<span class="decision-badge {css}">{label}</span>'
-
-
-def _doc_card_class(decision: str) -> str:
-    if decision == "block":
-        return "doc-card block"
-    if decision in {"mask_and_continue", "unknown"}:
-        return "doc-card mask"
-    return "doc-card"
-
-
 def _profile_label(value: str | None) -> str:
     if value is None:
         return "-"
@@ -1944,58 +2035,6 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
     return items
 
 
-def _render_anonymization_summary(
-    preview_docs: list[SanitizedDocument],
-) -> None:
-    summary = _build_anonymization_summary(preview_docs)
-
-    chip_labels = [
-        ("文書", len(preview_docs), "info"),
-        ("安全", summary["safe"], "safe"),
-        ("要確認", summary["mask_and_continue"], "warn"),
-        ("未判定", summary["unknown"], "warn"),
-        ("送信禁止", summary["block"], "block"),
-        ("置換", summary["replacement_count"], "info"),
-        ("未確定候補", summary["uncertain_count"], "warn"),
-        ("本文tokens", f"{summary['estimated_tokens']:,}", "info"),
-    ]
-    chips = "".join(
-        "<div class='summary-chip {tone}'>"
-        "<div class='summary-chip-label'>{label}</div>"
-        "<div class='summary-chip-value'>{value}</div>"
-        "</div>".format(
-            tone=html.escape(tone),
-            label=html.escape(label),
-            value=html.escape(str(value)),
-        )
-        for label, value, tone in chip_labels
-    )
-    st.markdown(
-        f"""
-<section class="summary-panel">
-  <div class="summary-panel-head">
-    <div>
-      <div class="insight-kicker">Anonymization Result</div>
-      <div class="summary-panel-title">匿名化結果の内訳</div>
-    </div>
-    <div class="summary-panel-note">
-      外部LLMへ送信されるのは匿名化済みテキストのみです。
-      詳細なトークン予算は下の折りたたみで確認できます。
-    </div>
-  </div>
-  <div class="summary-chip-row">{chips}</div>
-</section>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    if summary["unknown"]:
-        st.warning(
-            "未判定の文書は安全扱いにせず、外部送信前に文書別承認を必須にします。"
-            "匿名化結果を確認し、必要に応じてマスク判断を見直してください。"
-        )
-
-
 def _build_anonymization_summary(preview_docs: list[SanitizedDocument]) -> dict[str, int]:
     counts = {"safe": 0, "mask_and_continue": 0, "block": 0, "unknown": 0}
     replacement_count = 0
@@ -2019,6 +2058,416 @@ def _build_anonymization_summary(preview_docs: list[SanitizedDocument]) -> dict[
         "estimated_tokens": estimated_tokens,
         "uncertain_count": uncertain_count,
     }
+
+
+def _iter_uncertain_mask_candidates(
+    masking_states: dict,
+) -> list[tuple[MaskingPipelineState, NerCandidate]]:
+    candidates: list[tuple[MaskingPipelineState, NerCandidate]] = []
+    for state in (masking_states or {}).values():
+        for candidate in getattr(state, "uncertain_candidates", ()) or ():
+            candidates.append((state, candidate))
+    return candidates
+
+
+def _mask_decision_progress(masking_states: dict) -> tuple[int, int]:
+    candidates = _iter_uncertain_mask_candidates(masking_states)
+    decisions = st.session_state.get("user_decisions", {}) or {}
+    decided = sum(
+        1
+        for state, candidate in candidates
+        if _decision_key(state.name, candidate.text) in decisions
+    )
+    return len(candidates), decided
+
+
+def _step2_chip(label: str, value: object, level: str) -> str:
+    level_key = {
+        "success": "low",
+        "warning": "medium",
+        "neutral": "neutral",
+        "danger": "high",
+    }.get(level, "neutral")
+    return (
+        f"<span class='sr-chip sr-severity-{level_key}'>"
+        f"{html.escape(label)}<span>{html.escape(str(value))}</span></span>"
+    )
+
+
+def _render_step2_header_and_summary(
+    preview_docs: list[SanitizedDocument],
+    masking_states: dict,
+) -> None:
+    summary = _build_anonymization_summary(preview_docs)
+    total_tokens = summary["estimated_tokens"]
+    st.markdown(
+        sr_ui.status_bar(
+            "準備中 · ステップ 2 / 3",
+            f"{len(preview_docs)} ファイル / {total_tokens:,} tokens",
+            "2",
+        ),
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        """
+<section class="step2-heading">
+  <div class="step2-kicker">Step 2</div>
+  <div class="step2-title">匿名化結果の確認</div>
+  <div class="step2-subtitle">外部 LLM に送信する前に、内容と安全性を確認します。</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+    chip_html = "".join(
+        [
+            _step2_chip("安全", summary["safe"], "success"),
+            _step2_chip("要確認", summary["mask_and_continue"] + summary["unknown"], "warning"),
+            _step2_chip("候補", summary["uncertain_count"], "warning" if summary["uncertain_count"] else "neutral"),
+            _step2_chip("本文tokens", f"{total_tokens:,}", "neutral"),
+        ]
+    )
+    st.markdown(
+        f"""
+<div class="step2-summary-lead">{len(preview_docs)} ファイルを匿名化しました</div>
+<div class="step4-chip-row">{chip_html}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _candidate_context_excerpt(candidate: NerCandidate, full_text: str) -> str:
+    if not full_text or candidate.start < 0 or candidate.end <= candidate.start:
+        return ""
+    ctx_start = max(0, candidate.start - 30)
+    ctx_end = min(len(full_text), candidate.end + 30)
+    before = full_text[ctx_start:candidate.start].replace("\n", " ").replace("\r", " ")
+    after = full_text[candidate.end:ctx_end].replace("\n", " ").replace("\r", " ")
+    prefix = "..." if ctx_start > 0 else ""
+    suffix = "..." if ctx_end < len(full_text) else ""
+    return f"{prefix}{before}{candidate.text}{after}{suffix}"
+
+
+def _render_mask_candidate_decision(
+    state: MaskingPipelineState,
+    candidate: NerCandidate,
+    full_text: str,
+) -> None:
+    key = _decision_key(state.name, candidate.text)
+    user_decisions = st.session_state.setdefault("user_decisions", {})
+    current = bool(user_decisions.get(key, True))
+    context = _candidate_context_excerpt(candidate, full_text)
+    with st.container(border=True):
+        st.markdown(
+            f"""
+<div class="step2-candidate-card">
+  <div class="step2-candidate-word">「{html.escape(candidate.text)}」</div>
+  <div class="step2-candidate-meta">
+    文書: {html.escape(state.name)} / カテゴリ: {html.escape(candidate.label)} / spaCy: {html.escape(candidate.spacy_label)}
+  </div>
+  {f'<div class="step2-candidate-context">文脈: {html.escape(context)}</div>' if context else ''}
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+        lookup = state.lookups.get(candidate.text)
+        if lookup is None:
+            st.caption("gBizINFO 検索: 未実行 (トークン未設定または機能無効)")
+        elif lookup.error:
+            st.warning(f"🏢 gBizINFO 検索失敗: {lookup.error}。判断は人間にお任せします。")
+        elif lookup.hits == 0:
+            st.caption("🏢 gBizINFO 検索: ヒット 0 件 (法人名としては未登録)")
+        else:
+            top_str = "、".join(lookup.top_names[:5])
+            st.markdown(
+                f"🏢 gBizINFO 検索: **{lookup.hits} 件**ヒット"
+                + (f" — {top_str}" if top_str else "")
+            )
+        choice = st.radio(
+            "判断",
+            options=["マスクする (推奨)", "マスクしない"],
+            index=0 if current else 1,
+            key=f"step2_mask_decision_{key}",
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        user_decisions[key] = choice == "マスクする (推奨)"
+
+
+def _render_step2_mask_decision_section(
+    preview_docs: list[SanitizedDocument],
+    masking_states: dict,
+) -> None:
+    candidates = _iter_uncertain_mask_candidates(masking_states)
+    if not candidates:
+        st.markdown(
+            """
+<section class="step2-mask-band safe">
+  <div class="step2-mask-title">✓ 要確認の語はありませんでした</div>
+  <div class="step2-mask-detail">外部送信前に追加判断が必要な固有名詞候補は検出されていません。</div>
+</section>
+            """,
+            unsafe_allow_html=True,
+        )
+        return
+
+    doc_text = {doc.name: doc.original_excerpt or "" for doc in preview_docs}
+    st.markdown(
+        f"""
+<section class="step2-mask-band">
+  <div class="step2-mask-title">マスクするか判断が必要な語が {len(candidates)} 件あります</div>
+  <div class="step2-mask-detail">
+    固有名詞っぽい語が検出されました。外部 LLM に送る前に、マスクするか判断してください。
+    判断後は「匿名化結果を再生成」で反映します。
+  </div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+    for state, candidate in candidates:
+        _render_mask_candidate_decision(state, candidate, doc_text.get(state.name, ""))
+
+
+def _render_step2_document_details(
+    preview_docs: list[SanitizedDocument],
+    masking_states: dict,
+) -> None:
+    st.markdown("#### 文書ごとの詳細")
+    st.caption("必要な文書だけ開いて、匿名化後テキスト、置換一覧、検知理由を確認できます。")
+    for doc in preview_docs:
+        state = (masking_states or {}).get(doc.name)
+        candidate_count = len(getattr(state, "uncertain_candidates", ()) or ()) if state else 0
+        decision_label = DECISION_LABELS.get(
+            doc.local_sensitivity_decision or "unknown",
+            doc.local_sensitivity_decision or "unknown",
+        )
+        subtitle = (
+            f"{decision_label} / 置換 {len(doc.replacements)} 件 / "
+            f"{doc.estimated_input_tokens} tokens / 候補 {candidate_count} 件"
+        )
+        with st.expander(f"📄 {doc.name} — {subtitle}", expanded=False):
+            st.markdown(
+                sr_ui.collapsed_list_row(
+                    "📄",
+                    doc.name,
+                    f"外部送信リスク: {doc.outbound_risk} / {subtitle}",
+                ),
+                unsafe_allow_html=True,
+            )
+            if doc.local_sensitivity_reasons:
+                st.markdown("**判定理由**")
+                for reason in doc.local_sensitivity_reasons:
+                    st.markdown(f"- {reason}")
+            if doc.findings:
+                with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)", expanded=False):
+                    for finding in doc.findings:
+                        st.markdown(f"- {finding}")
+            if state and getattr(state, "confirmed_findings", None):
+                with st.expander(f"自動マスク済み ({len(state.confirmed_findings)} 件)", expanded=False):
+                    for value, label in state.confirmed_findings:
+                        st.markdown(f"- `{value}` → カテゴリ: **{label}**")
+            _render_source_format_diagnostics(doc)
+            tabs = st.tabs(["LLM送信対象テキスト", "匿名化後の抜粋", "置換一覧"])
+            digest = hashlib.sha256(
+                f"{doc.name}|{doc.outbound_text}|{doc.sanitized_excerpt}".encode("utf-8")
+            ).hexdigest()[:12]
+            with tabs[0]:
+                st.text_area(
+                    "LLM送信対象テキスト",
+                    value=doc.outbound_text or "(空)",
+                    height=220,
+                    disabled=True,
+                    key=f"step2_v2_outbound_text_{digest}",
+                    label_visibility="collapsed",
+                )
+            with tabs[1]:
+                st.text_area(
+                    "匿名化後の抜粋",
+                    value=doc.sanitized_excerpt or "(空)",
+                    height=180,
+                    disabled=True,
+                    key=f"step2_v2_sanitized_excerpt_{digest}",
+                    label_visibility="collapsed",
+                )
+            with tabs[2]:
+                if doc.replacements:
+                    rows = [
+                        {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
+                        for r in doc.replacements
+                    ]
+                    st.dataframe(rows, width="stretch", hide_index=True)
+                else:
+                    st.caption("置換は記録されませんでした。")
+
+
+def _regenerate_anonymization_from_mask_decisions(
+    preview_docs: list[SanitizedDocument],
+    masking_states: dict,
+) -> None:
+    decisions_all = st.session_state.get("user_decisions", {})
+    rebuilt: list[SanitizedDocument] = []
+    resolved_states: dict[str, MaskingPipelineState] = {}
+    for doc in preview_docs:
+        state = (masking_states or {}).get(doc.name)
+        if state is None:
+            rebuilt.append(doc)
+            continue
+        doc_decisions: dict[str, bool] = {}
+        for candidate in state.uncertain_candidates:
+            key = _decision_key(doc.name, candidate.text)
+            doc_decisions[candidate.text] = decisions_all.get(key, True)
+        sanitizer = _build_sanitizer()
+        try:
+            new_doc = apply_user_decisions(
+                state=state,
+                user_decisions=doc_decisions,
+                sanitizer=sanitizer,
+                customer_id=st.session_state.get("customer_id"),
+                session_id=st.session_state.get("audit_session_id"),
+            )
+            rebuilt.append(new_doc)
+            resolved_states[doc.name] = MaskingPipelineState(
+                name=state.name,
+                sanitized=new_doc,
+                confirmed_findings=list(state.confirmed_findings)
+                + [
+                    (candidate.text, candidate.label)
+                    for candidate in state.uncertain_candidates
+                    if doc_decisions.get(candidate.text, True)
+                ],
+                uncertain_candidates=[],
+                lookups=dict(state.lookups),
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.warning(
+                f"R-M apply_user_decisions (文書 {doc.name}) で警告: "
+                f"{type(exc).__name__}: {exc}。元の sanitize 結果を使います。"
+            )
+            rebuilt.append(doc)
+            resolved_states[doc.name] = state
+
+    st.session_state.preview_docs = rebuilt
+    if resolved_states:
+        st.session_state.masking_states = {
+            **(st.session_state.get("masking_states", {}) or {}),
+            **resolved_states,
+        }
+    for key in (
+        "review_result",
+        "structure_result",
+        "remediation_plan",
+        "deep_dive_results",
+        "chapter_deep_dive_results",
+        "deep_dive_notice",
+        "send_approval",
+        "chapter_sections_cache",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state.anonymization_details_visible = False
+    st.session_state.anonymization_details_expand_once = False
+    st.session_state.anonymization_regenerated_message = True
+
+
+def _render_step2_next_action(
+    *,
+    masking_states: dict,
+    blocked_docs: list[SanitizedDocument],
+    can_regenerate_anonymization: bool,
+) -> bool:
+    candidate_total, decided_count = _mask_decision_progress(masking_states)
+    disabled = bool(blocked_docs) or candidate_total > 0
+    if blocked_docs:
+        detail = "送信禁止の文書があります。対象文書を修正するか、再プレビューしてください。"
+    elif candidate_total and decided_count < candidate_total:
+        detail = (
+            f"マスク判断候補が {candidate_total - decided_count} 件あります。"
+            "判断後、「匿名化結果を再生成」を押してください。"
+        )
+    elif candidate_total:
+        detail = "判断を反映するため「匿名化結果を再生成」を押してください。"
+    else:
+        detail = "確認できました。次の Step 3 で最終承認するとレビュー送信できます。"
+
+    st.markdown(
+        f"""
+<section class="step2-next-action">
+  <div class="step2-next-title">次アクション</div>
+  <div class="step2-next-detail">{html.escape(detail)}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+    col_ready, col_regen = st.columns([1.35, 1.2])
+    with col_ready:
+        ready_clicked = st.button(
+            "送信準備を完了する",
+            type="primary",
+            disabled=disabled,
+            width="stretch",
+            key="step2_ready_button",
+            help="Step 2 の確認を終え、Step 3 の最終承認へ進みます。",
+        )
+        if ready_clicked:
+            st.session_state.step2_ready_acknowledged = True
+            st.success("Step 2 の確認を記録しました。Step 3 で最終承認してください。")
+    with col_regen:
+        regen_help = (
+            "マスク候補の判断を反映し、匿名化済みテキストを再生成します。"
+            if can_regenerate_anonymization
+            else "再生成が必要なマスク候補はありません。"
+        )
+        return st.button(
+            "匿名化結果を再生成",
+            type="secondary",
+            disabled=not can_regenerate_anonymization,
+            width="stretch",
+            key="step2_regenerate_button",
+            help=regen_help,
+        )
+
+
+def _render_step2_v2(
+    preview_docs: list[SanitizedDocument],
+    *,
+    preview_warnings: list[str],
+    document_profile_override: str | None,
+    masking_states: dict,
+    blocked_docs: list[SanitizedDocument],
+    can_regenerate_anonymization: bool,
+) -> None:
+    st.markdown("<div class='step2-v2'>", unsafe_allow_html=True)
+    _render_step2_header_and_summary(preview_docs, masking_states)
+    if preview_warnings:
+        with st.expander(f"抽出・パイプライン警告 ({len(preview_warnings)} 件)", expanded=False):
+            for warning in preview_warnings:
+                st.markdown(f"- {warning}")
+
+    _render_step2_mask_decision_section(preview_docs, masking_states)
+    regenerate_clicked = _render_step2_next_action(
+        masking_states=masking_states,
+        blocked_docs=blocked_docs,
+        can_regenerate_anonymization=can_regenerate_anonymization,
+    )
+    if regenerate_clicked:
+        try:
+            _regenerate_anonymization_from_mask_decisions(preview_docs, masking_states)
+            st.rerun()
+        except Exception:  # noqa: BLE001
+            request_id = uuid.uuid4().hex[:8]
+            st.error(f"匿名化結果の再生成に失敗しました ({request_id})。")
+            with st.expander("詳細トレース"):
+                st.code(traceback.format_exc())
+
+    if st.session_state.pop("anonymization_regenerated_message", False):
+        st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
+
+    _render_step2_document_details(preview_docs, masking_states)
+    _render_token_budget_panel(preview_docs, document_profile_override)
+    previous_plan = st.session_state.get("previous_remediation_plan")
+    if st.session_state.get("enable_previous_remediation_review") and previous_plan is not None:
+        comparison_report = compare_remediation_plan_to_documents(previous_plan, preview_docs)
+        _render_remediation_comparison_report(comparison_report)
+    render_session_summary()
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 def _render_token_budget_panel(
@@ -2332,101 +2781,6 @@ def _readiness_state(
     )
 
 
-def _render_review_bundle_overview(
-    preview_docs: list[SanitizedDocument],
-    blocked_docs: list[SanitizedDocument],
-    confirmation_docs: list[SanitizedDocument],
-    *,
-    document_profile_override: str | None,
-    send_approved: bool,
-) -> None:
-    """Show the current upload set as one logical review bundle."""
-    if not preview_docs:
-        return
-    estimate = None
-    try:
-        estimate = estimate_review_token_budget(preview_docs, document_profile_override)
-    except Exception:
-        estimate = None
-    summary = _build_anonymization_summary(preview_docs)
-    estimate_status = estimate.status if estimate is not None else "unknown"
-    tone, status_label, title, detail = _readiness_state(
-        blocked_count=len(blocked_docs),
-        confirmation_count=len(confirmation_docs),
-        estimate_status=estimate_status,
-        send_approved=send_approved,
-    )
-    badge_class = {
-        "safe": "decision-safe",
-        "warn": "decision-mask",
-        "split": "decision-mask",
-        "block": "decision-block",
-    }.get(tone, "decision-mask")
-    budget_label = (
-        TOKEN_BUDGET_STATUS_LABELS.get(estimate.status, estimate.status)
-        if estimate is not None else "概算不可"
-    )
-    call_count = estimate.call_count if estimate is not None else "-"
-    total_input = f"{estimate.total_input_tokens:,}" if estimate is not None else "-"
-    max_call = f"{estimate.max_call_input_tokens:,}" if estimate is not None else "-"
-    body_tokens = f"{estimate.body_tokens:,}" if estimate is not None else "-"
-
-    anonymization_value = (
-        f"安全 {summary['safe']} / 要確認 {summary['mask_and_continue']} / "
-        f"未判定 {summary['unknown']} / 禁止 {summary['block']}"
-    )
-    anonymization_note = (
-        "追加確認はありません。"
-        if not confirmation_docs and not blocked_docs
-        else "要確認・未確定候補の文書を確認してください。"
-    )
-    token_note = (
-        f"{call_count} call / 入力 {total_input} tokens / 最大1call {max_call}"
-        if estimate is not None
-        else "トークン概算を作成できませんでした。"
-    )
-    next_note = (
-        "最終承認チェック後、レビュー送信できます。"
-        if not send_approved
-        else "送信ボタンでレビューを開始できます。"
-    )
-
-    st.markdown(
-        f"""
-<div class="readiness-panel">
-  <div class="readiness-main {html.escape(tone)}">
-    <div class="readiness-eyebrow">送信前チェック</div>
-    <div style="margin-top:0.35rem;"><span class="decision-badge {badge_class}">{html.escape(status_label)}</span></div>
-    <div class="readiness-title">{html.escape(title)}</div>
-    <div class="readiness-detail">{html.escape(detail)}</div>
-  </div>
-  <div class="readiness-grid">
-    <div class="readiness-card">
-      <div class="readiness-card-title">匿名化状態</div>
-      <div class="readiness-card-value">{html.escape(anonymization_value)}</div>
-      <div class="readiness-card-note">置換 {summary['replacement_count']} 件 / 未確定候補 {summary['uncertain_count']} 件。{html.escape(anonymization_note)}</div>
-    </div>
-    <div class="readiness-card">
-      <div class="readiness-card-title">送信規模</div>
-      <div class="readiness-card-value">{html.escape(budget_label)}</div>
-      <div class="readiness-card-note">{html.escape(token_note)}。本文推定 {html.escape(str(body_tokens))} tokens。</div>
-    </div>
-    <div class="readiness-card">
-      <div class="readiness-card-title">次の操作</div>
-      <div class="readiness-card-value">{html.escape('最終承認' if not send_approved else 'レビュー送信')}</div>
-      <div class="readiness-card-note">{html.escape(next_note)}</div>
-    </div>
-  </div>
-</div>
-        """,
-        unsafe_allow_html=True,
-    )
-    st.caption(
-        f"{len(preview_docs)} ファイルを1つのレビュー対象として扱います。"
-        "複数PDFでは Gemma/Gemini 側で分割callになる場合があります。"
-    )
-
-
 def _has_regeneratable_mask_candidates(masking_states: dict) -> bool:
     """Return True when the regenerate button can actually change output."""
     for state in (masking_states or {}).values():
@@ -2435,64 +2789,6 @@ def _has_regeneratable_mask_candidates(masking_states: dict) -> bool:
         if confirmed or uncertain:
             return True
     return False
-
-
-def _render_anonymization_detail_panel(
-    preview_docs: list[SanitizedDocument],
-    *,
-    expanded: bool = False,
-) -> None:
-    st.markdown("#### 匿名化後テキスト確認")
-    st.caption(
-        "下記が外部 LLM に送信される匿名化済みテキストです。"
-        "必要に応じて置換一覧も確認してください。"
-    )
-    for doc in preview_docs:
-        digest = hashlib.sha256(
-            f"{doc.name}|{doc.outbound_text}|{doc.sanitized_excerpt}".encode("utf-8")
-        ).hexdigest()[:12]
-        with st.expander(f"📄 {doc.name} の匿名化結果", expanded=expanded):
-            meta_cols = st.columns(4)
-            meta_cols[0].metric("推定トークン", doc.estimated_input_tokens)
-            meta_cols[1].metric("置換数", len(doc.replacements))
-            meta_cols[2].metric("外部送信リスク", doc.outbound_risk)
-            meta_cols[3].metric(
-                "判定",
-                {
-                    "safe": "安全",
-                    "mask_and_continue": "要確認",
-                    "block": "送信禁止",
-                    "unknown": "未判定",
-                }.get(doc.local_sensitivity_decision, doc.local_sensitivity_decision),
-            )
-            tabs = st.tabs(["LLM送信対象テキスト", "匿名化後の抜粋", "置換一覧"])
-            with tabs[0]:
-                st.text_area(
-                    "LLM送信対象テキスト",
-                    value=doc.outbound_text or "(空)",
-                    height=260,
-                    disabled=True,
-                    key=f"outbound_text_confirm_{digest}",
-                    label_visibility="collapsed",
-                )
-            with tabs[1]:
-                st.text_area(
-                    "匿名化後の抜粋",
-                    value=doc.sanitized_excerpt or "(空)",
-                    height=220,
-                    disabled=True,
-                    key=f"sanitized_excerpt_confirm_{digest}",
-                    label_visibility="collapsed",
-                )
-            with tabs[2]:
-                if doc.replacements:
-                    rows = [
-                        {"プレースホルダ": r.placeholder, "カテゴリ": r.category, "原文": r.original}
-                        for r in doc.replacements
-                    ]
-                    st.dataframe(rows, width='stretch', hide_index=True)
-                else:
-                    st.caption("置換は記録されませんでした。")
 
 
 def _extract_excel_workbook_diagnostics(text: str) -> str:
@@ -4117,130 +4413,6 @@ def _decision_key(doc_name: str, candidate_text: str) -> str:
     return f"{doc_name}::{candidate_text}"
 
 
-def _render_uncertain_candidates_card(
-    state: MaskingPipelineState,
-    full_text: str = "",
-) -> None:
-    """1 つの文書の未確定候補リストを UI に描画する。
-
-    各候補について gBizINFO 検索結果と「マスクする / しない」ラジオを
-    表示し、ユーザの選択を ``st.session_state.user_decisions`` に格納する。
-    デフォルトは「マスクする」(D4 安全側)。
-
-    PR-F: 候補テキストの周辺コンテキスト (前後 30 文字) を表示する。
-    「東京」のような単語が「東京リージョン」「東京都」「東京駅」のいずれを
-    指すかをユーザが判断できるようにするため。``full_text`` が空文字の
-    場合 (古い呼び出しや抽出失敗) は文脈表示をスキップする。
-
-    Args:
-        state: その文書の MaskingPipelineState。
-        full_text: 元のテキスト全体 (extractor 抽出済み)。文脈抜粋に使う。
-    """
-    user_decisions = st.session_state.setdefault("user_decisions", {})
-
-    # 確定済み候補 (シード辞書ヒット + PR-F で gBizINFO 失敗から昇格したもの)
-    if state.confirmed_findings:
-        with st.expander(
-            f"自動マスク済み ({len(state.confirmed_findings)} 件)",
-            expanded=False,
-        ):
-            st.caption(
-                "シード辞書ヒット、または gBizINFO 検索が失敗 (404 / ネット"
-                "ワークエラー等) した候補です。後者は判断材料がないため安全側"
-                "でマスクしています。マスクを外したい場合は手動で対応して"
-                "ください。"
-            )
-            for value, label in state.confirmed_findings:
-                st.markdown(f"- `{value}` → カテゴリ: **{label}**")
-
-    if not state.uncertain_candidates:
-        return
-
-    with st.expander(
-        f"⚠️ マスク候補 ({len(state.uncertain_candidates)} 件、ご確認ください)",
-        expanded=True,  # 注意喚起のため初期は開いておく
-    ):
-        st.caption(
-            "以下の固有名詞が未確定候補として検出されました。"
-            "それぞれについて、外部 LLM に送信する前にマスクするかをお選びください。"
-            "迷う場合は **マスクする** を推奨 (機密漏洩防止優先)。"
-        )
-
-        # PR-F: 候補数が多い場合は固定高さのスクロールコンテナに入れる。
-        # 5 件以下: 余白が出ないようコンテナなし。
-        # 6 件以上: height=600 px のスクロールコンテナで縦伸びを防ぐ。
-        _num_candidates = len(state.uncertain_candidates)
-        if _num_candidates > 5:
-            _scroll_container = st.container(height=600, border=False)
-        else:
-            _scroll_container = st.container(border=False)
-
-        with _scroll_container:
-            for cand in state.uncertain_candidates:
-                with st.container(border=True):
-                    # 候補テキスト + ラベル
-                    st.markdown(
-                        f"**「{cand.text}」** "
-                        f"<span class='muted'>(カテゴリ: {cand.label} / "
-                        f"spaCy: {cand.spacy_label})</span>",
-                        unsafe_allow_html=True,
-                    )
-
-                    # コンテキスト抜粋 (PR-F)
-                    if full_text and cand.start >= 0 and cand.end > cand.start:
-                        ctx_start = max(0, cand.start - 30)
-                        ctx_end = min(len(full_text), cand.end + 30)
-                        before = full_text[ctx_start:cand.start]
-                        after = full_text[cand.end:ctx_end]
-                        # 改行は半角スペースに置換して 1 行に
-                        before_clean = before.replace("\n", " ").replace("\r", " ")
-                        after_clean = after.replace("\n", " ").replace("\r", " ")
-                        prefix = "..." if ctx_start > 0 else ""
-                        suffix = "..." if ctx_end < len(full_text) else ""
-                        st.markdown(
-                            f"📝 文脈: {prefix}{before_clean}**{cand.text}**{after_clean}{suffix}"
-                        )
-
-                    # gBizINFO 検索結果
-                    lookup = state.lookups.get(cand.text)
-                    if lookup is None:
-                        st.caption("gBizINFO 検索: 未実行 (トークン未設定または機能無効)")
-                    elif lookup.error:
-                        # PR-F: error あり候補は run_masking_pipeline の昇格処理で
-                        # confirmed に移されるため、本来 uncertain には現れないはず。
-                        # 念のため警告として表示。
-                        st.warning(
-                            f"🏢 gBizINFO 検索失敗: {lookup.error}。"
-                            "判断は人間にお任せします。"
-                        )
-                    else:
-                        if lookup.hits == 0:
-                            st.caption(
-                                "🏢 gBizINFO 検索: ヒット 0 件 "
-                                "(法人名としては未登録)"
-                            )
-                        else:
-                            top_str = "、".join(lookup.top_names[:5])
-                            st.markdown(
-                                f"🏢 gBizINFO 検索: **{lookup.hits} 件**ヒット"
-                                + (f" — {top_str}" if top_str else "")
-                            )
-
-                    # ラジオボタン (デフォルト: マスクする)
-                    key = _decision_key(state.name, cand.text)
-                    # 初期値: 既存の判断があれば維持、なければ True (マスク)
-                    current = user_decisions.get(key, True)
-                    choice = st.radio(
-                        "判断",
-                        options=["マスクする (推奨)", "マスクしない"],
-                        index=0 if current else 1,
-                        key=f"radio_{key}",
-                        horizontal=True,
-                        label_visibility="collapsed",
-                    )
-                    user_decisions[key] = choice == "マスクする (推奨)"
-
-
 def _render_design_foundation_preview() -> None:
     """Developer-only preview for G-1 reusable UI components."""
     st.caption("G-1 で追加した共通HTMLコンポーネントの目視確認用です。通常ユーザには表示されません。")
@@ -4661,16 +4833,20 @@ if preview_docs:
 _operation_can_regenerate = _has_regeneratable_mask_candidates(
     _operation_masking_states
 )
-_render_workflow_top_panel(
-    _operation_assist_slot,
-    _status_bar_slot,
-    preview_docs=preview_docs,
-    blocked_docs=_operation_blocked_docs,
-    confirmation_docs=_operation_confirmation_docs,
-    send_approved=bool(st.session_state.get("send_approval")),
-    token_status=_operation_token_status,
-    can_regenerate_anonymization=_operation_can_regenerate,
-)
+if not preview_docs:
+    _render_workflow_top_panel(
+        _operation_assist_slot,
+        _status_bar_slot,
+        preview_docs=preview_docs,
+        blocked_docs=_operation_blocked_docs,
+        confirmation_docs=_operation_confirmation_docs,
+        send_approved=bool(st.session_state.get("send_approval")),
+        token_status=_operation_token_status,
+        can_regenerate_anonymization=_operation_can_regenerate,
+    )
+else:
+    _operation_assist_slot.empty()
+    _status_bar_slot.empty()
 
 preview_error = st.session_state.get("preview_error")
 if preview_error:
@@ -4697,18 +4873,6 @@ if st.session_state.get("preview_attempted") and not preview_error and not previ
     st.info("匿名化結果はまだ作成されていません。ファイルを確認して、もう一度実行してください。")
 
 if preview_docs:
-    _render_step_header(
-        2,
-        "匿名化結果プレビュー",
-        "外部送信前に、匿名化結果・送信規模・要確認候補を確認します。",
-    )
-
-    warnings = st.session_state.get("preview_warnings", [])
-    if warnings:
-        with st.expander(f"抽出・パイプライン警告 ({len(warnings)} 件)"):
-            for warning in warnings:
-                st.markdown(f"- {warning}")
-
     _masking_states_for_gate = st.session_state.get("masking_states", {}) or {}
     mask_docs = [
         doc
@@ -4724,201 +4888,14 @@ if preview_docs:
         _masking_states_for_gate
     )
 
-    _render_review_bundle_overview(
+    _render_step2_v2(
         preview_docs,
-        blocked_docs,
-        mask_docs,
+        preview_warnings=st.session_state.get("preview_warnings", []) or [],
         document_profile_override=document_profile_override,
-        send_approved=bool(st.session_state.get("send_approval")),
+        masking_states=_masking_states_for_gate,
+        blocked_docs=blocked_docs,
+        can_regenerate_anonymization=can_regenerate_anonymization,
     )
-    _render_anonymization_summary(preview_docs)
-
-    # PR-J: 文書数が 4 件以上の場合、ステップ 2 の各文書カードを
-    # 高さ 600px のスクロール可能コンテナで包む。本文+別紙の構成で
-    # 11 ファイル前後を読み込んだ際に画面が縦に長く伸びすぎる問題への対処。
-    # 3 件以下の場合は従来通りスクロールなし (画面圧迫の心配がないため)。
-    _step2_use_scroll = len(preview_docs) >= 4
-    _step2_height = (
-        _scroll_height_control(
-            "匿名化結果一覧の表示高さ",
-            key="step2_scroll_height",
-            default=600,
-            min_value=360,
-            max_value=1100,
-        )
-        if _step2_use_scroll else None
-    )
-    _step2_container = (
-        st.container(height=_step2_height) if _step2_use_scroll else st.container()
-    )
-    _uncertain_doc_names = {
-        name
-        for name, state in (_masking_states_for_gate or {}).items()
-        if bool(getattr(state, "uncertain_candidates", None))
-    }
-    _display_docs = list(preview_docs)
-    if len(_display_docs) >= 2:
-        st.caption("ファイル名の章番号順で表示します。注意が必要な文書はバッジで示します。")
-    with _step2_container:
-        for doc in _display_docs:
-            card_class = _doc_card_class(doc.local_sensitivity_decision)
-            st.markdown(f'<div class="{card_class}">', unsafe_allow_html=True)
-
-            _attention_reasons = document_attention_reasons(
-                doc,
-                has_uncertain_candidates=doc.name in _uncertain_doc_names,
-            )
-            _attention_html = (
-                "<div class='doc-attention-row'>"
-                + " ".join(
-                    f"<span class='decision-badge decision-mask'>{html.escape(reason)}</span>"
-                    for reason in _attention_reasons
-                )
-                + "</div>"
-                if _attention_reasons else ""
-            )
-            st.markdown(
-                f"""
-<div class="doc-card-header">
-  <div>
-    <div class="doc-title">{html.escape(doc.name)}</div>
-    <div class="doc-submeta">
-      <span class="doc-meta-pill">{doc.estimated_input_tokens} tokens</span>
-      <span class="doc-meta-pill">外部送信リスク: {html.escape(doc.outbound_risk)}</span>
-    </div>
-  </div>
-  <div>{_decision_badge(doc.local_sensitivity_decision)}</div>
-</div>
-{_attention_html}
-                """,
-                unsafe_allow_html=True,
-            )
-
-            if doc.local_sensitivity_reasons:
-                reason_items = "".join(
-                    f"<li>{html.escape(reason)}</li>"
-                    for reason in doc.local_sensitivity_reasons
-                )
-                st.markdown(
-                    f"""
-<div class="doc-reason-block">
-  <div class="doc-reason-title">判定理由</div>
-  <ul class="doc-reason-list">{reason_items}</ul>
-</div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            if doc.findings:
-                with st.expander(f"匿名化検知内容 ({len(doc.findings)} 件)"):
-                    for finding in doc.findings:
-                        st.markdown(f"- {finding}")
-
-            _render_source_format_diagnostics(doc)
-
-            # ----- R-M (PR-D2 + PR-F): 未確定候補カード (α 案: 各文書のカード内) -----
-            # PR-F: SanitizedDocument.original_excerpt を full_text として渡し、
-            # _render_uncertain_candidates_card がコンテキスト抜粋を表示できるように。
-            _masking_state = st.session_state.get("masking_states", {}).get(doc.name)
-            if _masking_state is not None:
-                _render_uncertain_candidates_card(
-                    _masking_state,
-                    full_text=doc.original_excerpt or "",
-                )
-
-            st.markdown("</div>", unsafe_allow_html=True)
-    regenerate_help = (
-        "マスク候補の判断を反映し、匿名化済みテキストを再生成します。"
-        "この操作では外部 LLM には送信しません。"
-        if can_regenerate_anonymization
-        else (
-            "再生成が必要なマスク候補はありません。"
-            "安全判定で未確定候補もない場合は、このまま確認・送信できます。"
-        )
-    )
-
-    check_clicked = st.button(
-        "📋 匿名化結果を再生成",
-        type="secondary",
-        disabled=not bool(preview_docs) or not can_regenerate_anonymization,
-        help=regenerate_help,
-        key="doc_check_button",
-    )
-
-    # Phase 7 段階 1.5 (2026-05-08): 「📋 匿名化結果を再生成」押下時の処理
-    if check_clicked:
-        try:
-            _states = st.session_state.get("masking_states", {})
-            _decisions_all = st.session_state.get("user_decisions", {})
-            if _states:
-                rebuilt: list = []
-                for doc in preview_docs:
-                    state = _states.get(doc.name)
-                    if state is None:
-                        rebuilt.append(doc)
-                        continue
-                    doc_decisions: dict[str, bool] = {}
-                    for cand in state.uncertain_candidates:
-                        key = _decision_key(doc.name, cand.text)
-                        doc_decisions[cand.text] = _decisions_all.get(key, True)
-                    sanitizer = _build_sanitizer()
-                    try:
-                        new_doc = apply_user_decisions(
-                            state=state,
-                            user_decisions=doc_decisions,
-                            sanitizer=sanitizer,
-                            customer_id=st.session_state.get("customer_id"),
-                            session_id=st.session_state.get("audit_session_id"),
-                        )
-                        rebuilt.append(new_doc)
-                    except Exception as exc:  # noqa: BLE001
-                        st.warning(
-                            f"R-M apply_user_decisions (文書 {doc.name}) で警告: "
-                            f"{type(exc).__name__}: {exc}。元の sanitize 結果を使います。"
-                        )
-                        rebuilt.append(doc)
-                preview_docs = rebuilt
-                st.session_state.preview_docs = preview_docs
-
-            st.session_state.pop("review_result", None)
-            st.session_state.pop("structure_result", None)
-            st.session_state.pop("remediation_plan", None)
-            st.session_state.pop("deep_dive_results", None)
-            st.session_state.pop("chapter_deep_dive_results", None)
-            st.session_state.pop("deep_dive_notice", None)
-            st.session_state.pop("send_approval", None)
-            st.session_state.anonymization_details_visible = True
-            st.session_state.anonymization_details_expand_once = False
-            st.session_state.pop("chapter_sections_cache", None)
-            st.session_state.anonymization_regenerated_message = True
-            st.rerun()
-        except Exception as exc:  # noqa: BLE001
-            _request_id = uuid.uuid4().hex[:8]
-            st.error(f"匿名化結果の再生成に失敗しました ({_request_id})。")
-            with st.expander("詳細トレース"):
-                st.code(traceback.format_exc())
-
-    if st.session_state.pop("anonymization_regenerated_message", False):
-        st.success("✅ 匿名化結果を再生成しました。下記サマリで確認できます。")
-
-    _render_token_budget_panel(preview_docs, document_profile_override)
-    previous_plan = st.session_state.get("previous_remediation_plan")
-    if st.session_state.get("enable_previous_remediation_review") and previous_plan is not None:
-        _comparison_report = compare_remediation_plan_to_documents(previous_plan, preview_docs)
-        _render_remediation_comparison_report(_comparison_report)
-    if st.session_state.get("anonymization_details_visible", False):
-        _expand_anonymization_details = bool(
-            st.session_state.pop("anonymization_details_expand_once", False)
-        )
-        with st.expander(
-            "匿名化後テキスト確認 — 外部送信前の本文・置換を確認するときに開く",
-            expanded=_expand_anonymization_details,
-        ):
-            _render_anonymization_detail_panel(
-                preview_docs,
-                expanded=False,
-            )
-    render_session_summary()
 
     # -- Step 3: Confirmation gate ----------------------------------------
 

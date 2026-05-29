@@ -168,6 +168,14 @@ h1, h2, h3 {
     color: var(--ink);
     letter-spacing: -0.02em;
 }
+.sr-app-title {
+    color: var(--sr-text-primary);
+    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
+    font-size: clamp(1.18rem, 2.4vw, 1.52rem);
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    margin: 0.2rem 0 0.7rem;
+}
 
 [data-testid="stSidebar"] {
     background:
@@ -218,52 +226,6 @@ h1, h2, h3 {
 [data-testid="stSidebar"] div[data-testid="stExpander"] summary {
     min-height: 3.25rem;
     padding-left: 0.35rem;
-}
-.sidebar-brand {
-    position: relative;
-    overflow: hidden;
-    border: 1px solid rgba(8,119,96,0.18);
-    border-radius: 24px;
-    background:
-        linear-gradient(135deg, rgba(255,253,248,0.92) 0%, rgba(230,244,238,0.88) 100%);
-    padding: 1rem 0.95rem;
-    box-shadow: 0 18px 38px rgba(24,35,30,0.10);
-}
-.sidebar-brand::after {
-    content: "";
-    position: absolute;
-    right: -3rem;
-    top: -3rem;
-    width: 8rem;
-    height: 8rem;
-    background: radial-gradient(circle, rgba(56,168,184,0.20), transparent 66%);
-}
-.sidebar-kicker {
-    position: relative;
-    z-index: 1;
-    color: var(--accent-strong);
-    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
-    font-size: 0.68rem;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    font-weight: 800;
-}
-.sidebar-title {
-    position: relative;
-    z-index: 1;
-    color: var(--ink);
-    font-size: 1.08rem;
-    line-height: 1.35;
-    font-weight: 900;
-    margin-top: 0.35rem;
-}
-.sidebar-subtitle {
-    position: relative;
-    z-index: 1;
-    color: var(--ink-soft);
-    font-size: 0.78rem;
-    line-height: 1.6;
-    margin-top: 0.55rem;
 }
 .sidebar-section-label {
     color: var(--ink);
@@ -4510,17 +4472,8 @@ def _render_design_foundation_preview() -> None:
 # ------------------------------------------------------------------- sidebar
 
 with st.sidebar:
-    st.markdown(
-        """
-<section class="sidebar-brand">
-  <div class="sidebar-kicker">Review Cockpit</div>
-  <div class="sidebar-title">技術文書レビュー支援ツール</div>
-  <div class="sidebar-subtitle">匿名化済み文書をもとに、構成・品質・リスクを確認します。</div>
-</section>
-        """,
-        unsafe_allow_html=True,
-    )
-    if st.button("新しいレビューを始める", width='stretch', type="secondary"):
+    st.markdown('<div class="sidebar-section-label">レビュー操作</div>', unsafe_allow_html=True)
+    if st.button("新しいレビューを始める", width='stretch', type="primary"):
         _reset_state()
         # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、視覚的にも空にする。
         old_key = st.session_state.get("uploader_key")
@@ -4532,7 +4485,7 @@ with st.sidebar:
     st.markdown(
         """
 <div class="sidebar-memory-card">
-  新しい文書をレビューするときは、ここから現在のアップロード・匿名化結果・レビュー結果をクリアします。
+  アップロード済みの文書、マスク判断、レビュー結果をクリアして、最初からやり直します。
   アップロード文書はサーバ上に保存されず、本セッション中のメモリ上のみで処理されます。
 </div>
         """,
@@ -4685,6 +4638,11 @@ with st.sidebar:
 
 
 # --------------------------------------------------------------------- main
+
+st.markdown(
+    '<div class="sr-app-title">技術文書レビュー支援ツール</div>',
+    unsafe_allow_html=True,
+)
 
 # -- Step 1: Upload --------------------------------------------------------
 

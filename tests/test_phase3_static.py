@@ -12,16 +12,16 @@ class Phase3StaticTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app_source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
 
-    def test_copilot_keeps_details_collapsed(self) -> None:
-        self.assertIn("AI Operation Co-Pilot", self.app_source)
-        self.assertIn("assist-step", self.app_source)
-        self.assertIn("assist-title", self.app_source)
-        self.assertIn("次にすること:", self.app_source)
-        self.assertIn("🔍 操作の詳細 — 理由・完了の目安・注意点", self.app_source)
-        self.assertNotIn("<div class=\"assist-note\"><b>なぜ必要か:", self.app_source)
-        self.assertNotIn("<div class=\"assist-note\"><b>完了の目安:", self.app_source)
-        self.assertNotIn("<div class=\"assist-note\"><b>注意:", self.app_source)
-        self.assertNotIn("この画面で見るポイント", self.app_source)
+    def test_copilot_is_removed_from_streamlit_ui(self) -> None:
+        self.assertNotIn("AI Operation Co-Pilot", self.app_source)
+        self.assertNotIn("def _render_operation_assist", self.app_source)
+        self.assertNotIn("def _render_workflow_top_panel", self.app_source)
+        self.assertNotIn("def _render_review_status_bar", self.app_source)
+        self.assertNotIn("build_operation_guide", self.app_source)
+        self.assertNotIn("OperationGuide", self.app_source)
+        self.assertIn("def _render_direct_status_bar", self.app_source)
+        self.assertIn("def _render_step1_v2", self.app_source)
+        self.assertIn("def _render_step3_v2", self.app_source)
 
     def test_document_profile_selector_is_inside_details_expander(self) -> None:
         details_index = self.app_source.index("⚙️ 詳細設定 — 辞書・R-M・開発者表示を切り替えるときに開く")

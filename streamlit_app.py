@@ -30,10 +30,6 @@ from pathlib import Path
 import streamlit as st
 
 from secure_review.app import _run_sanitization_pipeline, _enforce_outbound_guard
-from secure_review.agent_planner import (
-    OperationGuide,
-    build_operation_guide,
-)
 from secure_review.env_loader import load_dotenv
 from secure_review.export_names import remediation_plan_json_filename
 from secure_review.models import (
@@ -321,159 +317,6 @@ h1, h2, h3 {
     color: var(--ink-soft);
     font-size: 0.78rem;
     line-height: 1.6;
-}
-
-.app-hero {
-    position: relative;
-    overflow: hidden;
-    border: 1px solid rgba(8, 119, 96, 0.24);
-    background:
-        linear-gradient(135deg, rgba(255,253,248,0.94) 0%, rgba(229,241,234,0.92) 48%, rgba(221,235,231,0.98) 100%);
-    border-radius: 24px;
-    padding: 1.35rem 1.55rem;
-    margin: 0.2rem 0 1.1rem;
-    box-shadow: var(--shadow);
-}
-.app-hero::after {
-    content: "";
-    position: absolute;
-    right: -5rem;
-    top: -5rem;
-    width: 16rem;
-    height: 16rem;
-    background: radial-gradient(circle, rgba(56,168,184,0.22), transparent 68%);
-}
-.hero-kicker {
-    color: var(--accent-strong);
-    font-size: 0.72rem;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    font-weight: 800;
-}
-.hero-title {
-    font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
-    font-size: clamp(1.9rem, 4vw, 3.2rem);
-    line-height: 1.08;
-    font-weight: 900;
-    margin-top: 0.3rem;
-    color: var(--ink);
-}
-.hero-subtitle {
-    color: var(--ink-soft);
-    max-width: 780px;
-    margin-top: 0.55rem;
-    font-size: 0.96rem;
-    line-height: 1.7;
-}
-
-.operation-assist {
-    border: 1px solid rgba(8,119,96,0.18);
-    border-left: 6px solid var(--accent);
-    border-radius: 22px;
-    background:
-        linear-gradient(135deg, rgba(255,253,248,0.96) 0%, rgba(235,246,239,0.94) 100%);
-    padding: 0.9rem 1rem 0.95rem;
-    margin: 0.75rem 0 1rem;
-    box-shadow: 0 14px 36px rgba(24,35,30,0.08);
-}
-.operation-assist.warn {
-    border-left-color: var(--warn);
-    background: linear-gradient(135deg, #fffdf8 0%, #fff4d9 100%);
-}
-.operation-assist.block {
-    border-left-color: var(--danger);
-    background: linear-gradient(135deg, #fffdf8 0%, #f9e3dd 100%);
-}
-.operation-assist.active {
-    border-left-color: var(--cyan);
-    background: linear-gradient(135deg, #fffdf8 0%, #e3f3f2 100%);
-}
-.operation-assist.success {
-    border-left-color: var(--accent);
-    background: linear-gradient(135deg, #fffdf8 0%, #e5f2e5 100%);
-}
-.assist-kicker {
-    color: var(--ink-soft);
-    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
-    font-size: 0.72rem;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    margin-bottom: 0.2rem;
-}
-.assist-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
-    gap: 0.85rem;
-    align-items: stretch;
-}
-.assist-title {
-    color: var(--ink);
-    font-size: 1.25rem;
-    font-weight: 900;
-    line-height: 1.35;
-}
-.assist-step {
-    display: inline-flex;
-    align-items: center;
-    width: fit-content;
-    margin: 0.35rem 0 0.45rem;
-    padding: 0.22rem 0.58rem;
-    border-radius: 999px;
-    background: rgba(255,255,255,0.78);
-    color: var(--accent-strong);
-    border: 1px solid rgba(8,119,96,0.18);
-    font-size: 0.78rem;
-    font-weight: 700;
-}
-.assist-action {
-    background: rgba(255,255,255,0.74);
-    border: 1px solid rgba(215,203,184,0.72);
-    border-radius: 16px;
-    padding: 0.72rem 0.8rem;
-    color: var(--ink);
-    line-height: 1.55;
-}
-.assist-action b,
-.assist-note b {
-    color: var(--accent-strong);
-}
-.assist-note {
-    margin-top: 0.5rem;
-    color: var(--ink-soft);
-    font-size: 0.86rem;
-    line-height: 1.55;
-}
-.assist-checklist {
-    background: rgba(255,255,255,0.58);
-    border: 1px solid rgba(215,203,184,0.72);
-    border-radius: 18px;
-    padding: 0.75rem 0.85rem;
-}
-.assist-checklist-title {
-    font-size: 0.78rem;
-    font-weight: 800;
-    color: var(--ink-soft);
-    margin-bottom: 0.45rem;
-    letter-spacing: 0.08em;
-}
-.assist-check {
-    display: flex;
-    gap: 0.42rem;
-    align-items: flex-start;
-    color: var(--ink);
-    font-size: 0.86rem;
-    line-height: 1.45;
-    margin: 0.28rem 0;
-}
-.assist-check::before {
-    content: "•";
-    color: var(--accent);
-    font-weight: 900;
-}
-@media (max-width: 760px) {
-    .assist-layout {
-        grid-template-columns: 1fr;
-    }
 }
 
 div.stButton > button[kind="primary"],
@@ -1493,6 +1336,125 @@ div[data-testid="stExpander"] summary {
     color: var(--sr-text-secondary);
     font-size: 0.78rem;
 }
+.workflow-v2 {
+    margin: 0.7rem 0 1.15rem;
+}
+.step-v2-heading {
+    margin: 0.9rem 0 0.85rem;
+}
+.step-v2-kicker {
+    color: var(--sr-text-tertiary);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.76rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+.step-v2-title {
+    color: var(--sr-text-primary);
+    font-size: 1.65rem;
+    font-weight: 900;
+    line-height: 1.25;
+    margin-top: 0.12rem;
+}
+.step-v2-subtitle {
+    color: var(--sr-text-secondary);
+    font-size: 0.92rem;
+    line-height: 1.55;
+    margin-top: 0.25rem;
+}
+.upload-zone-v2,
+.compare-card-v2,
+.send-destination-card,
+.approval-card-v2 {
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-lg);
+    background: rgba(255,253,248,0.82);
+    box-shadow: 0 12px 28px rgba(24,35,30,0.055);
+    padding: 0.9rem 1rem;
+    margin: 0.85rem 0;
+}
+.upload-file-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    align-items: center;
+    border: 1px solid rgba(217,209,192,0.72);
+    border-radius: var(--sr-radius-md);
+    background: rgba(255,255,255,0.72);
+    padding: 0.62rem 0.72rem;
+    margin: 0.42rem 0;
+}
+.upload-file-row.warn {
+    border-left: 5px solid var(--warn);
+    background: #fff7e4;
+}
+.upload-file-name {
+    color: var(--sr-text-primary);
+    font-weight: 900;
+    overflow-wrap: anywhere;
+}
+.upload-file-meta {
+    color: var(--sr-text-secondary);
+    font-size: 0.82rem;
+    white-space: nowrap;
+}
+.send-boundary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.85rem;
+    margin: 0.9rem 0;
+}
+.send-boundary-card {
+    border: 1px solid var(--sr-border);
+    border-radius: var(--sr-radius-lg);
+    background: var(--sr-bg-primary);
+    padding: 0.95rem 1rem;
+    min-height: 10rem;
+}
+.send-boundary-card.send {
+    border-left: 6px solid var(--accent);
+}
+.send-boundary-card.keep {
+    border-left: 6px solid var(--cyan);
+}
+.send-boundary-title {
+    color: var(--sr-text-primary);
+    font-weight: 900;
+    font-size: 1.06rem;
+}
+.send-boundary-list {
+    margin: 0.55rem 0 0;
+    padding-left: 1.1rem;
+    color: var(--sr-text-secondary);
+    line-height: 1.65;
+    font-size: 0.9rem;
+}
+.send-destination-title {
+    color: var(--sr-text-primary);
+    font-size: 1.2rem;
+    font-weight: 900;
+}
+.send-destination-meta {
+    color: var(--sr-text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.6;
+    margin-top: 0.25rem;
+}
+.approval-card-v2 {
+    background: linear-gradient(135deg, rgba(255,253,248,0.95) 0%, rgba(239,246,242,0.9) 100%);
+}
+.approval-card-v2.warn {
+    border-left: 6px solid var(--warn);
+}
+.approval-card-v2.block {
+    border-left: 6px solid var(--danger);
+    background: #fff0ec;
+}
+@media (max-width: 760px) {
+    .send-boundary-grid { grid-template-columns: 1fr; }
+    .upload-file-row { display: block; }
+    .upload-file-meta { margin-top: 0.2rem; }
+}
 .step2-v2 {
     margin: 0.7rem 0 1.2rem;
 }
@@ -2033,6 +1995,271 @@ def _uploaded_to_documents() -> list[UploadedDocument]:
             )
         )
     return items
+
+
+def _format_file_size(num_bytes: int | None) -> str:
+    size = float(num_bytes or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} GB"
+
+
+def _upload_size(upload) -> int:
+    try:
+        return int(getattr(upload, "size", 0) or len(upload.getvalue()))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _render_direct_status_bar(state_label: str, meta_right: str = "", icon: str = "") -> None:
+    st.markdown(
+        sr_ui.status_bar(state_label, meta_right, icon),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_step_v2_heading(step_label: str, title: str, subtitle: str) -> None:
+    st.markdown(
+        f"""
+<section class="step-v2-heading">
+  <div class="step-v2-kicker">{html.escape(step_label)}</div>
+  <div class="step-v2-title">{html.escape(title)}</div>
+  <div class="step-v2-subtitle">{html.escape(subtitle)}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_selected_uploads(uploads: list, duplicates: list[tuple[str, str]]) -> None:
+    if not uploads:
+        st.caption("まだファイルは選択されていません。")
+        return
+
+    duplicate_map = {name: seen for name, seen in duplicates}
+    st.markdown("#### 選択中ファイル")
+    for upload in sorted(uploads, key=lambda u: _natural_sort_key(u.name)):
+        seen = duplicate_map.get(upload.name)
+        row_class = "upload-file-row warn" if seen else "upload-file-row"
+        warning = f" / {html.escape(seen)} と同一内容" if seen else ""
+        st.markdown(
+            f"""
+<div class="{row_class}">
+  <div class="upload-file-name">{html.escape(upload.name)}</div>
+  <div class="upload-file-meta">{html.escape(_format_file_size(_upload_size(upload)))}{warning}</div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
+    if duplicates:
+        st.warning(
+            f"重複ファイルが {len(duplicates)} 件あります。該当ファイルを削除してから匿名化プレビューを実行してください。"
+        )
+
+
+def _render_step1_v2() -> bool:
+    uploads = _get_uploads()
+    duplicates = _detect_duplicate_uploads() if uploads else []
+
+    st.markdown("<div class='workflow-v2 step1-v2'>", unsafe_allow_html=True)
+    _render_direct_status_bar("準備中 · ステップ 1 / 3", "レビュー前", "1")
+    _render_step_v2_heading(
+        "ステップ 1",
+        "文書アップロード",
+        "レビューする設計書を選択してください。",
+    )
+
+    with st.expander("前回のレビュー結果と比較する", expanded=False):
+        st.caption("修正後文書の再レビュー時だけ使います。通常レビューでは閉じたままで問題ありません。")
+        _render_previous_remediation_plan_loader()
+
+    st.markdown("<section class='upload-zone-v2'>", unsafe_allow_html=True)
+    st.file_uploader(
+        "レビュー対象ファイル",
+        accept_multiple_files=True,
+        key=st.session_state.uploader_key,
+        help=(
+            "対応形式: txt, md, docx, xlsx, pptx, pdf, csv, json, yaml/yml, xml, "
+            "html, スクリプト (py, ps1, sh, vbs, sql など), 画像。"
+            " 同一内容のファイルは重複検出されアップロードできません。"
+        ),
+    )
+    _render_selected_uploads(uploads, duplicates)
+    st.markdown("</section>", unsafe_allow_html=True)
+
+    preview_clicked = st.button(
+        "匿名化してプレビュー",
+        type="primary",
+        disabled=not uploads,
+        width="stretch",
+        key="step1_preview_button_v2",
+        help="選択した文書をローカルで抽出・匿名化し、Step 2 の確認画面へ進みます。",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+    return preview_clicked
+
+
+def _estimate_for_step3(
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+):
+    try:
+        return estimate_review_token_budget(preview_docs, document_profile_override)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _review_meta(preview_docs: list[SanitizedDocument], estimate=None) -> str:
+    if estimate is not None:
+        return f"{len(preview_docs)} ファイル · {estimate.body_tokens:,} tokens"
+    tokens = sum(int(getattr(doc, "estimated_input_tokens", 0) or 0) for doc in preview_docs)
+    return f"{len(preview_docs)} ファイル · {tokens:,} tokens"
+
+
+def _render_review_runtime_status(
+    state_label: str,
+    preview_docs: list[SanitizedDocument],
+    *,
+    icon: str = "↗",
+    estimate=None,
+) -> None:
+    _render_direct_status_bar(state_label, _review_meta(preview_docs, estimate), icon)
+
+
+def _render_step3_v2(
+    preview_docs: list[SanitizedDocument],
+    *,
+    blocked_docs: list[SanitizedDocument],
+    mask_docs: list[SanitizedDocument],
+    provider_label: str,
+    estimate,
+) -> tuple[bool, bool]:
+    status_label = "送信不可 · ステップ 3 / 3" if blocked_docs else "送信準備完了 · ステップ 3 / 3"
+    st.markdown("<div class='workflow-v2 step3-v2'>", unsafe_allow_html=True)
+    _render_direct_status_bar(status_label, _review_meta(preview_docs, estimate), "3")
+    _render_step_v2_heading(
+        "ステップ 3",
+        "送信",
+        "外部 LLM サービスに匿名化済みテキストを送ります。原文はここから先には出ません。",
+    )
+
+    wait_note = ""
+    if estimate is not None:
+        if getattr(estimate, "minimum_wait_seconds", 0):
+            wait_note = f" / Free tier 対策の最低待機目安: {estimate.minimum_wait_seconds} 秒"
+        call_note = f"予定 call: {estimate.call_count} / 入力概算: {estimate.total_input_tokens:,} tokens"
+    else:
+        call_note = "予定 call: 未計算 / 入力概算: 未計算"
+    st.markdown(
+        f"""
+<section class="send-destination-card">
+  <div class="send-destination-title">送信先: {html.escape(provider_label)}</div>
+  <div class="send-destination-meta">{html.escape(call_note + wait_note)}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        f"""
+<div class="send-boundary-grid">
+  <section class="send-boundary-card send">
+    <div class="send-boundary-title">送信されるもの</div>
+    <ul class="send-boundary-list">
+      <li>匿名化済みテキスト</li>
+      <li>レビュー基準プロンプト</li>
+      <li>{html.escape(_review_meta(preview_docs, estimate))}</li>
+    </ul>
+  </section>
+  <section class="send-boundary-card keep">
+    <div class="send-boundary-title">送信されないもの</div>
+    <ul class="send-boundary-list">
+      <li>アップロードした原文ファイル</li>
+      <li>ファイル binary そのもの</li>
+      <li>マスク候補の元の語とローカル判断履歴</li>
+    </ul>
+  </section>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if blocked_docs:
+        st.markdown(
+            f"""
+<section class="approval-card-v2 block">
+  <div class="send-destination-title">送信できません</div>
+  <div class="send-destination-meta">
+    送信禁止の文書があります: {html.escape(", ".join(doc.name for doc in blocked_docs))}。
+    対象文書を修正するか、再プレビューしてください。
+  </div>
+</section>
+            """,
+            unsafe_allow_html=True,
+        )
+        send_approved = False
+    else:
+        if mask_docs:
+            st.markdown(
+                f"""
+<section class="approval-card-v2 warn">
+  <div class="send-destination-title">追加確認を含む送信です</div>
+  <div class="send-destination-meta">
+    {len(mask_docs)} 件の文書に要確認または未判定項目があります。
+    Step 2 の匿名化結果を確認したうえで承認してください。
+  </div>
+</section>
+                """,
+                unsafe_allow_html=True,
+            )
+        else:
+            st.markdown(
+                """
+<section class="approval-card-v2">
+  <div class="send-destination-title">ローカル境界を越える直前の確認です</div>
+  <div class="send-destination-meta">
+    チェックするとレビュー実行ボタンが有効になります。外部へ送る対象は匿名化済みテキストのみです。
+  </div>
+</section>
+                """,
+                unsafe_allow_html=True,
+            )
+        send_approved = st.checkbox(
+            "上記の内容で送信することを承認します。",
+            key="send_approval",
+            help="匿名化済みテキストを外部 LLM レビューへ送信する最終承認です。",
+        )
+
+    can_send = bool(preview_docs) and not blocked_docs and send_approved
+    col_send, col_back = st.columns([1.35, 1.0])
+    with col_send:
+        send_clicked = st.button(
+            "レビューを実行",
+            type="primary",
+            disabled=not can_send,
+            width="stretch",
+            help="LLM プロバイダに匿名化済みテキストを送信し、レビュー結果を取得します。",
+            key="send_review_button",
+        )
+    with col_back:
+        if st.button("ステップ 2 に戻る", type="secondary", width="stretch", key="back_to_step2_button"):
+            st.session_state.send_approval = False
+            st.session_state.step2_ready_acknowledged = False
+            st.rerun()
+
+    if blocked_docs:
+        st.caption("送信禁止の文書があるため、レビューは実行できません。")
+    elif not send_approved:
+        st.caption("レビューを実行するには、承認チェックを入れてください。")
+    else:
+        st.caption("送信準備完了。設定された LLM プロバイダには匿名化済みテキストのみが送信されます。")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    return send_clicked, send_approved
 
 
 def _build_anonymization_summary(preview_docs: list[SanitizedDocument]) -> dict[str, int]:
@@ -2645,50 +2872,6 @@ def _render_insight_panel(
     )
 
 
-def _active_status_for_preview(
-    *,
-    has_preview_docs: bool,
-    blocked_docs: list[SanitizedDocument],
-    confirmation_docs: list[SanitizedDocument],
-    send_approved: bool,
-) -> str:
-    if blocked_docs:
-        return "送信不可"
-    if st.session_state.get("review_in_progress"):
-        return "レビュー中"
-    if st.session_state.get("review_result") is not None:
-        return "レビュー完了"
-    if send_approved:
-        return "送信準備完了"
-    if not has_preview_docs:
-        return "新規"
-    if confirmation_docs:
-        return "確認待ち"
-    return "匿名化済み"
-
-
-def _render_operation_assist(guide: OperationGuide) -> None:
-    st.markdown(
-        f"""
-<section class="operation-assist {html.escape(guide.tone)}">
-  <div class="assist-kicker">AI Operation Co-Pilot</div>
-  <div class="assist-step">{html.escape(guide.step_label)}</div>
-  <div class="assist-title">{html.escape(guide.headline)}</div>
-  <div class="assist-action"><b>次にすること:</b> {html.escape(guide.primary_action)}</div>
-</section>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.expander("🔍 操作の詳細 — 理由・完了の目安・注意点", expanded=False):
-        st.markdown(f"**判断理由**: {guide.reason}")
-        st.markdown(f"**完了の目安**: {guide.done_when}")
-        st.markdown(f"**注意点**: {guide.watch_out}")
-        if guide.checklist:
-            st.markdown("**確認チェックリスト**:")
-            for item in guide.checklist:
-                st.markdown(f"- {item}")
-
-
 def _render_step_header(step: int, title: str, description: str) -> None:
     st.markdown(
         f"""
@@ -2727,57 +2910,6 @@ def _scroll_height_control(
         step=40,
         key=key,
         label_visibility="collapsed",
-    )
-
-
-def _readiness_state(
-    *,
-    blocked_count: int,
-    confirmation_count: int,
-    estimate_status: str,
-    send_approved: bool,
-) -> tuple[str, str, str, str]:
-    """Return (tone, label, title, detail) for the pre-send judgement panel."""
-    if blocked_count:
-        return (
-            "block",
-            "送信不可",
-            "送信できません",
-            f"{blocked_count} 件の文書が送信禁止です。機密表現を削除するか、より厳密に匿名化してから再確認してください。",
-        )
-    if confirmation_count:
-        return (
-            "warn",
-            "確認が必要",
-            "送信前に確認してください",
-            f"{confirmation_count} 件の文書に要確認または未確定候補があります。内容を確認してから最終承認へ進んでください。",
-        )
-    if estimate_status == "split_recommended":
-        return (
-            "split",
-            "分割推奨",
-            "分割レビューを推奨します",
-            "送信自体は可能ですが、call数や入力合計が大きめです。章単位・ファイル単位での分割も検討してください。",
-        )
-    if estimate_status == "caution":
-        return (
-            "warn",
-            "注意",
-            "送信できますが注意が必要です",
-            "通常よりトークン消費や待ち時間が増えやすい状態です。不要な別紙やログが含まれていないか確認してください。",
-        )
-    if send_approved:
-        return (
-            "safe",
-            "送信準備完了",
-            "レビューに送信できます",
-            "最終承認済みです。送信ボタンを押すと、匿名化済みテキストのみ外部LLMへ送信されます。",
-        )
-    return (
-        "safe",
-        "送信可能",
-        "送信できます",
-        "送信禁止や追加確認はありません。匿名化後テキストを確認し、最終承認へ進んでください。",
     )
 
 
@@ -3077,78 +3209,6 @@ def _render_compact_field(label: str, value: str) -> None:
         f"{html.escape(str(value))}</div>",
         unsafe_allow_html=True,
     )
-
-
-def _render_review_status_bar(active_status: str) -> None:
-    steps = [
-        "新規",
-        "匿名化済み",
-        "確認待ち",
-        "送信準備完了",
-        "レビュー中",
-        "レビュー完了",
-    ]
-    active_index = steps.index(active_status) if active_status in steps else -1
-    parts = []
-    for index, label in enumerate(steps):
-        css = "status-step"
-        if active_status == "送信不可" and label == "確認待ち":
-            css += " blocked"
-        elif index < active_index:
-            css += " done"
-        elif index == active_index:
-            css += " active"
-        parts.append(f"<div class='{css}'>{label}</div>")
-    if active_status == "送信不可":
-        parts.append("<div class='status-step blocked'>送信不可</div>")
-    st.markdown(
-        "<div class='status-flow'>" + "".join(parts) + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-def _render_workflow_top_panel(
-    assist_slot,
-    status_slot,
-    *,
-    preview_docs: list[SanitizedDocument],
-    blocked_docs: list[SanitizedDocument],
-    confirmation_docs: list[SanitizedDocument],
-    send_approved: bool,
-    token_status: str,
-    can_regenerate_anonymization: bool,
-    force_status: str | None = None,
-) -> str:
-    active_status = force_status or _active_status_for_preview(
-        has_preview_docs=bool(preview_docs),
-        blocked_docs=blocked_docs,
-        confirmation_docs=confirmation_docs,
-        send_approved=send_approved,
-    )
-    if active_status == "レビュー完了":
-        assist_slot.empty()
-        status_slot.empty()
-        return active_status
-    else:
-        assist_slot.empty()
-        with assist_slot.container():
-            _render_operation_assist(
-                build_operation_guide(
-                    upload_count=len(_get_uploads()),
-                    has_preview_docs=bool(preview_docs),
-                    blocked_count=len(blocked_docs),
-                    confirmation_count=len(confirmation_docs),
-                    send_approved=send_approved,
-                    token_status=token_status,
-                    review_in_progress=active_status == "レビュー中",
-                    review_done=False,
-                    can_regenerate_anonymization=can_regenerate_anonymization,
-                )
-            )
-    status_slot.empty()
-    with status_slot.container():
-        _render_review_status_bar(active_status)
-    return active_status
 
 
 def _render_review_issue(issue, severity_order: dict[str, int]) -> None:
@@ -4626,59 +4686,9 @@ with st.sidebar:
 
 # --------------------------------------------------------------------- main
 
-st.markdown(
-    """
-<section class="app-hero">
-  <div class="hero-kicker">Document Review Command Center</div>
-  <div class="hero-title">技術文書レビュー支援ツール</div>
-  <div class="hero-subtitle">
-    アップロード文書をローカルで匿名化し、業界標準に基づいて構成・品質・リスクをレビューします。
-    操作アシストが、送信前の安全境界、トークン規模、次アクションを段階ごとに案内します。
-  </div>
-</section>
-    """,
-    unsafe_allow_html=True,
-)
-
-_operation_assist_slot = st.empty()
-_status_bar_slot = st.empty()
-
 # -- Step 1: Upload --------------------------------------------------------
 
-_render_step_header(
-    1,
-    "文書アップロード",
-    "同じ種類の文書を選択し、匿名化プレビューの準備をします。",
-)
-
-st.file_uploader(
-    "ファイルを選択",
-    accept_multiple_files=True,
-    key=st.session_state.uploader_key,  # R-X-1: 動的 key (リセット時に再発行)
-    label_visibility="collapsed",
-    help=(
-        "対応形式: txt, md, docx, xlsx, pptx, pdf, csv, json, yaml/yml, xml, "
-        "html, スクリプト (py, ps1, sh, vbs, sql など), 画像。"
-        " 同一内容のファイルは重複検出されアップロードできません。"
-    ),
-)
-
-col1, col2 = st.columns([1, 5])
-with col1:
-    preview_clicked = st.button(
-        "匿名化してプレビュー",
-        type="primary",
-        disabled=not _get_uploads(),  # R-X-1: 動的 uploader_key 経由
-        width='stretch',
-    )
-with col2:
-    _uploads_now = _get_uploads()
-    if _uploads_now:
-        names = ", ".join(u.name for u in _uploads_now)
-        st.markdown(f'<div class="muted">処理待ち: {names}</div>', unsafe_allow_html=True)
-
-_render_previous_remediation_plan_loader()
-
+preview_clicked = _render_step1_v2()
 
 if preview_clicked:
     st.session_state.preview_attempted = True
@@ -4808,45 +4818,15 @@ if preview_clicked:
 # -- Step 2: Preview -------------------------------------------------------
 
 preview_docs = st.session_state.get("preview_docs") or []
-_operation_masking_states = st.session_state.get("masking_states", {}) or {}
-_operation_confirmation_docs = [
-    doc
-    for doc in preview_docs
-    if _requires_manual_confirmation_for_doc(doc, _operation_masking_states)
-]
-_operation_blocked_docs = [
-    doc
-    for doc in preview_docs
-    if doc.local_sensitivity_decision == "block" or doc.outbound_risk == "high"
-]
-_operation_token_status = "unknown"
+_operation_estimate = None
 if preview_docs:
     try:
         _operation_estimate = estimate_review_token_budget(
             preview_docs,
             document_profile_override,
         )
-        _operation_token_status = _operation_estimate.status
     except Exception:
-        _operation_token_status = "unknown"
-
-_operation_can_regenerate = _has_regeneratable_mask_candidates(
-    _operation_masking_states
-)
-if not preview_docs:
-    _render_workflow_top_panel(
-        _operation_assist_slot,
-        _status_bar_slot,
-        preview_docs=preview_docs,
-        blocked_docs=_operation_blocked_docs,
-        confirmation_docs=_operation_confirmation_docs,
-        send_approved=bool(st.session_state.get("send_approval")),
-        token_status=_operation_token_status,
-        can_regenerate_anonymization=_operation_can_regenerate,
-    )
-else:
-    _operation_assist_slot.empty()
-    _status_bar_slot.empty()
+        _operation_estimate = None
 
 preview_error = st.session_state.get("preview_error")
 if preview_error:
@@ -4899,117 +4879,13 @@ if preview_docs:
 
     # -- Step 3: Confirmation gate ----------------------------------------
 
-    _render_step_header(
-        3,
-        "確認 & 送信",
-        "匿名化済みテキストだけを送ることを確認し、レビューを開始します。",
+    send_clicked, send_approved = _render_step3_v2(
+        preview_docs,
+        blocked_docs=blocked_docs,
+        mask_docs=mask_docs,
+        provider_label=provider_label,
+        estimate=_operation_estimate,
     )
-
-    if blocked_docs:
-        st.markdown(
-            f"""
-<section class="send-gate-panel block">
-  <div class="send-gate-kicker">Send Gate</div>
-  <div class="send-gate-title">外部レビューへ送信できません</div>
-  <div class="send-gate-detail">
-    送信禁止の文書があります: {html.escape(", ".join(doc.name for doc in blocked_docs))}。
-    より厳密に匿名化したコピーを準備するか、対象から除外して再プレビューしてください。
-  </div>
-</section>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    if mask_docs and not blocked_docs:
-        st.markdown(
-            f"""
-<section class="send-gate-panel warn">
-  <div class="send-gate-kicker">Send Gate</div>
-  <div class="send-gate-title">送信前に確認が必要です</div>
-  <div class="send-gate-detail">
-    {len(mask_docs)} 件の文書に未判定または要確認の項目があります。
-    ステップ2の匿名化結果とマスク候補を確認したうえで、最終承認に進んでください。
-  </div>
-</section>
-            """,
-            unsafe_allow_html=True,
-        )
-        with st.expander("確認が必要な文書", expanded=False):
-            for doc in mask_docs:
-                reasons = []
-                decision = doc.local_sensitivity_decision or "unknown"
-                if decision == "unknown":
-                    reasons.append("未判定")
-                if decision == "mask_and_continue":
-                    reasons.append("要確認")
-                if _has_uncertain_candidates_for_doc(_masking_states_for_gate, doc.name):
-                    reasons.append("マスク候補あり")
-                st.markdown(f"- **{doc.name}**: {', '.join(reasons) or '要確認'}")
-    elif not blocked_docs:
-        st.markdown(
-            """
-<section class="send-gate-panel">
-  <div class="send-gate-kicker">Send Gate</div>
-  <div class="send-gate-title">送信前チェックを通過しています</div>
-  <div class="send-gate-detail">
-    送信禁止または追加確認が必要な文書はありません。
-    匿名化結果を確認したうえで、このまま外部レビューへ送信できます。
-  </div>
-</section>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    send_approved = False
-    if not blocked_docs:
-        st.markdown(
-            """
-<div class="approval-box">
-  <div class="approval-title">LLM 送信前の最終承認</div>
-  <div class="approval-note">
-    チェックすると「レビューに送信」が有効になります。外部LLMへ送る対象は匿名化済みテキストのみです。
-  </div>
-</div>
-            """,
-            unsafe_allow_html=True,
-        )
-        send_approved = st.checkbox(
-            "ステップ 2 の匿名化結果、マスク候補、送信対象ログを確認しました。"
-            "匿名化済みテキストを外部 LLM レビューに送信することを承認します。",
-            key="send_approval",
-        )
-
-    can_send = bool(preview_docs) and not blocked_docs and send_approved
-
-    send_col, status_col = st.columns([1.6, 4])
-    with send_col:
-        send_clicked = st.button(
-            "レビューに送信",
-            type="primary",
-            disabled=not can_send,
-            width='stretch',
-            help=(
-                "LLM プロバイダに匿名化済みテキストを送信し、レビュー結果を取得します。"
-            ),
-            key="send_review_button",
-        )
-    with status_col:
-        if blocked_docs:
-            st.markdown(
-                '<div class="muted">送信禁止の文書があるため、送信できません。</div>',
-                unsafe_allow_html=True,
-            )
-        elif not send_approved:
-            st.markdown(
-                '<div class="muted">送信ボタンを有効にするには、最終承認をチェックしてください。</div>',
-                unsafe_allow_html=True,
-            )
-        else:
-            st.markdown(
-                '<div class="muted">✅ 送信準備完了。設定された LLM プロバイダには'
-                '匿名化済みのテキストのみが送信されます。</div>',
-                unsafe_allow_html=True,
-            )
 
     # Q12 (2026-05-08): 「レビューに送信」押下時の処理
     # LLM 送信のみ (文書チェック後の preview_docs を使用)。
@@ -5025,16 +4901,11 @@ if preview_docs:
         st.session_state.pop("deep_dive_results", None)
         st.session_state.pop("chapter_deep_dive_results", None)
         st.session_state.pop("deep_dive_notice", None)
-        _render_workflow_top_panel(
-            _operation_assist_slot,
-            _status_bar_slot,
-            preview_docs=preview_docs,
-            blocked_docs=blocked_docs,
-            confirmation_docs=mask_docs,
-            send_approved=send_approved,
-            token_status=_operation_token_status,
-            can_regenerate_anonymization=can_regenerate_anonymization,
-            force_status="レビュー中",
+        _render_review_runtime_status(
+            "レビュー実行中 · 外部 LLM へ送信中",
+            preview_docs,
+            icon="↗",
+            estimate=_operation_estimate,
         )
         review_progress = st.progress(0.0, text="送信前チェックを開始しています...")
         # 課題 1 拡張 (2026-05-08): ボタン押下時に「本セッションのマスク判断サマリ」を
@@ -5089,76 +4960,51 @@ if preview_docs:
             st.session_state.pop("review_issue_feedback", None)
             st.session_state.pop("review_issue_feedback_notes", None)
             st.session_state.review_in_progress = False
-            _render_workflow_top_panel(
-                _operation_assist_slot,
-                _status_bar_slot,
-                preview_docs=preview_docs,
-                blocked_docs=blocked_docs,
-                confirmation_docs=mask_docs,
-                send_approved=send_approved,
-                token_status=_operation_token_status,
-                can_regenerate_anonymization=can_regenerate_anonymization,
-                force_status="レビュー完了",
+            _render_review_runtime_status(
+                "レビュー完了 · 結果を表示します",
+                preview_docs,
+                icon="✓",
+                estimate=_operation_estimate,
             )
         except LocalUrlError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_workflow_top_panel(
-                _operation_assist_slot,
-                _status_bar_slot,
-                preview_docs=preview_docs,
-                blocked_docs=blocked_docs,
-                confirmation_docs=mask_docs,
-                send_approved=send_approved,
-                token_status=_operation_token_status,
-                can_regenerate_anonymization=can_regenerate_anonymization,
-                force_status="送信準備完了" if send_approved else "確認待ち",
+            _render_review_runtime_status(
+                "レビュー停止 · ローカル設定エラー",
+                preview_docs,
+                icon="!",
+                estimate=_operation_estimate,
             )
             st.error(f"ローカルエンドポイントの設定に問題があります: {exc}")
         except ValueError as exc:
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_workflow_top_panel(
-                _operation_assist_slot,
-                _status_bar_slot,
-                preview_docs=preview_docs,
-                blocked_docs=blocked_docs,
-                confirmation_docs=mask_docs,
-                send_approved=send_approved,
-                token_status=_operation_token_status,
-                can_regenerate_anonymization=can_regenerate_anonymization,
-                force_status="送信準備完了" if send_approved else "確認待ち",
+            _render_review_runtime_status(
+                "レビュー停止 · 送信前チェックエラー",
+                preview_docs,
+                icon="!",
+                estimate=_operation_estimate,
             )
             st.error(str(exc))
         except RuntimeError as exc:
             # Gemini quota and similar user-actionable errors come through here.
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_workflow_top_panel(
-                _operation_assist_slot,
-                _status_bar_slot,
-                preview_docs=preview_docs,
-                blocked_docs=blocked_docs,
-                confirmation_docs=mask_docs,
-                send_approved=send_approved,
-                token_status=_operation_token_status,
-                can_regenerate_anonymization=can_regenerate_anonymization,
-                force_status="送信準備完了" if send_approved else "確認待ち",
+            _render_review_runtime_status(
+                "レビュー停止 · LLM 応答エラー",
+                preview_docs,
+                icon="!",
+                estimate=_operation_estimate,
             )
             st.error(str(exc))
         except Exception as exc:  # noqa: BLE001
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False
-            _render_workflow_top_panel(
-                _operation_assist_slot,
-                _status_bar_slot,
-                preview_docs=preview_docs,
-                blocked_docs=blocked_docs,
-                confirmation_docs=mask_docs,
-                send_approved=send_approved,
-                token_status=_operation_token_status,
-                can_regenerate_anonymization=can_regenerate_anonymization,
-                force_status="送信準備完了" if send_approved else "確認待ち",
+            _render_review_runtime_status(
+                "レビュー停止 · 予期しないエラー",
+                preview_docs,
+                icon="!",
+                estimate=_operation_estimate,
             )
             request_id = uuid.uuid4().hex[:8]
             st.error(f"レビューに失敗しました ({request_id})。詳細はサーバログを確認してください。")

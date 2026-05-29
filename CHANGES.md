@@ -2,12 +2,20 @@
 
 Baseline commit: `eaf605a`.
 
+### G-4 — Step 1 upload and Step 3 send rebuild
+
+- Rebuilt Step 1 around a compact upload-first layout with direct status bar, previous-review comparison expander, selected-file list, duplicate warnings, and `匿名化してプレビュー`.
+- Rebuilt Step 3 around the external-send boundary: destination summary, `送信されるもの / 送信されないもの` contrast, final approval checkbox, `レビューを実行`, and `ステップ 2 に戻る`.
+- Removed the Streamlit Co-Pilot rendering path from all active steps and review-running/error states. Runtime status now uses direct `sr_ui.status_bar` rendering while preserving review progress, completion, and error-state messages.
+- Kept the send gate, outbound guard, provider call, token budget, uploader reset, and duplicate-detection backend paths unchanged. `secure_review.agent_planner` remains physically intact for a later G-5 cleanup.
+- Verification: `python -m unittest discover tests` passes with the updated G-4 static regression tests.
+
 ### G-3 — Step 2 anonymization review rebuild
 
 - Rebuilt Step 2 around a review-before-send layout: status bar, Step 2 heading, anonymization summary chips, top-priority mask decision section, compact per-document detail list, and next-action controls.
 - Promoted uncertain mask candidates from per-document cards to the top of Step 2 so users decide mask/no-mask before external review. Existing R-W decision persistence (`_decision_key`, `user_decisions`, `apply_user_decisions`) is reused.
 - Gated `送信準備を完了する` while uncertain candidates remain. After `匿名化結果を再生成`, resolved masking states clear `uncertain_candidates`, allowing Step 3 confirmation to proceed.
-- Removed the active Step 2 path for duplicate bundle/check/card UI and Step 2 Co-Pilot; Step 1 and Step 3 still use the existing operation assist path.
+- Removed the active Step 2 path for duplicate bundle/check/card UI and Step 2 Co-Pilot.
 - Verification: `python -m unittest discover tests` passes with 374 tests, including 8 new Step 2 static regression tests.
 
 ### G-2 — Step 4 review result rebuild

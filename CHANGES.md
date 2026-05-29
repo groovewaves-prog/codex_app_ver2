@@ -2,6 +2,12 @@
 
 Baseline commit: `eaf605a`.
 
+### G-4.5 follow-up — readable masthead and reset action
+
+- Reworked the main app title into a high-contrast masthead card with an `SR` mark, larger responsive typography, and safe top spacing below the Streamlit toolbar.
+- Strengthened the sidebar `↻ 新しいレビューを始める` button contrast by overriding both the button and its nested Streamlit text elements.
+- Kept the app title purpose-focused with no method-specific subtitle.
+
 ### G-4.5 fix — title, reset button contrast, and status spacing
 
 - Upgraded the main app title to a 28px shield-icon title row with a thin divider and no subtitle.

@@ -161,7 +161,7 @@ STYLE = """
     color: var(--ink);
 }
 
-.block-container { padding-top: 2rem; max-width: 1200px; }
+.block-container { padding-top: 3.65rem; max-width: 1240px; }
 
 h1, h2, h3 {
     font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
@@ -171,24 +171,60 @@ h1, h2, h3 {
 .sr-app-title-row {
     display: flex;
     align-items: center;
-    gap: 0.55rem;
+    gap: 0.85rem;
     color: var(--ink);
-    border-bottom: 0.5px solid var(--rule);
-    padding-bottom: 1.25rem;
-    margin: 0.2rem 0 1.5rem;
+    border: 1px solid rgba(8,119,96,0.16);
+    border-bottom: 1px solid rgba(8,119,96,0.24);
+    border-radius: 24px;
+    background:
+        linear-gradient(135deg, rgba(255,253,248,0.96) 0%, rgba(238,248,243,0.88) 100%);
+    box-shadow: 0 18px 44px rgba(24,35,30,0.10);
+    padding: 1.05rem 1.2rem;
+    margin: 0.35rem 0 1.55rem;
 }
 .sr-app-title-icon {
-    color: var(--ink);
-    font-size: 30px;
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border-radius: 15px 15px 20px 20px;
+    background: linear-gradient(135deg, var(--ink) 0%, #244237 100%);
+    color: var(--bg-card);
+    border: 1px solid rgba(255,253,248,0.28);
+    box-shadow: 0 12px 26px rgba(23,37,31,0.22);
+    font-family: 'SF Mono', 'Consolas', 'Yu Gothic', sans-serif;
+    font-size: 0.82rem;
+    font-weight: 900;
+    letter-spacing: 0.08em;
     line-height: 1;
 }
 .sr-app-title-text {
     color: var(--ink);
     font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
-    font-size: 28px;
-    font-weight: 500;
-    letter-spacing: 0.01em;
-    line-height: 1.2;
+    font-size: clamp(30px, 3.1vw, 38px);
+    font-weight: 850;
+    letter-spacing: -0.035em;
+    line-height: 1.12;
+    text-shadow: 0 1px 0 rgba(255,253,248,0.72);
+}
+@media (max-width: 720px) {
+    .block-container { padding-top: 2.8rem; }
+    .sr-app-title-row {
+        align-items: flex-start;
+        padding: 0.95rem 1rem;
+        border-radius: 20px;
+    }
+    .sr-app-title-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 13px 13px 17px 17px;
+        font-size: 0.74rem;
+    }
+    .sr-app-title-text {
+        font-size: clamp(25px, 7vw, 31px);
+        line-height: 1.16;
+    }
 }
 
 [data-testid="stSidebar"] {
@@ -341,22 +377,34 @@ div[data-testid="stDownloadButton"] button:disabled {
 }
 [data-testid="stSidebar"] div.stButton > button[kind="primary"],
 [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
-    background: var(--ink) !important;
-    border: none !important;
-    color: var(--bg-card) !important;
+    background: linear-gradient(135deg, #0f2119 0%, #17372b 100%) !important;
+    border: 1px solid rgba(255,253,248,0.18) !important;
+    color: #fffdf8 !important;
     padding: 11px 16px !important;
     box-shadow: 0 16px 30px rgba(24,35,30,0.18) !important;
+    letter-spacing: 0.02em !important;
+}
+[data-testid="stSidebar"] div.stButton > button[kind="primary"] *,
+[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] * {
+    color: #fffdf8 !important;
+    -webkit-text-fill-color: #fffdf8 !important;
 }
 [data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover,
 [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover {
-    background: #0f1a14 !important;
-    color: var(--bg-card) !important;
+    background: linear-gradient(135deg, #091610 0%, #10281f 100%) !important;
+    color: #fffdf8 !important;
+    border-color: rgba(255,253,248,0.28) !important;
 }
 [data-testid="stSidebar"] div.stButton > button[kind="primary"]:disabled,
 [data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:disabled {
     background: rgba(231,225,214,0.74) !important;
     color: #8a8377 !important;
     box-shadow: none !important;
+}
+[data-testid="stSidebar"] div.stButton > button[kind="primary"]:disabled *,
+[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:disabled * {
+    color: #8a8377 !important;
+    -webkit-text-fill-color: #8a8377 !important;
 }
 
 .decision-badge {
@@ -4686,7 +4734,7 @@ with st.sidebar:
 st.markdown(
     """
 <div class="sr-app-title-row">
-  <span class="sr-app-title-icon">🛡</span>
+  <span class="sr-app-title-icon" aria-hidden="true">SR</span>
   <span class="sr-app-title-text">技術文書レビュー支援ツール</span>
 </div>
     """,

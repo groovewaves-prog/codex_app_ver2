@@ -2180,6 +2180,12 @@ def _render_review_runtime_status(
     _render_direct_status_bar(state_label, _review_meta(preview_docs, estimate), icon)
 
 
+def _reset_step3_send_state_for_step2() -> None:
+    """Reset Step 3 approval before rerendering Step 2."""
+    st.session_state.send_approval = False
+    st.session_state.step2_ready_acknowledged = False
+
+
 def _render_step3_v2(
     preview_docs: list[SanitizedDocument],
     *,
@@ -2296,10 +2302,13 @@ def _render_step3_v2(
             key="send_review_button",
         )
     with col_back:
-        if st.button("ステップ 2 に戻る", type="secondary", width="stretch", key="back_to_step2_button"):
-            st.session_state.send_approval = False
-            st.session_state.step2_ready_acknowledged = False
-            st.rerun()
+        st.button(
+            "ステップ 2 に戻る",
+            type="secondary",
+            width="stretch",
+            key="back_to_step2_button",
+            on_click=_reset_step3_send_state_for_step2,
+        )
 
     if blocked_docs:
         st.caption("送信禁止の文書があるため、レビューは実行できません。")

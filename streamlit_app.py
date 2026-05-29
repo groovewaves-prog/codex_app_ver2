@@ -1309,11 +1309,6 @@ div[data-testid="stExpander"] summary {
     line-height: 1.55;
     margin-top: 0.35rem;
 }
-.sr-design-preview {
-    display: grid;
-    gap: 0.75rem;
-    margin-top: 0.6rem;
-}
 .sr-chip,
 .sr-effort-badge {
     display: inline-flex;
@@ -3649,7 +3644,7 @@ def _find_chapter_for_remediation_item(
     for doc in document_candidates:
         for chapter in _chapters_for_document(doc):
             chapter_text = _normalize_chapter_match_text(
-                f"{chapter.chapter_id} {chapter.chapter_label} {chapter.chapter_name}"
+                f"{chapter.chapter_id} {chapter.chapter_label}"
             )
             if chapter_text and chapter_text in candidate_text:
                 return doc.name, chapter
@@ -4527,40 +4522,6 @@ def _decision_key(doc_name: str, candidate_text: str) -> str:
     return f"{doc_name}::{candidate_text}"
 
 
-def _render_design_foundation_preview() -> None:
-    """Developer-only preview for G-1 reusable UI components."""
-    st.caption("G-1 で追加した共通HTMLコンポーネントの目視確認用です。通常ユーザには表示されません。")
-    st.markdown(
-        "\n".join(
-            [
-                '<div class="sr-design-preview">',
-                sr_ui.severity_chip("high", 3),
-                sr_ui.severity_chip("medium", 2),
-                sr_ui.severity_chip("low", 1),
-                sr_ui.effort_badge("large"),
-                sr_ui.effort_badge("medium"),
-                sr_ui.status_bar("レビュー結果を確認中", "Step 4 / Design foundation", "🎨"),
-                sr_ui.big_number_summary(12, "件", "Review Issues"),
-                sr_ui.issue_card_header(
-                    "high",
-                    "large",
-                    "D-001",
-                    "第 3 章 システム構成",
-                    "可用性設計の前提が不足しています",
-                ),
-                sr_ui.collapsed_list_row(
-                    "🗂",
-                    "文書別詳細",
-                    "修正計画では把握しきれない文書単位の状況を確認します。",
-                ),
-                sr_ui.metric_pair("予定 call", "3"),
-                "</div>",
-            ]
-        ),
-        unsafe_allow_html=True,
-    )
-
-
 # ------------------------------------------------------------------- sidebar
 
 with st.sidebar:
@@ -4722,12 +4683,6 @@ with st.sidebar:
         st.caption(
             "詳細は社内ドキュメント「設計書 構造定義書」を参照してください。"
         )
-
-    if st.session_state.get("developer_mode", False):
-        st.markdown("---")
-        with st.expander("🎨 デザイン基盤プレビュー", expanded=False):
-            _render_design_foundation_preview()
-
 
 # --------------------------------------------------------------------- main
 

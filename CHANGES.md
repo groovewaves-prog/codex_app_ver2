@@ -2,6 +2,14 @@
 
 Baseline commit: `eaf605a`.
 
+### G-5 — cleanup, regression guard, and handoff refresh
+
+- Removed the developer-only G-1 design foundation preview scaffold from the sidebar while keeping the production `secure_review.ui_components` helpers.
+- Deleted the now-unused `secure_review.agent_planner` module and its dedicated tests after confirming Co-Pilot / DisplayPolicy references were gone from runtime code.
+- Fixed the Step 4 chapter re-analysis matcher so it no longer expects a non-existent `ChapterSection.chapter_name` attribute.
+- Added static regression coverage for removed old UI terms, removed preview scaffolding, removed planner module, and chapter matching safety.
+- Refreshed handoff/manual/checklist notes for the current v2 UI and recorded remaining future-review internal terminology as a follow-up observation.
+
 ### G-4.5 follow-up — readable masthead and reset action
 
 - Reworked the main app title into a high-contrast masthead card with an `SR` mark, larger responsive typography, and safe top spacing below the Streamlit toolbar.
@@ -25,7 +33,7 @@ Baseline commit: `eaf605a`.
 - Rebuilt Step 1 around a compact upload-first layout with direct status bar, previous-review comparison expander, selected-file list, duplicate warnings, and `匿名化してプレビュー`.
 - Rebuilt Step 3 around the external-send boundary: destination summary, `送信されるもの / 送信されないもの` contrast, final approval checkbox, `レビューを実行`, and `ステップ 2 に戻る`.
 - Removed the Streamlit Co-Pilot rendering path from all active steps and review-running/error states. Runtime status now uses direct `sr_ui.status_bar` rendering while preserving review progress, completion, and error-state messages.
-- Kept the send gate, outbound guard, provider call, token budget, uploader reset, and duplicate-detection backend paths unchanged. `secure_review.agent_planner` remains physically intact for a later G-5 cleanup.
+- Kept the send gate, outbound guard, provider call, token budget, uploader reset, and duplicate-detection backend paths unchanged. The obsolete `secure_review.agent_planner` module was removed in G-5.
 - Verification: `python -m unittest discover tests` passes with the updated G-4 static regression tests.
 
 ### G-3 — Step 2 anonymization review rebuild

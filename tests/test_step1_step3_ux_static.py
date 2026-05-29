@@ -28,8 +28,14 @@ class Step1Step3UxStaticTests(unittest.TestCase):
     def test_main_area_restores_concise_app_title(self) -> None:
         main_start = self.app_source.index("# --------------------------------------------------------------------- main")
         main_block = self.app_source[main_start:]
-        self.assertIn("sr-app-title", self.app_source)
-        self.assertIn('<div class="sr-app-title">技術文書レビュー支援ツール</div>', main_block)
+        self.assertIn("sr-app-title-row", self.app_source)
+        self.assertIn("sr-app-title-icon", self.app_source)
+        self.assertIn("sr-app-title-text", self.app_source)
+        self.assertIn("font-size: 28px", self.app_source)
+        self.assertIn("border-bottom: 0.5px solid var(--rule)", self.app_source)
+        self.assertIn("🛡", main_block)
+        self.assertIn("技術文書レビュー支援ツール", main_block)
+        self.assertNotIn("ローカルで匿名化", main_block[: main_block.index("# -- Step 1")])
         self.assertNotIn("Document Review Command Center", self.app_source)
 
     def test_step1_v2_has_upload_first_layout(self) -> None:
@@ -60,10 +66,13 @@ class Step1Step3UxStaticTests(unittest.TestCase):
 
     def test_new_review_button_is_primary_with_explanation(self) -> None:
         sidebar = self._sidebar_block()
-        self.assertIn("新しいレビューを始める", sidebar)
+        self.assertIn("↻ 新しいレビューを始める", sidebar)
         self.assertIn('type="primary"', sidebar)
         self.assertIn("アップロード済みの文書、マスク判断、レビュー結果をクリア", sidebar)
         self.assertIn("最初からやり直します", sidebar)
+        self.assertIn('[data-testid="stSidebar"] div.stButton > button[kind="primary"]', self.app_source)
+        self.assertIn("background: var(--ink) !important", self.app_source)
+        self.assertIn("color: var(--bg-card) !important", self.app_source)
 
     def test_hero_and_copilot_are_not_rendered(self) -> None:
         self.assertNotIn("app-hero", self.app_source)
@@ -101,6 +110,15 @@ class Step1Step3UxStaticTests(unittest.TestCase):
         self.assertIn("レビュー停止 · 送信前チェックエラー", self.app_source)
         self.assertIn("レビュー停止 · LLM 応答エラー", self.app_source)
         self.assertIn("レビュー停止 · 予期しないエラー", self.app_source)
+
+    def test_status_bar_does_not_join_step_number_to_state(self) -> None:
+        self.assertIn("準備中 · ステップ 1 / 3", self.app_source)
+        self.assertIn("準備中 · ステップ 2 / 3", self.app_source)
+        self.assertIn("送信準備完了 · ステップ 3 / 3", self.app_source)
+        self.assertNotIn('"準備中 · ステップ 1 / 3", "レビュー前", "1"', self.app_source)
+        self.assertNotIn('1準備中', self.app_source)
+        self.assertNotIn('2準備中', self.app_source)
+        self.assertNotIn('3送信準備完了', self.app_source)
 
     def test_backend_send_and_outbound_guard_paths_remain(self) -> None:
         self.assertIn("_enforce_outbound_guard(", self.app_source)

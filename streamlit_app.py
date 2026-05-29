@@ -168,13 +168,27 @@ h1, h2, h3 {
     color: var(--ink);
     letter-spacing: -0.02em;
 }
-.sr-app-title {
-    color: var(--sr-text-primary);
+.sr-app-title-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: var(--ink);
+    border-bottom: 0.5px solid var(--rule);
+    padding-bottom: 1.25rem;
+    margin: 0.2rem 0 1.5rem;
+}
+.sr-app-title-icon {
+    color: var(--ink);
+    font-size: 30px;
+    line-height: 1;
+}
+.sr-app-title-text {
+    color: var(--ink);
     font-family: 'BIZ UDPGothic', 'Yu Gothic', 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif;
-    font-size: clamp(1.18rem, 2.4vw, 1.52rem);
-    font-weight: 900;
-    letter-spacing: 0.02em;
-    margin: 0.2rem 0 0.7rem;
+    font-size: 28px;
+    font-weight: 500;
+    letter-spacing: 0.01em;
+    line-height: 1.2;
 }
 
 [data-testid="stSidebar"] {
@@ -324,6 +338,25 @@ div[data-testid="stDownloadButton"] button:disabled {
     background: rgba(231,225,214,0.74) !important;
     color: #9b9386 !important;
     box-shadow: none;
+}
+[data-testid="stSidebar"] div.stButton > button[kind="primary"],
+[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"] {
+    background: var(--ink) !important;
+    border: none !important;
+    color: var(--bg-card) !important;
+    padding: 11px 16px !important;
+    box-shadow: 0 16px 30px rgba(24,35,30,0.18) !important;
+}
+[data-testid="stSidebar"] div.stButton > button[kind="primary"]:hover,
+[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:hover {
+    background: #0f1a14 !important;
+    color: var(--bg-card) !important;
+}
+[data-testid="stSidebar"] div.stButton > button[kind="primary"]:disabled,
+[data-testid="stSidebar"] button[data-testid="stBaseButton-primary"]:disabled {
+    background: rgba(231,225,214,0.74) !important;
+    color: #8a8377 !important;
+    box-shadow: none !important;
 }
 
 .decision-badge {
@@ -1293,7 +1326,19 @@ div[data-testid="stExpander"] summary {
     padding: 0.72rem 0.85rem;
     box-shadow: 0 10px 24px rgba(24,35,30,0.055);
 }
-.sr-status-main { font-weight: 900; }
+.sr-status-main {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.42rem;
+    font-weight: 900;
+}
+.sr-status-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.15rem;
+    color: var(--sr-text-secondary);
+}
 .sr-status-meta {
     color: var(--sr-text-secondary);
     font-size: 0.78rem;
@@ -2028,7 +2073,7 @@ def _render_step1_v2() -> bool:
     duplicates = _detect_duplicate_uploads() if uploads else []
 
     st.markdown("<div class='workflow-v2 step1-v2'>", unsafe_allow_html=True)
-    _render_direct_status_bar("準備中 · ステップ 1 / 3", "レビュー前", "1")
+    _render_direct_status_bar("準備中 · ステップ 1 / 3", "レビュー前")
     _render_step_v2_heading(
         "ステップ 1",
         "文書アップロード",
@@ -2102,7 +2147,7 @@ def _render_step3_v2(
 ) -> tuple[bool, bool]:
     status_label = "送信不可 · ステップ 3 / 3" if blocked_docs else "送信準備完了 · ステップ 3 / 3"
     st.markdown("<div class='workflow-v2 step3-v2'>", unsafe_allow_html=True)
-    _render_direct_status_bar(status_label, _review_meta(preview_docs, estimate), "3")
+    _render_direct_status_bar(status_label, _review_meta(preview_docs, estimate))
     _render_step_v2_heading(
         "ステップ 3",
         "送信",
@@ -2293,7 +2338,6 @@ def _render_step2_header_and_summary(
         sr_ui.status_bar(
             "準備中 · ステップ 2 / 3",
             f"{len(preview_docs)} ファイル / {total_tokens:,} tokens",
-            "2",
         ),
         unsafe_allow_html=True,
     )
@@ -4473,7 +4517,7 @@ def _render_design_foundation_preview() -> None:
 
 with st.sidebar:
     st.markdown('<div class="sidebar-section-label">レビュー操作</div>', unsafe_allow_html=True)
-    if st.button("新しいレビューを始める", width='stretch', type="primary"):
+    if st.button("↻ 新しいレビューを始める", width='stretch', type="primary"):
         _reset_state()
         # R-X-1 (2026-05-08): 旧 uploader_key の widget 状態を pop し、視覚的にも空にする。
         old_key = st.session_state.get("uploader_key")
@@ -4640,7 +4684,12 @@ with st.sidebar:
 # --------------------------------------------------------------------- main
 
 st.markdown(
-    '<div class="sr-app-title">技術文書レビュー支援ツール</div>',
+    """
+<div class="sr-app-title-row">
+  <span class="sr-app-title-icon">🛡</span>
+  <span class="sr-app-title-text">技術文書レビュー支援ツール</span>
+</div>
+    """,
     unsafe_allow_html=True,
 )
 

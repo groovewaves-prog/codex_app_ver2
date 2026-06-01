@@ -145,9 +145,10 @@ class RemediationPlanTests(unittest.TestCase):
 
         self.assertIn(
             "バックアップ取得方針のみが記載されています。",
-            plan.items[0].template,
+            plan.items[0].current_state,
         )
         self.assertNotIn("現状の記載を要約してください", plan.items[0].template)
+        self.assertIn("#### 追記する本文案", plan.items[0].template)
 
     def test_template_extracts_current_state_from_details(self) -> None:
         review = self._review_with_issues(
@@ -160,8 +161,8 @@ class RemediationPlanTests(unittest.TestCase):
 
         plan = build_remediation_plan(review)
 
-        self.assertIn("バックアップの取得頻度のみ記載されています。", plan.items[0].template)
-        self.assertNotIn("【問題点】", plan.items[0].template)
+        self.assertIn("バックアップの取得頻度のみ記載されています。", plan.items[0].current_state)
+        self.assertNotIn("【問題点】", plan.items[0].current_state)
 
     def test_template_uses_actionable_fallback_without_legacy_instruction(self) -> None:
         review = self._review_with_issues(
@@ -170,9 +171,32 @@ class RemediationPlanTests(unittest.TestCase):
 
         plan = build_remediation_plan(review)
 
-        self.assertIn("本文から現状の記載を自動抽出できませんでした", plan.items[0].template)
-        self.assertIn("該当章の元記載を確認", plan.items[0].template)
+        self.assertIn("本文から現状の記載を自動抽出できませんでした", plan.items[0].current_state)
+        self.assertIn("該当章の元記載を確認", plan.items[0].current_state)
         self.assertNotIn("現状の記載を要約してください", plan.items[0].template)
+
+    def test_template_is_document_draft_not_review_recap(self) -> None:
+        review = self._review_with_issues(
+            self._issue(
+                title="本書の目的および想定読者の記載不足",
+                section="該当箇所",
+                issue="目的と想定読者が明記されていない。",
+                recommendation="本書の目的節を新設し、目的、想定読者、達成すべき成果を具体的に記述する。",
+                impact="後続工程で前提や判断基準が揃わない。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+        template = plan.items[0].template
+
+        self.assertIn("### 文書追記案: 該当箇所", template)
+        self.assertIn("#### 追記する本文案", template)
+        self.assertIn("本書の目的節を新設", template)
+        self.assertIn("【対象・範囲】", template)
+        self.assertNotIn("### 該当箇所 追記案", template)
+        self.assertNotIn("- 現状:", template)
+        self.assertNotIn("- 問題点:", template)
+        self.assertNotIn("- 修正方針:", template)
 
     def test_extract_current_state_from_details_supports_multiple_patterns(self) -> None:
         self.assertEqual(
@@ -301,7 +325,8 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertEqual(plan.high_count, 1)
         self.assertEqual(plan.items[0].source_type, "structure_check")
         self.assertIn("運用設計", plan.items[0].title)
-        self.assertIn("## 運用設計", plan.items[0].template)
+        self.assertIn("### 文書追記案: 運用設計", plan.items[0].template)
+        self.assertIn("#### 追加する章・節の本文案", plan.items[0].template)
         self.assertIn("不足観点", plan.items[0].re_review_condition)
 
     def test_empty_plan_still_has_completion_step(self) -> None:

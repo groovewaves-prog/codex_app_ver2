@@ -25,6 +25,9 @@ class RemediationItem:
     re_review_condition: str
     effort: str
     origin: str = "initial"
+    current_state: str = ""
+    impact: str = ""
+    completion_condition: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -263,6 +266,9 @@ def _item_from_issue(issue: ReviewIssue) -> RemediationItem:
     fix_policy = issue.recommendation or "指摘箇所に、判断根拠・設計方針・完了条件を追記してください。"
     target_section = issue.section or "該当箇所"
     re_review_condition = _re_review_condition_for_issue(issue, target_section)
+    current_state = _resolve_current_state(issue)
+    impact = issue.impact or "未対応時の影響を記載してください。"
+    completion_condition = "読み手が設計判断、根拠、運用時の判断基準を追えること。"
     return RemediationItem(
         item_id=issue.issue_id or _fallback_issue_id(issue),
         source_type="review_issue",
@@ -272,11 +278,14 @@ def _item_from_issue(issue: ReviewIssue) -> RemediationItem:
         target_section=target_section,
         problem=problem,
         fix_policy=fix_policy,
-        template=_template_for_issue(issue, fix_policy),
+        template=_template_for_issue(issue, fix_policy, impact),
         re_review_scope=f"{issue.source_document or '対象文書'} / {target_section}",
         re_review_condition=re_review_condition,
         effort=_effort_for_severity(issue.severity),
         origin=issue.origin or "initial",
+        current_state=current_state,
+        impact=impact,
+        completion_condition=completion_condition,
     )
 
 
@@ -288,6 +297,9 @@ def _item_from_structure_finding(finding: StructureFinding) -> RemediationItem:
         chapter_name=finding.chapter_name,
     )
     target_section = finding.chapter_name or finding.item_name or "文書全体"
+    current_state = finding.message or "文書内で該当観点を十分に確認できません。"
+    impact = "章立てや必須要素が不足すると、読み手が設計判断・責任範囲・運用条件を追いにくくなります。"
+    completion_condition = "不足観点が独立した見出しまたは明確な本文として確認できること。"
     return RemediationItem(
         item_id=finding.item_id or finding.chapter_id or finding.kind,
         source_type="structure_check",
@@ -302,6 +314,9 @@ def _item_from_structure_finding(finding: StructureFinding) -> RemediationItem:
         re_review_condition=_re_review_condition_for_structure(finding, target_section),
         effort=_effort_for_severity(finding.severity),
         origin="initial",
+        current_state=current_state,
+        impact=impact,
+        completion_condition=completion_condition,
     )
 
 
@@ -389,24 +404,38 @@ def _resolve_current_state(issue: ReviewIssue) -> str:
     return _CURRENT_STATE_FALLBACK
 
 
-def _template_for_issue(issue: ReviewIssue, fix_policy: str) -> str:
+def _normalize_sentence(value: str) -> str:
+    text = re.sub(r"\s+", " ", _coerce_text(value)).strip()
+    if not text:
+        return ""
+    return text if text.endswith(("。", ".", "！", "!", "？", "?")) else text + "。"
+
+
+def _template_for_issue(issue: ReviewIssue, fix_policy: str, impact: str) -> str:
     section = issue.section or "該当章"
-    current_state = _resolve_current_state(issue)
-    problem = issue.issue or issue.details or "何が不足・不整合なのかを記載してください。"
-    impact = issue.impact or "未対応時の影響を記載してください。"
+    title = issue.title or "レビュー指摘"
+    normalized_fix = _normalize_sentence(fix_policy) or "判断根拠・設計方針・完了条件を本文に追記する。"
+    normalized_impact = _normalize_sentence(impact) or "読み手が設計判断を追いやすくなる。"
     return "\n".join(
         [
-            f"### {section} 追記案",
-            "- 現状:",
-            f"  - {current_state}",
-            "- 問題点:",
-            f"  - {problem}",
-            "- 修正方針:",
-            f"  - {fix_policy}",
-            "- 影響と判断基準:",
-            f"  - {impact}",
-            "- 完了条件:",
-            "  - 読み手が設計判断、根拠、運用時の判断基準を追えること。",
+            f"### 文書追記案: {section}",
+            "",
+            f"本章では、「{title}」に関する設計判断を明確にするため、以下の内容を追記する。",
+            "",
+            "#### 追記する本文案",
+            f"{section}では、{normalized_fix}",
+            f"この記載により、{normalized_impact}",
+            "また、後続の設計・構築・運用担当者が、判断根拠と確認基準を同じ前提で参照できる状態にする。",
+            "",
+            "#### 本文に具体化する項目",
+            "- 【対象・範囲】: この記載が適用されるシステム、機能、利用者、対象外を明記する。",
+            "- 【判断基準】: 採用理由、数値基準、許容条件、代替案を明記する。",
+            "- 【運用・確認方法】: 運用時の確認手順、監視項目、担当、エスカレーション先を明記する。",
+            "- 【未決事項】: 現時点で決めきれない項目、確認先、期限を明記する。",
+            "",
+            "#### 転記時の注意",
+            "- 【】内は案件の実値に置き換える。",
+            "- 数値、担当者、期限、参照資料名が分かる場合は本文に明記する。",
         ]
     )
 
@@ -419,28 +448,35 @@ def _template_for_structure_finding(finding: StructureFinding) -> str:
         expected = finding.expected_content or "この観点で確認すべき内容"
         return "\n".join(
             [
-                f"## {title}",
-                "- 目的:",
-                f"  - {expected}",
-                "- 現状:",
-                "  - 現在の設計・運用方針を記載してください。",
-                "- 判断基準:",
-                "  - 採用理由、代替案、制約条件を記載してください。",
-                "- 未決事項:",
-                "  - 残課題、確認先、期限を記載してください。",
+                f"### 文書追記案: {title}",
+                "",
+                f"本書では、「{title}」の観点を独立した章または節として追加し、以下を明記する。",
+                "",
+                "#### 追加する章・節の本文案",
+                f"{title}では、{_normalize_sentence(expected)}",
+                "現在の設計・運用方針、採用理由、制約条件、未決事項を整理し、第三者が判断根拠を確認できる状態にする。",
+                "",
+                "#### 本文に具体化する項目",
+                "- 【目的】: この章で読者に判断してほしい内容を明記する。",
+                "- 【設計・運用方針】: 現在採用する方針、対象範囲、対象外を明記する。",
+                "- 【判断基準】: 採用理由、代替案、制約条件を明記する。",
+                "- 【未決事項】: 残課題、確認先、期限を明記する。",
             ]
         )
     target = finding.item_name or finding.chapter_name or "確認観点"
     expected = finding.expected_content or "必要な内容を具体化してください。"
     return "\n".join(
         [
-            f"### {target}",
-            "- 追記する内容:",
-            f"  - {expected}",
-            "- 根拠:",
-            "  - 参照資料、設計判断、関係者合意を記載してください。",
-            "- 完了条件:",
-            "  - 第三者がレビューしても判断に迷わない粒度で記載すること。",
+            f"### 文書追記案: {target}",
+            "",
+            f"本文では、「{target}」について以下を明記する。",
+            "",
+            "#### 追記する本文案",
+            f"{target}では、{_normalize_sentence(expected)}",
+            "あわせて、参照資料、設計判断、関係者合意、運用時の確認方法を明記する。",
+            "",
+            "#### 完了条件",
+            "- 第三者がレビューしても、判断根拠・責任範囲・確認方法に迷わない粒度で記載されていること。",
         ]
     )
 
@@ -532,6 +568,9 @@ def _remediation_item_from_dict(data: dict[str, Any]) -> RemediationItem:
         re_review_condition=_coerce_text(data.get("re_review_condition")) or "修正後に再レビューしてください。",
         effort=_coerce_text(data.get("effort")) or _effort_for_severity(_coerce_severity(data.get("severity"))),
         origin=_coerce_text(data.get("origin")) or "initial",
+        current_state=_coerce_text(data.get("current_state")),
+        impact=_coerce_text(data.get("impact")),
+        completion_condition=_coerce_text(data.get("completion_condition")),
     )
 
 

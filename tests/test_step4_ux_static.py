@@ -13,24 +13,27 @@ class Step4UxStaticTests(unittest.TestCase):
         cls.app_source = (ROOT / "streamlit_app.py").read_text(encoding="utf-8")
         cls.audit_source = (ROOT / "streamlit_audit_ui.py").read_text(encoding="utf-8")
 
+    def _function_body(self, name: str) -> str:
+        start = self.app_source.index(f"def {name}")
+        next_def = self.app_source.find("\ndef ", start + 1)
+        if next_def == -1:
+            return self.app_source[start:]
+        return self.app_source[start:next_def]
+
     def test_step4_v2_uses_design_foundation_components(self) -> None:
         self.assertIn("def _render_step4_v2", self.app_source)
         self.assertIn("sr_ui.status_bar", self.app_source)
         self.assertIn("sr_ui.big_number_summary", self.app_source)
         self.assertIn("sr_ui.severity_chip", self.app_source)
         self.assertIn("sr_ui.issue_card_header", self.app_source)
-        self.assertIn("sr_ui.collapsed_list_row", self.app_source)
-        self.assertIn("不足章", self.app_source)
-        self.assertIn("将来リスク", self.app_source)
 
     def test_step4_v2_has_core_sections(self) -> None:
         self.assertIn("対応すべき指摘", self.app_source)
-        self.assertIn("補助で見るもの", self.app_source)
-        self.assertIn("文書構成チェック", self.app_source)
-        self.assertIn("章単位の追加レビュー", self.app_source)
-        self.assertIn("将来の障害リスク", self.app_source)
-        self.assertIn("修正計画の使い方", self.app_source)
         self.assertIn("対応が必要な指摘はありませんでした", self.app_source)
+        self.assertIn("_render_step4_item_context", self.app_source)
+        self.assertIn("対象文書", self.app_source)
+        self.assertIn("対象箇所", self.app_source)
+        self.assertIn("出どころ", self.app_source)
 
     def test_step4_v2_integrates_chapter_reanalysis(self) -> None:
         self.assertIn("章を再分析", self.app_source)
@@ -68,6 +71,8 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("item.item_id", self.app_source)
         self.assertIn("item.target_section", self.app_source)
         self.assertIn("item.title", self.app_source)
+        self.assertIn("item.target_document", self.app_source)
+        self.assertIn("_step4_item_source_label", self.app_source)
 
     def test_g2_issue_cards_have_chapter_reanalysis_entry(self) -> None:
         self.assertIn("matched_chapter = _find_chapter_for_remediation_item", self.app_source)
@@ -75,11 +80,12 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("step4_issue_deepdive_", self.app_source)
         self.assertIn('st.button("🔬 章を再分析"', self.app_source)
 
-    def test_g2_auxiliary_section_has_four_entries(self) -> None:
-        self.assertIn("文書構成チェック — 章立て不足の根拠を確認", self.app_source)
-        self.assertIn("章単位の追加レビュー — 指摘カード以外の章を直接選ぶ", self.app_source)
-        self.assertIn("将来の障害リスク — 主要指摘の先にある予防策を確認", self.app_source)
-        self.assertIn("修正計画の使い方 — 担当割当から再レビューまで", self.app_source)
+    def test_step4_auxiliary_section_is_not_rendered(self) -> None:
+        body = self._function_body("_render_step4_v2")
+        self.assertNotIn("_render_step4_auxiliary_sections", body)
+        self.assertNotIn("補助で見るもの", body)
+        self.assertNotIn("不足章", body)
+        self.assertNotIn("将来リスク", body)
 
     def test_g2_document_detail_toggle_is_removed_from_step4(self) -> None:
         self.assertNotIn("文書別の詳細表示", self.app_source)

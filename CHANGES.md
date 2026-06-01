@@ -2,6 +2,13 @@
 
 Baseline commit: `eaf605a`.
 
+### Step 4 focus pass — issue cards as the single review path
+
+- Removed the Step 4 auxiliary-section render path so users focus on the actionable issue cards instead of a parallel "補助で見るもの" area.
+- Added visible context chips to each issue card for target document, target section, and issue origin.
+- Limited top summary chips to actionable severity counts, avoiding detached "不足章" / "将来リスク" counts without a clear destination.
+- Updated Step 4 static tests to guard against reintroducing the auxiliary section in `_render_step4_v2`.
+
 ### G-5 — cleanup, regression guard, and handoff refresh
 
 - Removed the developer-only G-1 design foundation preview scaffold from the sidebar while keeping the production `secure_review.ui_components` helpers.

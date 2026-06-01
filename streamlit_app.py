@@ -1742,6 +1742,28 @@ div[data-testid="stExpander"] summary {
     padding: 0.85rem;
     margin-top: 0.55rem;
 }
+.step4-item-context {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.42rem;
+    margin-top: 0.58rem;
+}
+.step4-context-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.28rem;
+    border: 1px solid rgba(8,119,96,0.14);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.68);
+    color: var(--sr-text-secondary);
+    font-size: 0.78rem;
+    line-height: 1.35;
+    padding: 0.28rem 0.58rem;
+}
+.step4-context-pill b {
+    color: var(--sr-text-primary);
+    font-weight: 850;
+}
 .step4-field-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3701,16 +3723,6 @@ def _render_step4_status_and_summary(
         chips.append(sr_ui.severity_chip("high", counts["high"]))
     if counts.get("medium"):
         chips.append(sr_ui.severity_chip("medium", counts["medium"]))
-    structure_count = _step4_structure_finding_count(structure_result)
-    if structure_count:
-        chips.append(
-            f"<span class='sr-chip sr-severity-neutral'>不足章<span>{structure_count}</span></span>"
-        )
-    future_count = _step4_future_hint_count(future_report)
-    if future_count:
-        chips.append(
-            f"<span class='sr-chip sr-severity-neutral'>将来リスク<span>{future_count}</span></span>"
-        )
     if chips:
         st.markdown(
             "<div class='step4-chip-row'>" + "".join(chips) + "</div>",
@@ -3731,6 +3743,30 @@ def _render_step4_field_grid(fields: dict[str, str]) -> None:
         )
     st.markdown(
         "<div class='step4-field-grid'>" + "".join(html_fields) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _step4_item_source_label(item) -> str:
+    if item.source_type == "structure_check":
+        return "文書構成チェック由来"
+    if item.origin == "document_deep_dive":
+        return "文書深堀で追加"
+    if item.origin == "chapter_deep_dive":
+        return "章深堀で追加"
+    return "初回レビュー由来"
+
+
+def _render_step4_item_context(item) -> None:
+    target_document = item.target_document or "対象文書"
+    target_section = item.target_section or "該当箇所"
+    source_label = _step4_item_source_label(item)
+    st.markdown(
+        "<div class='step4-item-context'>"
+        f"<span class='step4-context-pill'>📄 <b>対象文書</b>{html.escape(target_document)}</span>"
+        f"<span class='step4-context-pill'>§ <b>対象箇所</b>{html.escape(target_section)}</span>"
+        f"<span class='step4-context-pill'>↳ <b>出どころ</b>{html.escape(source_label)}</span>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -3762,6 +3798,7 @@ def _render_step4_issue_card(
             origin_badge = _remediation_origin_badge_html(item.origin)
             if origin_badge:
                 st.markdown(origin_badge, unsafe_allow_html=True)
+            _render_step4_item_context(item)
         with action_col:
             if matched_chapter is not None:
                 doc_name, chapter = matched_chapter
@@ -3812,7 +3849,7 @@ def _render_step4_issue_cards(
         )
     items = _sorted_step4_items(plan)
     if not items:
-        st.success("対応が必要な修正計画カードはありません。補助セクションで構成チェックや将来リスクだけ確認してください。")
+        st.success("対応が必要な修正計画カードはありません。")
         return
     first_high_opened = False
     for index, item in enumerate(items, 1):
@@ -4055,14 +4092,6 @@ def _render_step4_v2(
         remediation_plan,
         review,
         preview_docs,
-        document_profile_override,
-    )
-    _render_step4_auxiliary_sections(
-        review,
-        preview_docs,
-        structure_result,
-        remediation_plan,
-        future_report,
         document_profile_override,
     )
     _render_step4_dev_footer(review)

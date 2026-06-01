@@ -74,6 +74,11 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("item.target_document", self.app_source)
         self.assertIn("_step4_item_source_label", self.app_source)
 
+    def test_step4_copy_action_uses_document_draft_wording(self) -> None:
+        self.assertIn("文書追記案をコピー", self.app_source)
+        self.assertIn("文書へ転記する本文案", self.app_source)
+        self.assertNotIn("追記の雛形をコピー", self.app_source)
+
     def test_g2_issue_cards_have_chapter_reanalysis_entry(self) -> None:
         self.assertIn("matched_chapter = _find_chapter_for_remediation_item", self.app_source)
         self.assertIn("if matched_chapter is not None:", self.app_source)

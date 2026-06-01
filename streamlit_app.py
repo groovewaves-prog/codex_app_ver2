@@ -3638,11 +3638,11 @@ def _extract_template_section(template: str, label: str) -> str:
 
 def _step4_item_fields(item) -> dict[str, str]:
     return {
-        "現状": _extract_template_section(item.template, "現状"),
+        "現状": getattr(item, "current_state", "") or _extract_template_section(item.template, "現状"),
         "問題点": item.problem,
         "修正方針": item.fix_policy,
-        "影響と判断基準": _extract_template_section(item.template, "影響と判断基準"),
-        "完了条件": _extract_template_section(item.template, "完了条件"),
+        "影響と判断基準": getattr(item, "impact", "") or _extract_template_section(item.template, "影響と判断基準"),
+        "完了条件": getattr(item, "completion_condition", "") or _extract_template_section(item.template, "完了条件"),
         "再レビュー条件": item.re_review_condition,
     }
 
@@ -3819,8 +3819,8 @@ def _render_step4_issue_card(
         _render_step4_field_grid(_step4_item_fields(item))
         st.markdown("</div>", unsafe_allow_html=True)
         copy_key = f"step4_template_copy_{index}_{item.item_id}"
-        if st.button("追記の雛形をコピー", key=copy_key):
-            st.info("下のコードブロック右上のコピー操作で、追記案を文書へ転記できます。")
+        if st.button("文書追記案をコピー", key=copy_key):
+            st.info("下のコードブロック右上のコピー操作で、文書へ転記する本文案をコピーできます。")
         st.code(item.template, language="markdown")
 
 
@@ -3980,7 +3980,7 @@ def _render_step4_future_auxiliary(report: FutureReviewReport | None) -> None:
 def _render_step4_usage_guide(plan: RemediationPlan) -> None:
     guide_cards = [
         ("1. 担当割当", "赤いカードから担当者を決め、対象章と修正方針を共有します。"),
-        ("2. テンプレ反映", "追記の雛形を文書本体に転記し、実案件に合わせて具体化します。"),
+        ("2. 追記案の反映", "文書追記案を文書本体に転記し、実案件の数値・担当・期限に合わせて具体化します。"),
         ("3. 再確認", "再レビュー条件に書かれた章・観点だけを確認します。"),
         ("必須再レビュー", "高重要度の修正後は、該当章だけを再アップロードして確認します。"),
         ("差分レビュー", "中重要度は、追記箇所と関連箇所を中心に確認します。"),

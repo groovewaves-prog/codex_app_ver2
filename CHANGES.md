@@ -7,6 +7,7 @@ Baseline commit: `eaf605a`.
 - Removed the Step 4 auxiliary-section render path so users focus on the actionable issue cards instead of a parallel "補助で見るもの" area.
 - Added visible context chips to each issue card for target document, target section, and issue origin.
 - Limited top summary chips to actionable severity counts, avoiding detached "不足章" / "将来リスク" counts without a clear destination.
+- Changed the card copy block from a review-result recap into a document-draft style `文書追記案`, with explicit placeholders for values the author should fill in.
 - Updated Step 4 static tests to guard against reintroducing the auxiliary section in `_render_step4_v2`.
 
 ### G-5 — cleanup, regression guard, and handoff refresh

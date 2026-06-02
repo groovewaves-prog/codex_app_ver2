@@ -2192,6 +2192,32 @@ def _review_meta(preview_docs: list[SanitizedDocument], estimate=None) -> str:
     return f"{len(preview_docs)} ファイル · {tokens:,} tokens"
 
 
+def _format_chunking_interval_note(estimate) -> str:
+    if estimate is None:
+        return ""
+    interval = float(getattr(estimate, "throttle_interval_seconds", 0.0) or 0.0)
+    wait_total = int(getattr(estimate, "minimum_wait_seconds", 0) or 0)
+    if interval <= 0 or wait_total <= 0:
+        return ""
+    interval_label = f"{interval:g}"
+    return (
+        f" / API呼び出し間隔: {interval_label}秒/回"
+        f"（待機合計: {wait_total}秒、LLM応答時間は別）"
+    )
+
+
+def _format_review_runtime_error(exc: RuntimeError) -> str:
+    message = str(exc)
+    if "HTTP 503" in message or "Service Unavailable" in message:
+        return (
+            "Gemini/Gemma API が一時的に応答できませんでした (HTTP 503)。"
+            "これはローカルLLMの応答時間ではなく、外部API側の混雑・一時停止・モデル提供側の不安定さで発生します。\n\n"
+            "数分置いてから再実行してください。連続して発生する場合は、ファイル数を減らして分割レビューするか、"
+            "Streamlit Secrets の `GEMINI_MAX_RETRIES` / `GEMINI_CHUNKING_INTERVAL` / `GEMINI_TIMEOUT_SECONDS` を見直してください。"
+        )
+    return message
+
+
 def _render_review_runtime_status(
     state_label: str,
     preview_docs: list[SanitizedDocument],
@@ -2227,8 +2253,7 @@ def _render_step3_v2(
 
     wait_note = ""
     if estimate is not None:
-        if getattr(estimate, "minimum_wait_seconds", 0):
-            wait_note = f" / Free tier 対策の最低待機目安: {estimate.minimum_wait_seconds} 秒"
+        wait_note = _format_chunking_interval_note(estimate)
         call_note = f"予定 call: {estimate.call_count} / 入力概算: {estimate.total_input_tokens:,} tokens"
     else:
         call_note = "予定 call: 未計算 / 入力概算: 未計算"
@@ -2815,9 +2840,10 @@ def _render_token_budget_panel(
         )
         if estimate.minimum_wait_seconds > 0:
             st.caption(
-                "Free tier のレート制限対策として、分割call間の待機だけで "
-                f"最低 {_format_duration(estimate.minimum_wait_seconds)} 程度を見込んでください。"
-                "実際には各callの応答時間がさらに加わります。"
+                "Free tier のレート制限対策として、API呼び出し間隔を "
+                f"{estimate.throttle_interval_seconds:g}秒/回にしています。"
+                f"待機合計は {_format_duration(estimate.minimum_wait_seconds)} ですが、"
+                "これは応答時間ではありません。実際には各callのLLM処理時間がさらに加わります。"
             )
 
         for reason in estimate.reasons:
@@ -5044,7 +5070,7 @@ if preview_docs:
                 icon="!",
                 estimate=_operation_estimate,
             )
-            st.error(str(exc))
+            st.error(_format_review_runtime_error(exc))
         except Exception as exc:  # noqa: BLE001
             review_progress.progress(100, text="レビュー処理で停止しました。")
             st.session_state.review_in_progress = False

@@ -74,6 +74,15 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("item.target_document", self.app_source)
         self.assertIn("_step4_item_source_label", self.app_source)
 
+    def test_step4_issue_list_uses_consistent_labels_and_document_filter(self) -> None:
+        self.assertIn("_STEP4_ISSUE_DEFAULT_LIMIT = 12", self.app_source)
+        self.assertIn("def _step4_issue_list_label", self.app_source)
+        self.assertIn('f"指摘 {index:02d}"', self.app_source)
+        self.assertIn("対象文書で絞り込み", self.app_source)
+        self.assertIn("すべての文書", self.app_source)
+        self.assertIn("すべて表示（残り", self.app_source)
+        self.assertNotIn('label = f"{item.item_id or index} · {item.title}"', self.app_source)
+
     def test_step4_copy_action_uses_document_draft_wording(self) -> None:
         self.assertIn("文書追記案をコピー", self.app_source)
         self.assertIn("文書へ転記する本文案", self.app_source)

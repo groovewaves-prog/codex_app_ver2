@@ -94,6 +94,12 @@ class Step1Step3UxStaticTests(unittest.TestCase):
         self.assertIn("アップロードした原文ファイル", body)
         self.assertIn("マスク候補の元の語", body)
 
+    def test_step3_wait_note_is_api_interval_not_response_time(self) -> None:
+        self.assertIn("def _format_chunking_interval_note", self.app_source)
+        self.assertIn("API呼び出し間隔", self.app_source)
+        self.assertIn("LLM応答時間は別", self.app_source)
+        self.assertNotIn("Free tier 対策の最低待機目安", self.app_source)
+
     def test_step3_v2_approval_gate_reuses_existing_state(self) -> None:
         body = self._function_body("_render_step3_v2")
         self.assertIn("st.checkbox", body)
@@ -108,12 +114,14 @@ class Step1Step3UxStaticTests(unittest.TestCase):
 
     def test_review_runtime_status_preserves_progress_and_error_states(self) -> None:
         self.assertIn("def _render_review_runtime_status", self.app_source)
+        self.assertIn("def _format_review_runtime_error", self.app_source)
         self.assertIn("レビュー実行中 · 外部 LLM へ送信中", self.app_source)
         self.assertIn("レビュー完了 · 結果を表示します", self.app_source)
         self.assertIn("レビュー停止 · ローカル設定エラー", self.app_source)
         self.assertIn("レビュー停止 · 送信前チェックエラー", self.app_source)
         self.assertIn("レビュー停止 · LLM 応答エラー", self.app_source)
         self.assertIn("レビュー停止 · 予期しないエラー", self.app_source)
+        self.assertIn("Gemini/Gemma API が一時的に応答できませんでした", self.app_source)
 
     def test_status_bar_does_not_join_step_number_to_state(self) -> None:
         self.assertIn("準備中 · ステップ 1 / 3", self.app_source)

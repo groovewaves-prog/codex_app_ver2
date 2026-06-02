@@ -60,7 +60,7 @@ https://codexappver2-qicnqzha2kbcadvj63j63e.streamlit.app/
 | 2 | 合算トークン規模が表示される | OK / NG |  |
 | 3 | 予定call数が表示される | OK / NG |  |
 | 4 | 文書別の送信規模が大きい順に表示される | OK / NG |  |
-| 5 | Free tier対策の最低待機時間が表示される | OK / NG |  |
+| 5 | Free tier対策のAPI呼び出し間隔が表示され、応答時間ではないと分かる | OK / NG |  |
 | 6 | 推奨レビュー分割案が表示される | OK / NG |  |
 | 7 | 分割推奨が出る場合、理由が分かる | OK / NG |  |
 | 8 | 長文時に待ち時間の説明が不足していない | OK / NG |  |

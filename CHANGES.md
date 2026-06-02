@@ -8,6 +8,7 @@ Baseline commit: `eaf605a`.
 - Added visible context chips to each issue card for target document, target section, and issue origin.
 - Limited top summary chips to actionable severity counts, avoiding detached "不足章" / "将来リスク" counts without a clear destination.
 - Changed the card copy block from a review-result recap into a document-draft style `文書追記案`, with explicit placeholders for values the author should fill in.
+- Clarified Step 3's `6秒` display as an API-call interval for Free tier throttling, not LLM response time, and added a user-facing explanation for Gemini/Gemma HTTP 503 failures.
 - Updated Step 4 static tests to guard against reintroducing the auxiliary section in `_render_step4_v2`.
 
 ### G-5 — cleanup, regression guard, and handoff refresh

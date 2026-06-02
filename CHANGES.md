@@ -9,6 +9,7 @@ Baseline commit: `eaf605a`.
 - Limited top summary chips to actionable severity counts, avoiding detached "不足章" / "将来リスク" counts without a clear destination.
 - Changed the card copy block from a review-result recap into a document-draft style `文書追記案`, with explicit placeholders for values the author should fill in.
 - Clarified Step 3's `6秒` display as an API-call interval for Free tier throttling, not LLM response time, and added a user-facing explanation for Gemini/Gemma HTTP 503 failures.
+- Normalized Step 4 issue-list labels to `指摘 NN · 重要度 · 文書 · 対象箇所 · タイトル`, added document filtering for multi-file reviews, and limited the initial issue list to the top 12 items with a show-all control.
 - Updated Step 4 static tests to guard against reintroducing the auxiliary section in `_render_step4_v2`.
 
 ### G-5 — cleanup, regression guard, and handoff refresh

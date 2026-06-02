@@ -15,6 +15,7 @@ Run with:
 from __future__ import annotations
 
 import base64
+from collections import Counter
 import hashlib
 import html
 import io
@@ -3635,6 +3636,9 @@ def _step4_effort_rank(effort: str) -> int:
     return {"large": 0, "medium": 1, "small": 2}.get((effort or "").lower(), 3)
 
 
+_STEP4_ISSUE_DEFAULT_LIMIT = 12
+
+
 def _sorted_step4_items(plan: RemediationPlan) -> list:
     severity_rank = {"high": 0, "medium": 1, "low": 2, "info": 3}
     return sorted(
@@ -3645,6 +3649,61 @@ def _sorted_step4_items(plan: RemediationPlan) -> list:
             item.item_id,
         ),
     )
+
+
+def _shorten_step4_label(value: str, limit: int = 34) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(1, limit - 1)] + "…"
+
+
+def _step4_severity_label(severity: str) -> str:
+    return {
+        "high": "高",
+        "medium": "中",
+        "low": "低",
+        "info": "参考",
+    }.get((severity or "").lower(), "確認")
+
+
+def _step4_issue_list_label(item, index: int, *, show_document: bool) -> str:
+    parts = [
+        f"指摘 {index:02d}",
+        _step4_severity_label(item.severity),
+    ]
+    if show_document:
+        parts.append(_shorten_step4_label(item.target_document or "対象文書", 28))
+    parts.extend(
+        [
+            _shorten_step4_label(item.target_section or "該当箇所", 24),
+            _shorten_step4_label(item.title or "レビュー指摘", 46),
+        ]
+    )
+    return " · ".join(part for part in parts if part)
+
+
+def _filter_step4_items_by_document(items: list) -> tuple[list, bool]:
+    document_counts = Counter((item.target_document or "対象文書") for item in items)
+    if len(document_counts) <= 1:
+        return items, False
+    options = ["__all__"] + sorted(document_counts)
+
+    def _format_option(value: str) -> str:
+        if value == "__all__":
+            return f"すべての文書（{len(items)} 件）"
+        return f"{_shorten_step4_label(value, 42)}（{document_counts[value]} 件）"
+
+    selected = st.selectbox(
+        "対象文書で絞り込み",
+        options=options,
+        format_func=_format_option,
+        key="step4_issue_document_filter",
+        help="複数ファイルを一括レビューした場合は、文書ごとに指摘を絞り込めます。",
+    )
+    if selected == "__all__":
+        return items, True
+    return [item for item in items if (item.target_document or "対象文書") == selected], False
 
 
 def _extract_template_section(template: str, label: str) -> str:
@@ -3805,8 +3864,9 @@ def _render_step4_issue_card(
     review: ReviewResult,
     preview_docs: list[SanitizedDocument],
     document_profile_override: str | None,
+    show_document_in_label: bool = False,
 ) -> None:
-    label = f"{item.item_id or index} · {item.title}"
+    label = _step4_issue_list_label(item, index, show_document=show_document_in_label)
     with st.expander(label, expanded=expanded):
         matched_chapter = _find_chapter_for_remediation_item(item, preview_docs)
         header_col, action_col = st.columns([5, 1.35])
@@ -3877,8 +3937,26 @@ def _render_step4_issue_cards(
     if not items:
         st.success("対応が必要な修正計画カードはありません。")
         return
+    items, showing_all_documents = _filter_step4_items_by_document(items)
+    if not items:
+        st.info("選択した文書に対応すべき指摘はありません。")
+        return
+    show_all_key = "step4_show_all_issue_cards"
+    show_all = bool(st.session_state.get(show_all_key, False))
+    if len(items) > _STEP4_ISSUE_DEFAULT_LIMIT and not show_all:
+        display_items = items[:_STEP4_ISSUE_DEFAULT_LIMIT]
+        remaining = len(items) - _STEP4_ISSUE_DEFAULT_LIMIT
+        st.caption(
+            f"全 {len(items)} 件中、重要度順に上位 {_STEP4_ISSUE_DEFAULT_LIMIT} 件を表示しています。"
+            "必要に応じて対象文書で絞り込むか、すべて表示してください。"
+        )
+    else:
+        display_items = items
+        remaining = 0
+        if len(items) > _STEP4_ISSUE_DEFAULT_LIMIT:
+            st.caption(f"全 {len(items)} 件を表示中です。")
     first_high_opened = False
-    for index, item in enumerate(items, 1):
+    for index, item in enumerate(display_items, 1):
         expanded = False
         if item.severity == "high" and not first_high_opened:
             expanded = True
@@ -3890,7 +3968,16 @@ def _render_step4_issue_cards(
             review=review,
             preview_docs=preview_docs,
             document_profile_override=document_profile_override,
+            show_document_in_label=showing_all_documents,
         )
+    if len(items) > _STEP4_ISSUE_DEFAULT_LIMIT:
+        if show_all:
+            if st.button("上位 12 件の表示に戻す", key="step4_issue_show_less"):
+                st.session_state[show_all_key] = False
+                st.rerun()
+        elif st.button(f"すべて表示（残り {remaining} 件）", key="step4_issue_show_all"):
+            st.session_state[show_all_key] = True
+            st.rerun()
 
 
 def _render_step4_chapter_auxiliary(

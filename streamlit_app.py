@@ -2536,6 +2536,17 @@ def _render_artifact_review_mode_notice(
     )
 
 
+def _is_code_analysis_review(
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+) -> bool:
+    if not preview_docs:
+        return False
+    classification = classify_documents(preview_docs, document_profile_override)
+    mode = detect_artifact_review_mode(preview_docs, classification.document_profile)
+    return mode.mode_id == "code_analysis"
+
+
 def _candidate_context_excerpt(candidate: NerCandidate, full_text: str) -> str:
     if not full_text or candidate.start < 0 or candidate.end <= candidate.start:
         return ""
@@ -3934,6 +3945,7 @@ def _render_step4_issue_card(
     preview_docs: list[SanitizedDocument],
     document_profile_override: str | None,
     show_document_in_label: bool = False,
+    show_document_draft: bool = True,
 ) -> None:
     label = _step4_issue_list_label(item, index, show_document=show_document_in_label)
     with st.expander(label, expanded=expanded):
@@ -3973,10 +3985,11 @@ def _render_step4_issue_card(
         st.markdown("<div class='step4-card-body'>", unsafe_allow_html=True)
         _render_step4_field_grid(_step4_item_fields(item))
         st.markdown("</div>", unsafe_allow_html=True)
-        copy_key = f"step4_template_copy_{index}_{item.item_id}"
-        if st.button("文書追記案をコピー", key=copy_key):
-            st.info("下のコードブロック右上のコピー操作で、文書へ転記する本文案をコピーできます。")
-        st.code(item.template, language="markdown")
+        if show_document_draft:
+            copy_key = f"step4_template_copy_{index}_{item.item_id}"
+            if st.button("文書追記案をコピー", key=copy_key):
+                st.info("下のコードブロック右上のコピー操作で、文書へ転記する本文案をコピーできます。")
+            st.code(item.template, language="markdown")
 
 
 def _render_step4_issue_cards(
@@ -4006,6 +4019,7 @@ def _render_step4_issue_cards(
     if not items:
         st.success("対応が必要な修正計画カードはありません。")
         return
+    show_document_draft = not _is_code_analysis_review(preview_docs, document_profile_override)
     items, showing_all_documents = _filter_step4_items_by_document(items)
     if not items:
         st.info("選択した文書に対応すべき指摘はありません。")
@@ -4038,6 +4052,7 @@ def _render_step4_issue_cards(
             preview_docs=preview_docs,
             document_profile_override=document_profile_override,
             show_document_in_label=showing_all_documents,
+            show_document_draft=show_document_draft,
         )
     if len(items) > _STEP4_ISSUE_DEFAULT_LIMIT:
         if show_all:

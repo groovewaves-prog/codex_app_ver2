@@ -872,6 +872,39 @@ class BuildPromptOrderingMetadataTests(unittest.TestCase):
         self.assertIn("Excelブック診断", prompt)
         self.assertIn("PowerPoint (.pptx): スライド単位の説明資料", prompt)
 
+    def test_source_code_prompt_uses_code_analysis_mode(self) -> None:
+        from secure_review.reviewer import build_prompt
+        from secure_review.rubric import choose_rubric
+
+        document = _doc(
+            name="kobekan_sendmail.sh.txt",
+            text="#!/bin/bash\nmailx -S ssl-verify=ignore user@example.com",
+        )
+        prompt = build_prompt(
+            [document],
+            rubric=choose_rubric([document], "source_code"),
+        )
+        self.assertIn("レビュー運用モード", prompt)
+        self.assertIn("コード解析モード", prompt)
+        self.assertIn("コード/スクリプト解析の注意", prompt)
+        self.assertIn("設計書の章立て不足ではなく", prompt)
+
+    def test_runbook_prompt_separates_light_and_formal_depth(self) -> None:
+        from secure_review.reviewer import build_prompt
+        from secure_review.rubric import choose_rubric
+
+        document = _doc(
+            name="滞留障害イベント解消 手順書.txt",
+            text="１．事前確認\n２．systemctl restart zabbix-server\n３．mysql -N -e 'select 1'",
+        )
+        prompt = build_prompt(
+            [document],
+            rubric=choose_rubric([document], "operations_runbook"),
+        )
+        self.assertIn("手順書レビューの粒度", prompt)
+        self.assertIn("簡易手順書", prompt)
+        self.assertIn("正式手順書", prompt)
+
     def test_prompt_requires_structured_summary_and_purpose_alignment(self) -> None:
         from secure_review.reviewer import build_prompt
         prompt = build_prompt([_doc(name="design.md", text="第 1 章 はじめに\n本文")])
@@ -990,6 +1023,30 @@ class SourceCodeHeuristicTests(unittest.TestCase):
         from secure_review.reviewer import _has_unprotected_command_execution
         sql = "CREATE PROCEDURE dbo.RunJob AS BEGIN EXEC(@sql); SELECT 1; END"
         self.assertFalse(_has_unprotected_command_execution(sql))
+
+    def test_mock_source_code_flags_tls_verification_disabled(self) -> None:
+        result = MockReviewProvider().review(
+            [
+                _doc(
+                    name="kobekan_sendmail.sh.txt",
+                    text="#!/bin/bash\nmailx -S ssl-verify=ignore -S smtp-auth-password=SECRET",
+                )
+            ],
+            document_profile_override="source_code",
+        )
+        self.assertTrue(any("TLS" in issue.title for issue in result.issues))
+
+    def test_mock_source_code_flags_network_without_timeout(self) -> None:
+        result = MockReviewProvider().review(
+            [
+                _doc(
+                    name="get_mails.py",
+                    text="import urllib.request\nresponse = urllib.request.urlopen(req)\n",
+                )
+            ],
+            document_profile_override="source_code",
+        )
+        self.assertTrue(any("タイムアウト" in issue.title for issue in result.issues))
 
 
 class NetworkConfigReviewTests(unittest.TestCase):

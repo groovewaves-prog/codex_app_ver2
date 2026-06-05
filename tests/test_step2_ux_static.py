@@ -30,13 +30,22 @@ class Step2UxStaticTests(unittest.TestCase):
 
     def test_mask_candidates_are_promoted_before_document_details(self) -> None:
         body = self._function_body("_render_step2_v2")
+        mode_index = body.index("_render_artifact_review_mode_notice")
         mask_index = body.index("_render_step2_mask_decision_section")
         action_index = body.index("_render_step2_next_action")
         detail_index = body.index("_render_step2_document_details")
+        self.assertLess(mode_index, mask_index)
         self.assertLess(mask_index, detail_index)
         self.assertLess(action_index, detail_index)
         self.assertIn("マスクするか判断が必要な語が", self.app_source)
         self.assertIn("固有名詞っぽい語が検出されました", self.app_source)
+
+    def test_artifact_review_mode_notice_is_rendered(self) -> None:
+        body = self._function_body("_render_artifact_review_mode_notice")
+        self.assertIn("detect_artifact_review_mode", body)
+        self.assertIn("Review Mode", body)
+        self.assertIn("出力方針", body)
+        self.assertIn("artifact-mode-card", self.app_source)
 
     def test_no_candidate_state_is_compact(self) -> None:
         self.assertIn("✓ 要確認の語はありませんでした", self.app_source)

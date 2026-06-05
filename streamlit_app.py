@@ -3496,10 +3496,16 @@ def _review_with_deep_dive_issues(review: ReviewResult) -> ReviewResult:
 def _rebuild_remediation_plan_for_session(
     review: ReviewResult,
     structure_result: StructureCheckResult | None = None,
+    *,
+    preview_docs: list[SanitizedDocument] | None = None,
+    document_profile_override: str | None = None,
 ) -> RemediationPlan:
+    effective_structure_result = structure_result
+    if preview_docs and _is_code_analysis_review(preview_docs, document_profile_override):
+        effective_structure_result = None
     plan = build_remediation_plan(
         _review_with_deep_dive_issues(review),
-        structure_result,
+        effective_structure_result,
     )
     st.session_state["remediation_plan"] = plan
     return plan
@@ -3562,6 +3568,8 @@ def _run_chapter_deep_dive(
         _rebuild_remediation_plan_for_session(
             review,
             st.session_state.get("structure_result"),
+            preview_docs=preview_docs,
+            document_profile_override=document_profile_override,
         )
         st.session_state.deep_dive_notice = (
             f"{chapter.chapter_label} の深堀りレビューを記録しました。"
@@ -5272,6 +5280,8 @@ if review is not None:
     _remediation_plan = _rebuild_remediation_plan_for_session(
         review,
         _structure_result_for_review,
+        preview_docs=_preview_docs_for_structure,
+        document_profile_override=document_profile_override,
     )
     _future_report = build_future_review_report(
         _preview_docs_for_structure,

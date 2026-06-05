@@ -6,6 +6,7 @@ Baseline commit: `eaf605a`.
 
 - Step 4 now hides the `文書追記案` copy block when the uploaded artifacts are detected as `コード解析モード`; code/script reviews focus on findings, risks, and code-level remediation instead of document insertion text.
 - Kept the document-draft template visible for ordinary design documents and runbooks where the user is expected to update the source document.
+- Excluded design-document structure-check findings from the Step 4 remediation plan in code analysis mode, preventing off-target `文書全体` / `冒頭の目的記載` items from appearing in code reviews.
 
 ### Artifact review mode — code/config/script-aware review and runbook depth
 

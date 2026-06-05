@@ -96,6 +96,13 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("show_document_draft: bool = True", issue_card_body)
         self.assertIn("if show_document_draft:", issue_card_body)
 
+    def test_step4_excludes_structure_findings_from_code_analysis_plan(self) -> None:
+        rebuild_body = self._function_body("_rebuild_remediation_plan_for_session")
+        self.assertIn("effective_structure_result = structure_result", rebuild_body)
+        self.assertIn("_is_code_analysis_review(preview_docs, document_profile_override)", rebuild_body)
+        self.assertIn("effective_structure_result = None", rebuild_body)
+        self.assertIn("effective_structure_result", rebuild_body)
+
     def test_g2_issue_cards_have_chapter_reanalysis_entry(self) -> None:
         self.assertIn("matched_chapter = _find_chapter_for_remediation_item", self.app_source)
         self.assertIn("if matched_chapter is not None:", self.app_source)

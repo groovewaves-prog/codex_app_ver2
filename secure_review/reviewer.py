@@ -21,6 +21,10 @@ from secure_review.models import (
     ReviewSummary,
     SanitizedDocument,
 )
+from secure_review.artifact_review import (
+    detect_artifact_review_mode,
+    render_artifact_review_mode_for_prompt,
+)
 from secure_review.network_guard import UpstreamHttpError, post_json_safely
 from secure_review.network_config import (
     analyze_network_config,
@@ -379,6 +383,39 @@ class MockReviewProvider(ReviewProvider):
                             title="危険なコマンド実行の可能性",
                             details="外部コマンド実行や評価系処理が入力検証や安全対策なしに使われている可能性があります。",
                             recommendation="引数の固定化、入力検証、シェル経由実行の回避を検討してください。",
+                            source_document=document.name,
+                        )
+                    )
+
+                if _has_disabled_tls_verification(lowered):
+                    issues.append(
+                        ReviewIssue(
+                            severity="high",
+                            title="TLS/証明書検証を無効化している可能性",
+                            details="通信時のSSL/TLS検証を無効化する記述があり、中間者攻撃や誤接続を見逃すリスクがあります。",
+                            recommendation="検証無効化を避け、信頼済みCA、証明書配置、検証失敗時の停止条件を明記してください。",
+                            source_document=document.name,
+                        )
+                    )
+
+                if _has_network_call_without_timeout(lowered):
+                    issues.append(
+                        ReviewIssue(
+                            severity="medium",
+                            title="外部通信のタイムアウトが不明確",
+                            details="HTTP/API/SMTP等の外部通信がある一方、タイムアウトやリトライ上限が読み取れません。",
+                            recommendation="timeout、retry/backoff、失敗時の終了コードまたは通知方法を明示してください。",
+                            source_document=document.name,
+                        )
+                    )
+
+                if _has_destructive_operation_without_safety_guard(lowered):
+                    issues.append(
+                        ReviewIssue(
+                            severity="high",
+                            title="破壊的または運用影響の大きい処理に安全ガードが不足",
+                            details="再起動、削除、イベントクローズ、DB更新など運用影響の大きい操作が含まれますが、dry-run/確認/対象絞り込みが十分に読み取れません。",
+                            recommendation="dry-run、対象件数上限、事前確認、承認、ログ、ロールバック不可時の代替手段を追加してください。",
                             source_document=document.name,
                         )
                     )
@@ -1572,6 +1609,11 @@ def build_prompt(
         "",
         f"# 文書プロファイル: {rubric.document_profile} ({rubric.rubric_name})",
         "",
+        "# レビュー運用モード",
+        render_artifact_review_mode_for_prompt(
+            detect_artifact_review_mode(documents, rubric.document_profile)
+        ),
+        "",
         "# レビュー観点 (簡潔)",
         "- 設計の重大な不足や曖昧さ",
         "- 運用・セキュリティ・コスト観点での実現可能性",
@@ -1608,6 +1650,26 @@ def build_prompt(
                 "- Cisco IOS / IOS XE と Fortinet FortiOS を主な対象として概要解析してください。",
                 "- このレビューは正式なConfig監査ではなく、Configの概要、注意候補、設計書との突合観点を出すものです。",
                 "- ACL、Firewall Policy、NAT、VRF、route-map、VPN は文脈依存が強いため、断定より確認観点として整理してください。",
+            ]
+        )
+    elif rubric.document_profile == "source_code":
+        sections.extend(
+            [
+                "",
+                "# コード/スクリプト解析の注意",
+                "- 設計書の章立て不足ではなく、コードの目的、入力、出力、外部依存、秘密情報、ログ、例外処理、再実行性を確認してください。",
+                "- 実行は行わず、静的に読める範囲でリスクと改善候補を出してください。",
+                "- 運用スクリプトでは、dry-run、対象絞り込み、タイムアウト、終了コード、監査ログ、ロールバック不可時の扱いを重視してください。",
+            ]
+        )
+    elif rubric.document_profile in {"operations_runbook", "change_runbook"}:
+        sections.extend(
+            [
+                "",
+                "# 手順書レビューの粒度",
+                "- 簡易手順書のまま使う場合に必要な最低限の補強と、正式手順書にスケールアップする場合の追加項目を分けてください。",
+                "- 簡易資料に対して章立て不足を大量に並べるのではなく、実行安全性に直結する前提、影響、成功判定、失敗時対応を優先してください。",
+                "- 高リスク操作がある場合は、簡易版でも承認、対象範囲、確認コマンド、戻し方または戻せない場合の代替策を確認してください。",
             ]
         )
 
@@ -2567,6 +2629,65 @@ def _has_unprotected_command_execution(text: str) -> bool:
     if re.search(r"\bexec\s*\(", text):
         return not _looks_like_sql_script(lowered)
     return False
+
+
+def _has_disabled_tls_verification(lowered_text: str) -> bool:
+    markers = (
+        "ssl-verify=ignore",
+        "ssl_verify=false",
+        "verify=false",
+        "verify = false",
+        "rejectunauthorized: false",
+        "check_hostname = false",
+        "cert_reqs=none",
+        "trust_all_cert",
+    )
+    return any(marker in lowered_text for marker in markers)
+
+
+def _has_network_call_without_timeout(lowered_text: str) -> bool:
+    network_markers = (
+        "urlopen(",
+        "requests.get(",
+        "requests.post(",
+        "invoke-restmethod",
+        "invoke-webrequest",
+        "curl ",
+        "wget ",
+        "mailx ",
+        "send-mailmessage",
+    )
+    return any(marker in lowered_text for marker in network_markers) and "timeout" not in lowered_text
+
+
+def _has_destructive_operation_without_safety_guard(lowered_text: str) -> bool:
+    destructive_markers = (
+        "systemctl restart",
+        "restart-service",
+        "event.acknowledge",
+        "delete from",
+        "drop table",
+        "truncate table",
+        "rm -rf",
+        "remove-item",
+        "housekeeper_execute",
+    )
+    safety_markers = (
+        "dryrun",
+        "dry-run",
+        "whatif",
+        "-whatif",
+        "confirm",
+        "-confirm",
+        "maxbatch",
+        "batchsize",
+        "approval",
+        "承認",
+        "事前確認",
+    )
+    return any(marker in lowered_text for marker in destructive_markers) and not any(
+        marker in lowered_text for marker in safety_markers
+    )
 
 
 def _looks_like_sql_script(lowered_text: str) -> bool:

@@ -40,6 +40,7 @@ from secure_review.models import (
     SanitizedDocument,
     UploadedDocument,
 )
+from secure_review.artifact_review import detect_artifact_review_mode
 from secure_review.future_review import FutureReviewReport, build_future_review_report
 from secure_review.network_guard import LocalUrlError
 from secure_review.reviewer import choose_provider, provider_display_name
@@ -51,7 +52,7 @@ from secure_review.remediation_plan import (
     remediation_plan_from_dict,
 )
 # Phase 7 段階 2-C (2026-05-08): 章単位深堀り
-from secure_review.rubric import ChapterSection, extract_chapters_from_text
+from secure_review.rubric import ChapterSection, classify_documents, extract_chapters_from_text
 from secure_review.run_masking_pipeline import (
     apply_user_decisions,
     run_masking_pipeline,
@@ -1538,6 +1539,41 @@ div[data-testid="stExpander"] summary {
     font-weight: 900;
     margin-top: 0.35rem;
 }
+.artifact-mode-card {
+    border: 1px solid rgba(8,119,96,0.18);
+    border-left: 6px solid var(--accent);
+    border-radius: var(--sr-radius-lg);
+    background: linear-gradient(135deg, rgba(255,253,248,0.92) 0%, rgba(223,240,234,0.56) 100%);
+    box-shadow: 0 12px 28px rgba(24,35,30,0.055);
+    padding: 0.9rem 1rem;
+    margin: 0.8rem 0 0.95rem;
+}
+.artifact-mode-kicker {
+    color: var(--sr-text-tertiary);
+    font-family: 'SF Mono', 'Consolas', 'Hiragino Sans', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+}
+.artifact-mode-title {
+    color: var(--sr-text-primary);
+    font-size: 1.08rem;
+    font-weight: 900;
+    margin-top: 0.15rem;
+}
+.artifact-mode-summary {
+    color: var(--sr-text-secondary);
+    font-size: 0.9rem;
+    line-height: 1.62;
+    margin-top: 0.36rem;
+}
+.artifact-mode-note {
+    color: var(--sr-text-secondary);
+    font-size: 0.82rem;
+    line-height: 1.55;
+    margin: 0.42rem 0 0;
+    padding-left: 1.1rem;
+}
 .step2-mask-band {
     border: 1px solid rgba(167,103,0,0.22);
     border-left: 6px solid var(--warn);
@@ -2468,6 +2504,38 @@ def _render_step2_header_and_summary(
     )
 
 
+def _render_artifact_review_mode_notice(
+    preview_docs: list[SanitizedDocument],
+    document_profile_override: str | None,
+) -> None:
+    if not preview_docs:
+        return
+    classification = classify_documents(preview_docs, document_profile_override)
+    mode = detect_artifact_review_mode(preview_docs, classification.document_profile)
+    notes_html = "".join(f"<li>{html.escape(note)}</li>" for note in mode.ui_notes[:3])
+    meta_parts = [
+        f"判定: {_profile_label(classification.document_profile)}",
+        f"信頼度: {classification.confidence}",
+    ]
+    if mode.detected_languages:
+        meta_parts.append(f"形式: {', '.join(mode.detected_languages)}")
+    if mode.runbook_depth:
+        meta_parts.append(f"粒度: {mode.runbook_depth}")
+    st.markdown(
+        f"""
+<section class="artifact-mode-card">
+  <div class="artifact-mode-kicker">Review Mode</div>
+  <div class="artifact-mode-title">{html.escape(mode.mode_name)}</div>
+  <div class="artifact-mode-summary">{html.escape(mode.summary)}</div>
+  <div class="artifact-mode-summary"><strong>出力方針:</strong> {html.escape(mode.primary_output)}</div>
+  <ul class="artifact-mode-note">{notes_html}</ul>
+  <div class="artifact-mode-summary">{html.escape(' / '.join(meta_parts))}</div>
+</section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _candidate_context_excerpt(candidate: NerCandidate, full_text: str) -> str:
     if not full_text or candidate.start < 0 or candidate.end <= candidate.start:
         return ""
@@ -2769,6 +2837,7 @@ def _render_step2_v2(
 ) -> None:
     st.markdown("<div class='step2-v2'>", unsafe_allow_html=True)
     _render_step2_header_and_summary(preview_docs, masking_states)
+    _render_artifact_review_mode_notice(preview_docs, document_profile_override)
     if preview_warnings:
         with st.expander(f"抽出・パイプライン警告 ({len(preview_warnings)} 件)", expanded=False):
             for warning in preview_warnings:

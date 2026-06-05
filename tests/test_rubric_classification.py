@@ -139,6 +139,26 @@ class BackwardCompatibilityTests(unittest.TestCase):
         # syntax-based detection picks high or medium depending on _looks_like_source_code.
         self.assertIn(result.confidence, ("high", "medium"))
 
+    def test_shell_script_saved_as_txt_is_source_code(self) -> None:
+        """A .sh.txt operational script should still be treated as source_code."""
+        result = detect_document_profile(
+            [
+                _doc(
+                    "kobekan_sendmail.sh.txt",
+                    "#!/usr/bin/env bash\nset -e\nmailx -S ssl-verify=ignore user@example.com",
+                )
+            ]
+        )
+        self.assertEqual(result.document_profile, "source_code")
+        self.assertIn(result.confidence, ("high", "medium"))
+
+    def test_powershell_body_signal_is_source_code(self) -> None:
+        """PowerShell syntax in a neutral text file should switch to source_code."""
+        result = detect_document_profile(
+            [_doc("ops_script.txt", "param([switch]$DryRun)\nInvoke-RestMethod -Uri $url\nWrite-Output ok")]
+        )
+        self.assertEqual(result.document_profile, "source_code")
+
     def test_cisco_ios_config_body_detected(self) -> None:
         """Cisco IOS style config body → network_config / medium."""
         result = detect_document_profile(

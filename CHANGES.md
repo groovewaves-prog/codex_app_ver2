@@ -2,6 +2,13 @@
 
 Baseline commit: `eaf605a`.
 
+### Artifact review mode — code/config/script-aware review and runbook depth
+
+- Added `secure_review.artifact_review` to separate broad document profile from practical review handling: code analysis, config overview, lightweight runbook review, or ordinary document review.
+- Step 2 now shows a compact review-mode card before mask decisions so users can confirm whether the upload will be treated as a design document, code/script, config, or lightweight/formal runbook.
+- Extended review prompts so source code/scripts focus on static code risks instead of document chapter structure, and runbooks separate "簡易版として使う最低限の補強" from "正式手順書へ拡張する追加項目".
+- Strengthened source-code detection for `.sh.txt` style scripts and PowerShell-like text, and added mock heuristics for TLS verification disabled, missing network timeouts, and high-impact operations without safety guards.
+
 ### Step 4 focus pass — issue cards as the single review path
 
 - Removed the Step 4 auxiliary-section render path so users focus on the actionable issue cards instead of a parallel "補助で見るもの" area.

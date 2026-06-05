@@ -88,6 +88,14 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("文書へ転記する本文案", self.app_source)
         self.assertNotIn("追記の雛形をコピー", self.app_source)
 
+    def test_step4_hides_document_draft_for_code_analysis_mode(self) -> None:
+        self.assertIn("def _is_code_analysis_review", self.app_source)
+        self.assertIn('mode.mode_id == "code_analysis"', self.app_source)
+        self.assertIn("show_document_draft = not _is_code_analysis_review", self.app_source)
+        issue_card_body = self._function_body("_render_step4_issue_card")
+        self.assertIn("show_document_draft: bool = True", issue_card_body)
+        self.assertIn("if show_document_draft:", issue_card_body)
+
     def test_g2_issue_cards_have_chapter_reanalysis_entry(self) -> None:
         self.assertIn("matched_chapter = _find_chapter_for_remediation_item", self.app_source)
         self.assertIn("if matched_chapter is not None:", self.app_source)

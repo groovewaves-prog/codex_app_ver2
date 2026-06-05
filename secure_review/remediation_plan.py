@@ -203,13 +203,14 @@ def build_remediation_plan(
     review issues and structure-check findings into author-facing next work:
     fix policy, draft snippet, and re-review trigger.
     """
+    is_code_analysis = review.document_profile == "source_code"
     items: list[RemediationItem] = []
     for issue in review.issues or []:
         if issue.severity not in {"high", "medium", "low"}:
             continue
-        items.append(_item_from_issue(issue))
+        items.append(_item_from_issue(issue, code_analysis=is_code_analysis))
 
-    if structure_result is not None:
+    if structure_result is not None and not is_code_analysis:
         for finding in structure_result.findings or ():
             if finding.severity not in {"high", "medium"}:
                 continue
@@ -228,6 +229,19 @@ def build_remediation_plan(
     )[:max_items]
 
     if not items:
+        if is_code_analysis:
+            return RemediationPlan(
+                headline="大きなコード修正アクションはありません",
+                summary="高・中重要度のコード指摘は検出されていません。必要に応じて低重要度の改善を確認してください。",
+                items=(),
+                re_review_steps=(
+                    ReReviewStep(
+                        "軽微確認",
+                        "コメント、ログ、設定値、例外処理の表記ゆれだけをセルフチェックします。",
+                        "低重要度の修正を入れた場合",
+                    ),
+                ),
+            )
         return RemediationPlan(
             headline="大きな修正アクションはありません",
             summary="高・中重要度の指摘や構成不足は検出されていません。必要に応じて低重要度の改善を確認してください。",
@@ -252,23 +266,43 @@ def build_remediation_plan(
     else:
         headline = "軽微な改善計画を作成しました"
         summary = "レビュー指摘のうち、文章品質や補足説明の改善候補を整理しています。"
+    if is_code_analysis:
+        if high_count:
+            headline = "コード解析結果から修正チェックリストを作成しました"
+            summary = f"高重要度 {high_count} 件を最優先にし、中重要度 {medium_count} 件は次に修正してください。"
+        elif medium_count:
+            headline = "コード解析結果から確認チェックリストを作成しました"
+            summary = f"中重要度 {medium_count} 件を、関数・処理単位で順に確認してください。"
+        else:
+            headline = "軽微なコード改善チェックリストを作成しました"
+            summary = "低重要度のコード改善候補を整理しています。"
 
     return RemediationPlan(
         headline=headline,
         summary=summary,
         items=tuple(items),
-        re_review_steps=_build_re_review_steps(items),
+        re_review_steps=_build_code_re_review_steps(items)
+        if is_code_analysis
+        else _build_re_review_steps(items),
     )
 
 
-def _item_from_issue(issue: ReviewIssue) -> RemediationItem:
+def _item_from_issue(issue: ReviewIssue, *, code_analysis: bool = False) -> RemediationItem:
     problem = issue.issue or issue.details or issue.title
     fix_policy = issue.recommendation or "指摘箇所に、判断根拠・設計方針・完了条件を追記してください。"
     target_section = issue.section or "該当箇所"
-    re_review_condition = _re_review_condition_for_issue(issue, target_section)
+    re_review_condition = (
+        _code_re_review_condition_for_issue(issue, target_section)
+        if code_analysis
+        else _re_review_condition_for_issue(issue, target_section)
+    )
     current_state = _resolve_current_state(issue)
     impact = issue.impact or "未対応時の影響を記載してください。"
-    completion_condition = "読み手が設計判断、根拠、運用時の判断基準を追えること。"
+    completion_condition = (
+        "対象コードまたは設定に修正が反映され、同じ静的解析観点で再指摘されないこと。"
+        if code_analysis
+        else "読み手が設計判断、根拠、運用時の判断基準を追えること。"
+    )
     return RemediationItem(
         item_id=issue.issue_id or _fallback_issue_id(issue),
         source_type="review_issue",
@@ -278,7 +312,9 @@ def _item_from_issue(issue: ReviewIssue) -> RemediationItem:
         target_section=target_section,
         problem=problem,
         fix_policy=fix_policy,
-        template=_template_for_issue(issue, fix_policy, impact),
+        template=_code_fix_template_for_issue(issue, fix_policy, impact)
+        if code_analysis
+        else _template_for_issue(issue, fix_policy, impact),
         re_review_scope=f"{issue.source_document or '対象文書'} / {target_section}",
         re_review_condition=re_review_condition,
         effort=_effort_for_severity(issue.severity),
@@ -338,6 +374,28 @@ def _re_review_condition_for_issue(issue: ReviewIssue, target_section: str) -> s
         )
     return (
         f"「{target_section}」の軽微修正後、表記ゆれや参照漏れがないかセルフチェックしてください。"
+    )
+
+
+def _code_re_review_condition_for_issue(issue: ReviewIssue, target_section: str) -> str:
+    title = issue.title or "対象指摘"
+    document = issue.source_document or "対象コード"
+    if issue.severity == "high":
+        return (
+            f"「{document}」の該当処理を修正後、同じファイルまたは該当差分を再アップロードし、"
+            f"コード解析で「{title}」が再検出されないことを確認してください。"
+        )
+    if issue.re_review_required:
+        return (
+            f"「{document}」の該当差分を再アップロードし、"
+            f"「{title}」の観点が解消しているか確認してください。"
+        )
+    if issue.severity == "medium":
+        return (
+            f"「{document}」の修正差分を確認し、同じ処理・関数に同種のリスクが残る場合だけ再解析してください。"
+        )
+    return (
+        f"「{document}」の軽微修正後、表記ゆれ・ログ・コメント・例外処理の整合だけセルフチェックしてください。"
     )
 
 
@@ -440,6 +498,38 @@ def _template_for_issue(issue: ReviewIssue, fix_policy: str, impact: str) -> str
     )
 
 
+def _code_fix_template_for_issue(issue: ReviewIssue, fix_policy: str, impact: str) -> str:
+    section = issue.section or "該当箇所"
+    title = issue.title or "コード解析指摘"
+    current = _resolve_current_state(issue)
+    normalized_fix = _normalize_sentence(fix_policy) or "対象コードに安全な修正を反映してください。"
+    normalized_impact = _normalize_sentence(impact) or "未対応時の運用影響を確認してください。"
+    return "\n".join(
+        [
+            f"### コード修正メモ: {section}",
+            "",
+            f"対象指摘: {title}",
+            "",
+            "#### 現状",
+            current,
+            "",
+            "#### 修正方針",
+            normalized_fix,
+            "",
+            "#### 確認観点",
+            "- 対象処理・関数に修正が反映されていること。",
+            "- タイムアウト、例外処理、認証情報、外部通信、破壊的操作、ログ出力の観点で副作用がないこと。",
+            "- 設定値を追加する場合は、デフォルト値、単位、異常時の挙動が分かること。",
+            "",
+            "#### 未対応時の影響",
+            normalized_impact,
+            "",
+            "#### 再解析条件",
+            "修正後の対象ファイルまたは差分を再アップロードし、同じ指摘が再検出されないことを確認する。",
+        ]
+    )
+
+
 def _template_for_structure_finding(finding: StructureFinding) -> str:
     if finding.suggested_content:
         return finding.suggested_content
@@ -507,6 +597,37 @@ def _build_re_review_steps(items: Iterable[RemediationItem]) -> tuple[ReReviewSt
             "完了確認",
             "修正後の文書で構成チェック、概要レビュー、深堀候補が矛盾していないか確認します。",
             "リリース前または上長確認前",
+        )
+    )
+    return tuple(steps)
+
+
+def _build_code_re_review_steps(items: Iterable[RemediationItem]) -> tuple[ReReviewStep, ...]:
+    item_list = list(items)
+    high = [item for item in item_list if item.severity == "high"]
+    medium = [item for item in item_list if item.severity == "medium"]
+    steps: list[ReReviewStep] = []
+    if high:
+        steps.append(
+            ReReviewStep(
+                "必須再解析",
+                "高重要度の修正後、対象コードまたは該当差分を再アップロードして同じリスクが残らないか確認します。",
+                f"高重要度 {len(high)} 件のコード修正が完了したとき",
+            )
+        )
+    if medium:
+        steps.append(
+            ReReviewStep(
+                "差分確認",
+                "中重要度の修正は、該当処理・関数の差分を中心に確認します。",
+                f"中重要度 {len(medium)} 件のコード修正が完了したとき",
+            )
+        )
+    steps.append(
+        ReReviewStep(
+            "動作確認",
+            "静的レビューで見える範囲に加え、テスト実行、ログ確認、異常系確認を実施します。",
+            "修正をリリースまたは運用投入する前",
         )
     )
     return tuple(steps)

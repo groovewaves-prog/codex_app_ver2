@@ -53,6 +53,15 @@ class RemediationPlanTests(unittest.TestCase):
             prompt_preview="",
         )
 
+    def _source_code_review_with_issues(self, *issues: ReviewIssue) -> ReviewResult:
+        return ReviewResult(
+            summary="summary",
+            issues=list(issues),
+            provider="mock",
+            prompt_preview="",
+            document_profile="source_code",
+        )
+
     def test_remediation_item_origin_defaults_to_initial(self) -> None:
         item = self._sample_item()
 
@@ -197,6 +206,63 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertNotIn("- 現状:", template)
         self.assertNotIn("- 問題点:", template)
         self.assertNotIn("- 修正方針:", template)
+
+    def test_source_code_plan_uses_code_fix_checklist_not_document_draft(self) -> None:
+        review = self._source_code_review_with_issues(
+            self._issue(
+                title="HTTPリクエストにおけるタイムアウト未設定",
+                issue_id="SC-001",
+                source_document="get_mails.py",
+                section="webapi",
+                current_state="urllib.request.urlopen(req) に timeout が指定されていない。",
+                issue="ネットワーク停止時に処理がハングする。",
+                recommendation="urllib.request.urlopen(req, timeout=CONFIG.API_TIMEOUT) のようにタイムアウトを設定する。",
+                impact="メール受信通知が停止する。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+        item = plan.items[0]
+
+        self.assertIn("コード解析結果", plan.headline)
+        self.assertIn("コード修正メモ", item.template)
+        self.assertIn("確認観点", item.template)
+        self.assertIn("timeout=CONFIG.API_TIMEOUT", item.template)
+        self.assertIn("再アップロード", item.re_review_condition)
+        self.assertIn("必須再解析", [step.label for step in plan.re_review_steps])
+        self.assertNotIn("文書追記案", item.template)
+        self.assertNotIn("該当章", item.template)
+        self.assertNotIn("構成チェック", " ".join(step.detail for step in plan.re_review_steps))
+
+    def test_source_code_plan_ignores_structure_findings_even_if_passed(self) -> None:
+        review = self._source_code_review_with_issues(
+            self._issue(
+                title="広すぎる例外捕捉",
+                issue_id="SC-002",
+                source_document="script.py",
+                section="main",
+            )
+        )
+        structure = StructureCheckResult(
+            document_profile="design",
+            document_count=1,
+            detected_chapter_count=0,
+            findings=(
+                StructureFinding(
+                    kind="required_item_gap",
+                    severity="medium",
+                    item_name="冒頭の目的記載",
+                    message="文書冒頭に目的がありません。",
+                    source_document="文書全体",
+                ),
+            )
+        )
+
+        plan = build_remediation_plan(review, structure)
+
+        self.assertEqual(len(plan.items), 1)
+        self.assertEqual(plan.items[0].source_type, "review_issue")
+        self.assertNotIn("冒頭の目的記載", plan.to_dict()["items"][0]["title"])
 
     def test_extract_current_state_from_details_supports_multiple_patterns(self) -> None:
         self.assertEqual(

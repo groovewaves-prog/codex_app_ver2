@@ -665,6 +665,9 @@ class HttpLlmReviewProvider(ReviewProvider):
         # own summary; fall back to an explicit Japanese notice when absent.
         # B2: extract structured summary too; assign profile-based issue IDs.
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        issues = _source_code_static_fallback_if_empty(
+            issues, documents, classification.document_profile
+        )
         chapter_overviews = _parse_chapter_overviews(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         # Phase 7 (2026-05-08): 一段目では checklist_results / missing_chapters は
@@ -885,6 +888,9 @@ class GeminiApiReviewProvider(ReviewProvider):
                 "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
             )
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        issues = _source_code_static_fallback_if_empty(
+            issues, documents, classification.document_profile
+        )
         chapter_overviews = _parse_chapter_overviews(content, documents)
         _assign_issue_ids(issues, classification.document_profile)
         # Phase 7 (2026-05-08): 一段目では checklist_results / missing_chapters は
@@ -973,6 +979,9 @@ class GeminiApiReviewProvider(ReviewProvider):
                     )
                 # 1 文書のレビュー結果から issues を抽出
                 doc_summary, _struct, doc_issues = _parse_review_payload(content, [doc])
+                doc_issues = _source_code_static_fallback_if_empty(
+                    doc_issues, [doc], classification.document_profile
+                )
                 per_doc_chapter_overviews.extend(_parse_chapter_overviews(content, [doc]))
                 all_issues.extend(doc_issues)
                 if doc_summary:
@@ -2610,6 +2619,117 @@ def _has_document_update_list(text: str) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
+def _source_code_static_fallback_if_empty(
+    issues: list[ReviewIssue],
+    documents: list[SanitizedDocument],
+    document_profile: str,
+) -> list[ReviewIssue]:
+    """Add deterministic code findings when the LLM returned no issues.
+
+    Code/script reviews should not silently pass as "0 issues" when a provider
+    returns an empty JSON object. The fallback is intentionally conservative
+    and only runs for source_code reviews with no model findings.
+    """
+    if issues or document_profile != "source_code":
+        return issues
+    return _source_code_static_issues(documents)
+
+
+def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[ReviewIssue]:
+    issues: list[ReviewIssue] = []
+    for document in documents:
+        text = document.outbound_text or ""
+        lowered = text.lower()
+
+        if _has_hardcoded_secret(lowered):
+            issues.append(
+                ReviewIssue(
+                    severity="high",
+                    title="ハードコードされた認証情報の疑い",
+                    details="コード内にパスワード、トークン、秘密情報を直接埋め込んでいる可能性があります。",
+                    recommendation="秘密情報は環境変数または安全なシークレットストアへ移し、コードから除外してください。",
+                    source_document=document.name,
+                )
+            )
+
+        if _has_unprotected_command_execution(text):
+            issues.append(
+                ReviewIssue(
+                    severity="high",
+                    title="危険なコマンド実行の可能性",
+                    details="外部コマンド実行や評価系処理が、入力検証や安全対策なしに使われている可能性があります。",
+                    recommendation="引数の固定化、入力検証、shell経由実行の回避、実行権限の制限を検討してください。",
+                    source_document=document.name,
+                )
+            )
+
+        if _has_disabled_tls_verification(lowered):
+            issues.append(
+                ReviewIssue(
+                    severity="high",
+                    title="TLS/証明書検証を無効化している可能性",
+                    details="通信時のSSL/TLS検証を無効化する記述があり、中間者攻撃や誤接続を見逃すリスクがあります。",
+                    recommendation="検証無効化を避け、信頼済みCA、証明書配置、検証失敗時の停止条件を明記してください。",
+                    source_document=document.name,
+                )
+            )
+
+        if _has_network_call_without_timeout(lowered):
+            issues.append(
+                ReviewIssue(
+                    severity="medium",
+                    title="外部通信のタイムアウトが不明確",
+                    details="HTTP/API/SMTP等の外部通信がありますが、タイムアウトやリトライ上限が読み取れません。",
+                    recommendation="timeout、retry/backoff、失敗時の終了条件または通知方法を明示してください。",
+                    source_document=document.name,
+                )
+            )
+
+        if _has_destructive_operation_without_safety_guard(lowered):
+            issues.append(
+                ReviewIssue(
+                    severity="high",
+                    title="破壊的または運用影響の大きい処理に安全ガードが不足",
+                    details="再起動、削除、イベントクローズ、DB更新など運用影響の大きい操作に、dry-runや承認などの安全策が不足している可能性があります。",
+                    recommendation="dry-run、対象件数上限、事前確認、承認、ロールバック不可時の代替手段を追加してください。",
+                    source_document=document.name,
+                )
+            )
+
+        if _has_event_payload_logging(lowered):
+            issues.append(
+                ReviewIssue(
+                    severity="medium",
+                    title="入力イベントを丸ごとログ出力している",
+                    details="Lambdaイベント全体をログに出すと、メールアドレス、宛先、識別子、運用パラメータなどがCloudWatch Logsへ残る可能性があります。",
+                    recommendation="ログ出力は必要なキーだけに限定し、個人情報・秘密情報・大きな本文はマスクまたは省略してください。",
+                    source_document=document.name,
+                )
+            )
+
+        if _has_bare_except(lowered):
+            issues.append(
+                ReviewIssue(
+                    severity="medium",
+                    title="例外処理が広すぎる可能性",
+                    details="Exceptionを広く捕捉する箇所があり、障害原因の切り分けや異常終了条件が曖昧になる可能性があります。",
+                    recommendation="捕捉対象を具体化し、握りつぶす場合も通知・メトリクス・再試行可否を明確にしてください。",
+                    source_document=document.name,
+                )
+            )
+
+    return issues
+
+
+def _has_event_payload_logging(lowered_text: str) -> bool:
+    patterns = (
+        r"json\.dumps\s*\(\s*event\s*\)",
+        r"logger\.(?:info|debug|warning|error)\s*\([^)]*\bevent\b",
+        r"print\s*\([^)]*\bevent\b",
+    )
+    return any(re.search(pattern, lowered_text) for pattern in patterns)
+
+
 def _has_hardcoded_secret(text: str) -> bool:
     return bool(re.search(r"(?im)(password|passwd|token|secret|apikey|api_key)\s*[:=]\s*['\"][^'\"]+['\"]", text))
 
@@ -2712,4 +2832,4 @@ def _looks_like_sql_script(lowered_text: str) -> bool:
 
 
 def _has_bare_except(text: str) -> bool:
-    return bool(re.search(r"(?im)^\s*except\s*:\s*$", text))
+    return bool(re.search(r"(?im)^\s*except\s*(?::|exception\b)", text))

@@ -1049,6 +1049,67 @@ class SourceCodeHeuristicTests(unittest.TestCase):
         self.assertTrue(any("タイムアウト" in issue.title for issue in result.issues))
 
 
+class SourceCodeStaticFallbackTests(unittest.TestCase):
+    def test_source_code_empty_llm_result_gets_static_fallback(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        issues = _source_code_static_fallback_if_empty(
+            [],
+            [
+                _doc(
+                    name="lambda_function.py",
+                    text=(
+                        "import json\n"
+                        "import logging\n"
+                        "logger = logging.getLogger()\n"
+                        "def lambda_handler(event, context):\n"
+                        "    logger.info(json.dumps(event))\n"
+                        "    try:\n"
+                        "        return {'statusCode': 200}\n"
+                        "    except Exception as exc:\n"
+                        "        logger.error(str(exc))\n"
+                        "        return {'statusCode': 500}\n"
+                    ),
+                )
+            ],
+            "source_code",
+        )
+
+        titles = {issue.title for issue in issues}
+        self.assertIn("入力イベントを丸ごとログ出力している", titles)
+        self.assertIn("例外処理が広すぎる可能性", titles)
+
+    def test_source_code_static_fallback_does_not_override_model_issues(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        model_issue = ReviewIssue(
+            severity="low",
+            title="モデル由来の指摘",
+            details="details",
+            recommendation="recommendation",
+            source_document="lambda_function.py",
+        )
+        issues = _source_code_static_fallback_if_empty(
+            [model_issue],
+            [_doc(name="lambda_function.py", text="logger.info(json.dumps(event))")],
+            "source_code",
+        )
+
+        self.assertEqual(issues, [model_issue])
+
+    def test_static_fallback_is_source_code_only(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        issues = _source_code_static_fallback_if_empty(
+            [],
+            [_doc(name="runbook.md", text="logger.info(json.dumps(event))")],
+            "design",
+        )
+
+        self.assertEqual(issues, [])
+
+
 class NetworkConfigReviewTests(unittest.TestCase):
     def test_network_config_prompt_contains_machine_analysis(self) -> None:
         from secure_review.reviewer import build_prompt

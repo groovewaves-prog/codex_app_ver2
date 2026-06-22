@@ -2624,15 +2624,22 @@ def _source_code_static_fallback_if_empty(
     documents: list[SanitizedDocument],
     document_profile: str,
 ) -> list[ReviewIssue]:
-    """Add deterministic code findings when the LLM returned no issues.
+    """Add deterministic code findings when the LLM returned no actionable issues.
 
     Code/script reviews should not silently pass as "0 issues" when a provider
-    returns an empty JSON object. The fallback is intentionally conservative
-    and only runs for source_code reviews with no model findings.
+    returns an empty JSON object or only a parser/info notice. The fallback is
+    intentionally conservative and only runs for source_code reviews without
+    high/medium/low model findings.
     """
-    if issues or document_profile != "source_code":
+    if document_profile != "source_code" or _has_actionable_source_code_issue(issues):
         return issues
-    return _source_code_static_issues(documents)
+    fallback_issues = _source_code_static_issues(documents)
+    return fallback_issues or issues
+
+
+def _has_actionable_source_code_issue(issues: list[ReviewIssue]) -> bool:
+    actionable_severities = {"high", "medium", "low"}
+    return any((issue.severity or "").lower() in actionable_severities for issue in issues)
 
 
 def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[ReviewIssue]:

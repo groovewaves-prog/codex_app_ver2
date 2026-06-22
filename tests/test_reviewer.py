@@ -1098,6 +1098,44 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
 
         self.assertEqual(issues, [model_issue])
 
+    def test_source_code_parser_notice_still_gets_static_fallback(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        parse_notice = ReviewIssue(
+            severity="info",
+            title="LLM応答形式を解析できませんでした",
+            details="raw response",
+            recommendation="生レスポンスを確認してください。",
+            source_document="lambda_function.py",
+            issue_id="PARSE-001",
+        )
+        issues = _source_code_static_fallback_if_empty(
+            [parse_notice],
+            [
+                _doc(
+                    name="lambda_function.py",
+                    text=(
+                        "import json\n"
+                        "import logging\n"
+                        "logger = logging.getLogger()\n"
+                        "def lambda_handler(event, context):\n"
+                        "    logger.info(json.dumps(event))\n"
+                        "    try:\n"
+                        "        return {'statusCode': 200}\n"
+                        "    except Exception as exc:\n"
+                        "        logger.error(str(exc))\n"
+                    ),
+                )
+            ],
+            "source_code",
+        )
+
+        titles = {issue.title for issue in issues}
+        self.assertNotIn("LLM応答形式を解析できませんでした", titles)
+        self.assertIn("入力イベントを丸ごとログ出力している", titles)
+        self.assertIn("例外処理が広すぎる可能性", titles)
+
     def test_static_fallback_is_source_code_only(self) -> None:
         from secure_review.reviewer import _source_code_static_fallback_if_empty
 

@@ -8,6 +8,7 @@ Baseline commit: `eaf605a`.
 - Added deterministic evidence snippets for static code findings, including function name, approximate line number, and matched code pattern; secret-like assignments are redacted in evidence text.
 - Marked static code findings as `静的検出由来` instead of presenting them as ordinary first-pass LLM findings.
 - Replaced the empty-summary fallback for source-code reviews with an actionable code-analysis summary when findings exist.
+- Hardened source-code review filtering so LLM-only claims about syntax errors, truncated/missing source, missing implementation, or anonymization placeholder breakage are suppressed unless represented by deterministic local static findings.
 
 ### Code analysis mode — hide document-draft templates
 

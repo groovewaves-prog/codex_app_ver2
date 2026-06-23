@@ -287,10 +287,34 @@ def build_remediation_plan(
     )
 
 
+def _specific_code_target_from_evidence(evidence: str) -> str:
+    evidence = (evidence or "").strip()
+    if not evidence:
+        return ""
+    if evidence.startswith(("LLM指摘に基づく確認候補です", "静的根拠は自動特定できていません")):
+        return ""
+    if evidence.startswith("対象箇所:"):
+        return evidence.split(":", 1)[1].strip() or ""
+    if ":" in evidence:
+        candidate = evidence.split(":", 1)[0].strip()
+        if candidate and len(candidate) <= 80:
+            return candidate
+    if len(evidence) <= 80:
+        return evidence
+    return ""
+
+
+def _target_section_for_issue(issue: ReviewIssue, *, code_analysis: bool = False) -> str:
+    section = (issue.section or "").strip()
+    if code_analysis and section in {"", "該当箇所"}:
+        return _specific_code_target_from_evidence(_code_evidence_for_issue(issue)) or "コード全体"
+    return section or "該当箇所"
+
+
 def _item_from_issue(issue: ReviewIssue, *, code_analysis: bool = False) -> RemediationItem:
     problem = issue.issue or issue.details or issue.title
     fix_policy = issue.recommendation or "指摘箇所に、判断根拠・設計方針・完了条件を追記してください。"
-    target_section = issue.section or "該当箇所"
+    target_section = _target_section_for_issue(issue, code_analysis=code_analysis)
     re_review_condition = (
         _code_re_review_condition_for_issue(issue, target_section)
         if code_analysis

@@ -226,13 +226,38 @@ class RemediationPlanTests(unittest.TestCase):
 
         self.assertIn("コード解析結果", plan.headline)
         self.assertIn("コード修正メモ", item.template)
+        self.assertIn("#### 検出根拠", item.template)
+        self.assertIn("#### リスク", item.template)
+        self.assertIn("#### 推奨確認", item.template)
         self.assertIn("確認観点", item.template)
         self.assertIn("timeout=CONFIG.API_TIMEOUT", item.template)
         self.assertIn("再アップロード", item.re_review_condition)
         self.assertIn("必須再解析", [step.label for step in plan.re_review_steps])
         self.assertNotIn("文書追記案", item.template)
+        self.assertNotIn("#### 現状", item.template)
         self.assertNotIn("該当章", item.template)
         self.assertNotIn("構成チェック", " ".join(step.detail for step in plan.re_review_steps))
+
+    def test_source_code_plan_uses_actionable_code_evidence_fallback(self) -> None:
+        review = self._source_code_review_with_issues(
+            self._issue(
+                title="例外処理が広すぎる可能性",
+                issue_id="SC-002",
+                source_document="lambda_function.py",
+                section="lambda_handler 内 / 8行目付近",
+                current_state="",
+                issue="Exceptionを広く捕捉している。",
+                recommendation="捕捉対象と通知条件を具体化する。",
+                impact="原因切り分けが遅れる。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+        item = plan.items[0]
+
+        self.assertEqual(item.current_state, "対象箇所: lambda_handler 内 / 8行目付近")
+        self.assertIn("対象箇所: lambda_handler 内 / 8行目付近", item.template)
+        self.assertNotIn("本文から現状の記載を自動抽出できませんでした", item.template)
 
     def test_source_code_plan_ignores_structure_findings_even_if_passed(self) -> None:
         review = self._source_code_review_with_issues(

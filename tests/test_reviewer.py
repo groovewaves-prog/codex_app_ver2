@@ -1146,6 +1146,63 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
         self.assertIn("入力イベントを丸ごとログ出力している", titles)
         self.assertIn("例外処理が広すぎる可能性", titles)
 
+    def test_source_code_static_fallback_attaches_evidence_and_origin(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        issues = _source_code_static_fallback_if_empty(
+            [],
+            [
+                _doc(
+                    name="lambda_function.py",
+                    text=(
+                        "import json\n"
+                        "import logging\n"
+                        "logger = logging.getLogger()\n"
+                        "def lambda_handler(event, context):\n"
+                        "    logger.info(json.dumps(event))\n"
+                        "    try:\n"
+                        "        return {'statusCode': 200}\n"
+                        "    except Exception as exc:\n"
+                        "        logger.error(str(exc))\n"
+                    ),
+                )
+            ],
+            "source_code",
+        )
+
+        by_title = {issue.title: issue for issue in issues}
+        logging_issue = by_title["入力イベントを丸ごとログ出力している"]
+        broad_except_issue = by_title["例外処理が広すぎる可能性"]
+
+        self.assertEqual(logging_issue.origin, "static_code_analysis")
+        self.assertIn("lambda_handler 内", logging_issue.current_state)
+        self.assertIn("logger.info", logging_issue.current_state)
+        self.assertIn("lambda_handler 内", logging_issue.section)
+        self.assertIn("CloudWatch Logs", logging_issue.impact)
+        self.assertIn("except Exception", broad_except_issue.current_state)
+
+    def test_source_code_summary_fallback_is_actionable_when_summary_is_empty(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _review_summary_or_fallback
+
+        summary = _review_summary_or_fallback(
+            "",
+            [
+                ReviewIssue(
+                    severity="medium",
+                    title="入力イベントを丸ごとログ出力している",
+                    details="details",
+                    recommendation="recommendation",
+                    source_document="lambda_function.py",
+                )
+            ],
+            "source_code",
+        )
+
+        self.assertIn("コード解析で", summary)
+        self.assertIn("確認候補", summary)
+        self.assertNotIn("LLM がレビューサマリを返しませんでした", summary)
+
     def test_source_code_static_fallback_does_not_override_model_issues(self) -> None:
         from secure_review.models import ReviewIssue
         from secure_review.reviewer import _source_code_static_fallback_if_empty

@@ -91,10 +91,26 @@ class Step4UxStaticTests(unittest.TestCase):
     def test_step4_hides_document_draft_for_code_analysis_mode(self) -> None:
         self.assertIn("def _is_code_analysis_review", self.app_source)
         self.assertIn('mode.mode_id == "code_analysis"', self.app_source)
-        self.assertIn("show_document_draft = not _is_code_analysis_review", self.app_source)
+        self.assertIn("show_document_draft = not code_analysis", self.app_source)
         issue_card_body = self._function_body("_render_step4_issue_card")
         self.assertIn("show_document_draft: bool = True", issue_card_body)
         self.assertIn("if show_document_draft:", issue_card_body)
+
+    def test_step4_uses_code_specific_issue_fields(self) -> None:
+        body = self._function_body("_step4_item_fields")
+
+        self.assertIn("code_analysis: bool = False", body)
+        self.assertIn('"検出根拠"', body)
+        self.assertIn('"該当箇所"', body)
+        self.assertIn('"リスク"', body)
+        self.assertIn('"推奨確認"', body)
+        self.assertIn('"運用影響"', body)
+        self.assertIn('"再解析条件"', body)
+
+    def test_step4_code_analysis_uses_code_json_label_and_static_origin(self) -> None:
+        self.assertIn("コード確認メモ JSON", self.app_source)
+        self.assertIn("静的検出由来", self.app_source)
+        self.assertIn("検出根拠・リスク・推奨確認・再解析条件", self.app_source)
 
     def test_step4_excludes_structure_findings_from_code_analysis_plan(self) -> None:
         rebuild_body = self._function_body("_rebuild_remediation_plan_for_session")
@@ -104,7 +120,7 @@ class Step4UxStaticTests(unittest.TestCase):
         self.assertIn("effective_structure_result", rebuild_body)
 
     def test_g2_issue_cards_have_chapter_reanalysis_entry(self) -> None:
-        self.assertIn("matched_chapter = _find_chapter_for_remediation_item", self.app_source)
+        self.assertIn("_find_chapter_for_remediation_item(item, preview_docs)", self.app_source)
         self.assertIn("if matched_chapter is not None:", self.app_source)
         self.assertIn("step4_issue_deepdive_", self.app_source)
         self.assertIn('st.button("🔬 章を再分析"', self.app_source)

@@ -296,8 +296,16 @@ def _item_from_issue(issue: ReviewIssue, *, code_analysis: bool = False) -> Reme
         if code_analysis
         else _re_review_condition_for_issue(issue, target_section)
     )
-    current_state = _resolve_current_state(issue)
-    impact = issue.impact or "未対応時の影響を記載してください。"
+    current_state = (
+        _code_evidence_for_issue(issue)
+        if code_analysis
+        else _resolve_current_state(issue)
+    )
+    impact = issue.impact or (
+        "未対応時の実行時影響、運用影響、監査影響を確認してください。"
+        if code_analysis
+        else "未対応時の影響を記載してください。"
+    )
     completion_condition = (
         "対象コードまたは設定に修正が反映され、同じ静的解析観点で再指摘されないこと。"
         if code_analysis
@@ -462,6 +470,22 @@ def _resolve_current_state(issue: ReviewIssue) -> str:
     return _CURRENT_STATE_FALLBACK
 
 
+def _code_evidence_for_issue(issue: ReviewIssue) -> str:
+    if issue.current_state and issue.current_state.strip():
+        return issue.current_state.strip()
+    section = (issue.section or "").strip()
+    if section and section != "該当箇所":
+        return f"対象箇所: {section}"
+    if issue.details and issue.details.strip():
+        return (
+            "LLM指摘に基づく確認候補です。静的な行番号までは特定できていないため、"
+            "以下のリスク説明に該当する処理・ログ・例外処理をコード上で確認してください。"
+        )
+    return (
+        "静的根拠は自動特定できていません。対象ファイル内で同種の処理があるか確認してください。"
+    )
+
+
 def _normalize_sentence(value: str) -> str:
     text = re.sub(r"\s+", " ", _coerce_text(value)).strip()
     if not text:
@@ -501,7 +525,8 @@ def _template_for_issue(issue: ReviewIssue, fix_policy: str, impact: str) -> str
 def _code_fix_template_for_issue(issue: ReviewIssue, fix_policy: str, impact: str) -> str:
     section = issue.section or "該当箇所"
     title = issue.title or "コード解析指摘"
-    current = _resolve_current_state(issue)
+    evidence = _code_evidence_for_issue(issue)
+    problem = issue.issue or issue.details or title
     normalized_fix = _normalize_sentence(fix_policy) or "対象コードに安全な修正を反映してください。"
     normalized_impact = _normalize_sentence(impact) or "未対応時の運用影響を確認してください。"
     return "\n".join(
@@ -510,10 +535,13 @@ def _code_fix_template_for_issue(issue: ReviewIssue, fix_policy: str, impact: st
             "",
             f"対象指摘: {title}",
             "",
-            "#### 現状",
-            current,
+            "#### 検出根拠",
+            evidence,
             "",
-            "#### 修正方針",
+            "#### リスク",
+            _normalize_sentence(problem),
+            "",
+            "#### 推奨確認",
             normalized_fix,
             "",
             "#### 確認観点",
@@ -521,7 +549,7 @@ def _code_fix_template_for_issue(issue: ReviewIssue, fix_policy: str, impact: st
             "- タイムアウト、例外処理、認証情報、外部通信、破壊的操作、ログ出力の観点で副作用がないこと。",
             "- 設定値を追加する場合は、デフォルト値、単位、異常時の挙動が分かること。",
             "",
-            "#### 未対応時の影響",
+            "#### 運用影響",
             normalized_impact,
             "",
             "#### 再解析条件",

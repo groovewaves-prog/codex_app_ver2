@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest.mock import patch
 
-from secure_review.models import ChapterOverview, SanitizedDocument
+from secure_review.models import ChapterOverview, SanitizationRecord, SanitizedDocument
 from secure_review.network_guard import UpstreamHttpError
 from secure_review.reviewer import (
     GeminiApiReviewProvider,
@@ -1216,6 +1216,45 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
         self.assertIn("2行目付近", issues[0].current_state)
         self.assertIn("Lambda", issues[0].impact)
 
+    def test_source_code_static_fallback_does_not_parse_sanitized_placeholders_as_python(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        doc = _doc(
+            name="lambda_function.py",
+            text="response = s3.get_object(Bucket=BOUNCE_BUCKET, Key=[SECRET_002]\n",
+        )
+        doc.replacements.append(
+            SanitizationRecord(
+                placeholder="[SECRET_002]",
+                original='"private/key.csv"',
+                category="secret",
+            )
+        )
+
+        issues = _source_code_static_fallback_if_empty([], [doc], "source_code")
+
+        self.assertNotIn("Python構文エラーを静的検出", {issue.title for issue in issues})
+
+    def test_static_fact_filter_removes_implementation_missing_variants(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="high",
+            title="コード全体・主要関数の実装欠落",
+            details="後半（Phase 2,3）の具体的ロジックが完全に欠落しており、動作不可能です。",
+            recommendation="欠落している実装を追加してください。",
+            source_document="lambda_function.py",
+        )
+
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return 1\n")],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [])
+
     def test_source_code_static_fallback_attaches_evidence_and_origin(self) -> None:
         from secure_review.reviewer import _source_code_static_fallback_if_empty
 
@@ -1294,7 +1333,7 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
         self.assertIn("コード解析で", summary)
         self.assertNotIn("途中で切れて", summary)
 
-    def test_source_code_static_fallback_does_not_override_model_issues(self) -> None:
+    def test_source_code_static_fallback_merges_static_findings_with_model_issues(self) -> None:
         from secure_review.models import ReviewIssue
         from secure_review.reviewer import _source_code_static_fallback_if_empty
 
@@ -1311,7 +1350,9 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
             "source_code",
         )
 
-        self.assertEqual(issues, [model_issue])
+        titles = {issue.title for issue in issues}
+        self.assertIn("モデル由来の指摘", titles)
+        self.assertIn("入力イベントを丸ごとログ出力している", titles)
 
     def test_source_code_parser_notice_still_gets_static_fallback(self) -> None:
         from secure_review.models import ReviewIssue

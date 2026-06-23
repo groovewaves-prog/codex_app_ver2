@@ -9,6 +9,7 @@ Baseline commit: `eaf605a`.
 - Marked static code findings as `静的検出由来` instead of presenting them as ordinary first-pass LLM findings.
 - Replaced the empty-summary fallback for source-code reviews with an actionable code-analysis summary when findings exist.
 - Hardened source-code review filtering so LLM-only claims about syntax errors, truncated/missing source, missing implementation, or anonymization placeholder breakage are suppressed unless represented by deterministic local static findings.
+- Reworked source-code review anchoring so deterministic local findings are always merged into code-analysis results, syntax checks are skipped for anonymized placeholder-mutated code, and broad LLM claims about missing implementation / incomplete later phases are filtered out.
 
 ### Code analysis mode — hide document-draft templates
 

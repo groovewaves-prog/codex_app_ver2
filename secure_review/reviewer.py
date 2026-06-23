@@ -2642,28 +2642,26 @@ def _source_code_static_fallback_if_empty(
     documents: list[SanitizedDocument],
     document_profile: str,
 ) -> list[ReviewIssue]:
-    """Add deterministic code findings when the LLM returned no actionable issues.
+    """Merge deterministic code findings into source-code reviews.
 
-    Code/script reviews should not silently pass as "0 issues" when a provider
-    returns an empty JSON object or only a parser/info notice. The fallback is
-    intentionally conservative and only runs for source_code reviews without
-    high/medium/low model findings.
+    Code/script reviews should be anchored by local static evidence. LLM
+    findings are still useful as advisory candidates, but deterministic local
+    checks must not disappear just because the model also returned issues.
     """
     if document_profile != "source_code":
         return issues
-    syntax_issues = _source_code_static_syntax_issues(documents)
-    if syntax_issues:
-        return _dedupe_source_code_static_issues([*syntax_issues, *issues])
-    if _has_actionable_source_code_issue(issues):
-        return issues
-    fallback_issues = _source_code_static_issues(documents)
-    return fallback_issues or issues
+    static_issues = _source_code_static_issues(documents)
+    if static_issues:
+        if not _has_actionable_source_code_issue(issues):
+            return _dedupe_source_code_static_issues(static_issues)
+        return _dedupe_source_code_static_issues([*static_issues, *issues])
+    return issues
 
 
 def _source_code_static_syntax_issues(documents: list[SanitizedDocument]) -> list[ReviewIssue]:
     issues: list[ReviewIssue] = []
     for document in documents:
-        syntax_error = _python_syntax_error(document.outbound_text or "")
+        syntax_error = _python_syntax_error_for_document(document)
         if syntax_error is None:
             continue
         evidence = _syntax_error_evidence(document.outbound_text or "", syntax_error)
@@ -2725,13 +2723,20 @@ def _filter_source_code_issues_by_static_facts(
 
 def _source_code_static_facts(document: SanitizedDocument) -> dict[str, object]:
     text = document.outbound_text or ""
+    if not _source_code_text_is_safe_for_syntax_parse(document):
+        return {
+            "syntax_ok": None,
+            "syntax_error": None,
+            "syntax_untrusted": True,
+            "defined_functions": _defined_functions_by_regex(text),
+        }
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
         return {
             "syntax_ok": False,
             "syntax_error": exc,
-            "defined_functions": set(),
+            "defined_functions": _defined_functions_by_regex(text),
         }
     defined_functions = {
         node.name
@@ -2802,7 +2807,20 @@ def _claims_source_missing_or_incomplete(issue_text: str) -> bool:
         "ソースコードの欠落",
         "コードの欠落",
         "主要関数の定義欠落",
+        "主要関数の実装欠落",
+        "実装欠落",
+        "実装が欠落",
+        "実装が確認でき",
+        "具体的ロジック",
+        "完全に欠落",
         "実装不備",
+        "後半",
+        "phase 2",
+        "phase 3",
+        "動作不可能",
+        "動作しない",
+        "動作しません",
+        "プログラムとして成立",
         "途中で切れて",
         "途中で終了",
         "コードが終了",
@@ -2939,7 +2957,7 @@ def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[Revie
     for document in documents:
         text = document.outbound_text or ""
         lowered = text.lower()
-        syntax_error = _python_syntax_error(text)
+        syntax_error = _python_syntax_error_for_document(document)
         if syntax_error is not None:
             evidence = _syntax_error_evidence(text, syntax_error)
             issues.append(
@@ -3082,12 +3100,41 @@ def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[Revie
     return issues
 
 
+_SANITIZED_CODE_PLACEHOLDER_RE = re.compile(
+    r"\[(?:SECRET|MASK|PERSON|EMAIL|PHONE|ORG|ADDR|IP|URL|ACCOUNT|ID)_[0-9]{2,}\]"
+)
+
+
+def _source_code_text_is_safe_for_syntax_parse(document: SanitizedDocument) -> bool:
+    text = document.outbound_text or ""
+    if document.replacements:
+        return False
+    return _SANITIZED_CODE_PLACEHOLDER_RE.search(text) is None
+
+
+def _python_syntax_error_for_document(document: SanitizedDocument) -> SyntaxError | None:
+    if not _source_code_text_is_safe_for_syntax_parse(document):
+        return None
+    return _python_syntax_error(document.outbound_text or "")
+
+
 def _python_syntax_error(text: str) -> SyntaxError | None:
     try:
         ast.parse(text or "")
     except SyntaxError as exc:
         return exc
     return None
+
+
+def _defined_functions_by_regex(text: str) -> set[str]:
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r"^\s*(?:async\s+def|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            text or "",
+            flags=re.MULTILINE,
+        )
+    }
 
 
 def _syntax_error_evidence(text: str, exc: SyntaxError) -> str:

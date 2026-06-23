@@ -2,6 +2,13 @@
 
 Baseline commit: `eaf605a`.
 
+### Code analysis mode — evidence-first review cards
+
+- Changed Step 4 code-analysis cards from document-review labels (`現状` / `修正方針`) to code-review labels: `検出根拠`, `該当箇所`, `リスク`, `推奨確認`, `運用影響`, and `再解析条件`.
+- Added deterministic evidence snippets for static code findings, including function name, approximate line number, and matched code pattern; secret-like assignments are redacted in evidence text.
+- Marked static code findings as `静的検出由来` instead of presenting them as ordinary first-pass LLM findings.
+- Replaced the empty-summary fallback for source-code reviews with an actionable code-analysis summary when findings exist.
+
 ### Code analysis mode — hide document-draft templates
 
 - Step 4 now hides the `文書追記案` copy block when the uploaded artifacts are detected as `コード解析モード`; code/script reviews focus on findings, risks, and code-level remediation instead of document insertion text.

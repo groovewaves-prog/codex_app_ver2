@@ -688,7 +688,11 @@ class HttpLlmReviewProvider(ReviewProvider):
             # ファイル全体モードでは取得する (LLM が返せば反映)
             if chapter is None:
                 missing_chapters = _parse_missing_chapters(content)
-        summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
+        summary = _review_summary_or_fallback(
+            model_summary,
+            issues,
+            classification.document_profile,
+        )
         return _build_review_result(
             summary=summary,
             summary_structured=summary_struct,
@@ -914,7 +918,11 @@ class GeminiApiReviewProvider(ReviewProvider):
             # ファイル全体モードでは取得する (LLM が返せば反映)
             if chapter is None:
                 missing_chapters = _parse_missing_chapters(content)
-        summary = model_summary or "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
+        summary = _review_summary_or_fallback(
+            model_summary,
+            issues,
+            classification.document_profile,
+        )
         return _build_review_result(
             summary=summary,
             summary_structured=summary_struct,
@@ -2764,9 +2772,67 @@ def _claims_missing_function_definition(issue_text: str) -> bool:
     )
 
 
+def _review_summary_or_fallback(
+    model_summary: str,
+    issues: list[ReviewIssue],
+    document_profile: str,
+) -> str:
+    if model_summary:
+        return model_summary
+    if document_profile == "source_code" and _has_actionable_source_code_issue(issues):
+        high_count = sum(1 for issue in issues if issue.severity == "high")
+        medium_count = sum(1 for issue in issues if issue.severity == "medium")
+        severity_parts = []
+        if high_count:
+            severity_parts.append(f"高重要度 {high_count} 件")
+        if medium_count:
+            severity_parts.append(f"中重要度 {medium_count} 件")
+        severity_text = "、".join(severity_parts) or f"{len(issues)} 件"
+        return (
+            f"コード解析で {severity_text} の確認候補を検出しました。"
+            "根拠、リスク、推奨確認をカードで確認してください。"
+        )
+    return "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
+
+
 def _has_actionable_source_code_issue(issues: list[ReviewIssue]) -> bool:
     actionable_severities = {"high", "medium", "low"}
     return any((issue.severity or "").lower() in actionable_severities for issue in issues)
+
+
+_EVENT_LOGGING_PATTERNS = (
+    r"json\.dumps\s*\(\s*event\s*\)",
+    r"logger\.(?:info|debug|warning|error)\s*\([^)]*\bevent\b",
+    r"print\s*\([^)]*\bevent\b",
+)
+
+_NETWORK_CALL_PATTERNS = (
+    r"\burlopen\s*\(",
+    r"\brequests\.(?:get|post)\s*\(",
+    r"\binvoke-restmethod\b",
+    r"\binvoke-webrequest\b",
+    r"\bcurl\b",
+    r"\bwget\b",
+    r"\bmailx\b",
+    r"\bsend-mailmessage\b",
+)
+
+_COMMAND_EXECUTION_PATTERNS = (
+    r"\bos\.system\s*\(",
+    r"\bsubprocess\.(?:run|popen)\s*\(",
+    r"\binvoke-expression\b",
+    r"\biex\b",
+    r"\beval\s*\(",
+    r"\bexec\s*\(",
+)
+
+_BROAD_EXCEPTION_PATTERNS = (
+    r"^\s*except\s*(?::|Exception\b)",
+)
+
+_SECRET_ASSIGNMENT_PATTERNS = (
+    r"(?i)(password|passwd|token|secret|apikey|api_key)\s*[:=]\s*['\"][^'\"]+['\"]",
+)
 
 
 def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[ReviewIssue]:
@@ -2776,92 +2842,201 @@ def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[Revie
         lowered = text.lower()
 
         if _has_hardcoded_secret(lowered):
+            details = "コード内にパスワード、トークン、秘密情報を直接埋め込んでいる可能性があります。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="high",
                     title="ハードコードされた認証情報の疑い",
-                    details="コード内にパスワード、トークン、秘密情報を直接埋め込んでいる可能性があります。",
+                    details=details,
                     recommendation="秘密情報は環境変数または安全なシークレットストアへ移し、コードから除外してください。",
-                    source_document=document.name,
+                    impact="リポジトリ、ログ、共有ファイル経由で認証情報が漏えいする可能性があります。",
+                    evidence=_source_code_issue_evidence(
+                        text,
+                        _SECRET_ASSIGNMENT_PATTERNS,
+                        redact=True,
+                    ),
                 )
             )
 
         if _has_unprotected_command_execution(text):
+            details = "外部コマンド実行や評価系処理が、入力検証や安全対策なしに使われている可能性があります。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="high",
                     title="危険なコマンド実行の可能性",
-                    details="外部コマンド実行や評価系処理が、入力検証や安全対策なしに使われている可能性があります。",
-                    recommendation="引数の固定化、入力検証、shell経由実行の回避、実行権限の制限を検討してください。",
-                    source_document=document.name,
+                    details=details,
+                    recommendation="引数の固定化、入力検証、shell経由実行の回避、実行権限の制限を確認してください。",
+                    impact="入力値や環境差分によって、意図しないコマンド実行・権限逸脱・破壊的操作につながる可能性があります。",
+                    evidence=_source_code_issue_evidence(text, _COMMAND_EXECUTION_PATTERNS),
                 )
             )
 
         if _has_disabled_tls_verification(lowered):
+            details = "通信時のSSL/TLS検証を無効化する記述があり、中間者攻撃や誤接続を見逃すリスクがあります。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="high",
                     title="TLS/証明書検証を無効化している可能性",
-                    details="通信時のSSL/TLS検証を無効化する記述があり、中間者攻撃や誤接続を見逃すリスクがあります。",
-                    recommendation="検証無効化を避け、信頼済みCA、証明書配置、検証失敗時の停止条件を明記してください。",
-                    source_document=document.name,
+                    details=details,
+                    recommendation="検証無効化を避け、信頼済みCA、証明書配置、検証失敗時の停止条件を確認してください。",
+                    impact="外部接続先のなりすましや誤接続を検知できず、機微情報の送信や誤処理につながる可能性があります。",
+                    evidence=_source_code_issue_evidence(
+                        text,
+                        (
+                            r"verify\s*=\s*false",
+                            r"ssl_verify\s*=\s*false",
+                            r"rejectunauthorized\s*:\s*false",
+                            r"check_hostname\s*=\s*false",
+                            r"cert_reqs\s*=\s*none",
+                            r"trust_all_cert",
+                        ),
+                    ),
                 )
             )
 
         if _has_network_call_without_timeout(lowered):
+            details = "HTTP/API/SMTP等の外部通信がありますが、タイムアウトやリトライ上限が読み取れません。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="medium",
                     title="外部通信のタイムアウトが不明確",
-                    details="HTTP/API/SMTP等の外部通信がありますが、タイムアウトやリトライ上限が読み取れません。",
-                    recommendation="timeout、retry/backoff、失敗時の終了条件または通知方法を明示してください。",
-                    source_document=document.name,
+                    details=details,
+                    recommendation="timeout、retry/backoff、失敗時の終了条件または通知方法を確認してください。",
+                    impact="外部サービス遅延時に処理が長時間滞留し、Lambdaのタイムアウト、再試行増加、通知遅延につながる可能性があります。",
+                    evidence=_source_code_issue_evidence(text, _NETWORK_CALL_PATTERNS),
                 )
             )
 
         if _has_destructive_operation_without_safety_guard(lowered):
+            details = "再起動、削除、イベントクローズ、DB更新など運用影響の大きい操作に、dry-runや承認などの安全策が不足している可能性があります。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="high",
                     title="破壊的または運用影響の大きい処理に安全ガードが不足",
-                    details="再起動、削除、イベントクローズ、DB更新など運用影響の大きい操作に、dry-runや承認などの安全策が不足している可能性があります。",
-                    recommendation="dry-run、対象件数上限、事前確認、承認、ロールバック不可時の代替手段を追加してください。",
-                    source_document=document.name,
+                    details=details,
+                    recommendation="dry-run、対象件数上限、事前確認、承認、ロールバック不可時の代替手段を確認してください。",
+                    impact="誤対象や想定外件数に対して処理が実行されると、復旧困難な運用影響が発生する可能性があります。",
+                    evidence=_source_code_issue_evidence(
+                        text,
+                        (
+                            r"systemctl\s+restart",
+                            r"restart-service",
+                            r"event\.acknowledge",
+                            r"delete\s+from",
+                            r"drop\s+table",
+                            r"truncate\s+table",
+                            r"rm\s+-rf",
+                            r"remove-item",
+                            r"housekeeper_execute",
+                        ),
+                    ),
                 )
             )
 
         if _has_event_payload_logging(lowered):
+            details = "Lambdaイベント全体をログに出すと、メールアドレス、宛先、識別子、運用パラメータなどがCloudWatch Logsへ残る可能性があります。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="medium",
                     title="入力イベントを丸ごとログ出力している",
-                    details="Lambdaイベント全体をログに出すと、メールアドレス、宛先、識別子、運用パラメータなどがCloudWatch Logsへ残る可能性があります。",
+                    details=details,
                     recommendation="ログ出力は必要なキーだけに限定し、個人情報・秘密情報・大きな本文はマスクまたは省略してください。",
-                    source_document=document.name,
+                    impact="CloudWatch Logsに不要な個人情報・運用情報が残り、閲覧権限を持つ利用者へ広がる可能性があります。",
+                    evidence=_source_code_issue_evidence(text, _EVENT_LOGGING_PATTERNS),
                 )
             )
 
         if _has_bare_except(lowered):
+            details = "Exceptionを広く捕捉する箇所があり、障害原因の切り分けや異常終了条件が曖昧になる可能性があります。"
             issues.append(
-                ReviewIssue(
+                _source_code_static_issue(
+                    document=document,
                     severity="medium",
                     title="例外処理が広すぎる可能性",
-                    details="Exceptionを広く捕捉する箇所があり、障害原因の切り分けや異常終了条件が曖昧になる可能性があります。",
+                    details=details,
                     recommendation="捕捉対象を具体化し、握りつぶす場合も通知・メトリクス・再試行可否を明確にしてください。",
-                    source_document=document.name,
+                    impact="障害原因の分類、再試行要否、通知要否が曖昧になり、運用時の切り分けが遅れる可能性があります。",
+                    evidence=_source_code_issue_evidence(text, _BROAD_EXCEPTION_PATTERNS),
                 )
             )
 
     return issues
 
 
-def _has_event_payload_logging(lowered_text: str) -> bool:
-    patterns = (
-        r"json\.dumps\s*\(\s*event\s*\)",
-        r"logger\.(?:info|debug|warning|error)\s*\([^)]*\bevent\b",
-        r"print\s*\([^)]*\bevent\b",
+def _source_code_static_issue(
+    *,
+    document: SanitizedDocument,
+    severity: str,
+    title: str,
+    details: str,
+    recommendation: str,
+    impact: str,
+    evidence: str,
+) -> ReviewIssue:
+    return ReviewIssue(
+        severity=severity,
+        title=title,
+        details=details,
+        recommendation=recommendation,
+        source_document=document.name,
+        section=_source_code_section_from_evidence(evidence),
+        current_state=evidence,
+        issue=details,
+        impact=impact,
+        re_review_required=severity == "high",
+        origin="static_code_analysis",
     )
-    return any(re.search(pattern, lowered_text) for pattern in patterns)
+
+
+def _source_code_issue_evidence(
+    text: str,
+    patterns: tuple[str, ...],
+    *,
+    redact: bool = False,
+) -> str:
+    lines = text.splitlines()
+    for line_index, line in enumerate(lines):
+        for pattern in patterns:
+            if not re.search(pattern, line, flags=re.IGNORECASE):
+                continue
+            location = _source_code_location_label(lines, line_index)
+            if redact:
+                return f"{location}: 認証情報らしき代入を検出（値は表示しません）"
+            snippet = re.sub(r"\s+", " ", line).strip()
+            if len(snippet) > 160:
+                snippet = snippet[:157] + "..."
+            return f"{location}: {snippet}"
+    return "静的検出で該当パターンを確認しました。"
+
+
+def _source_code_location_label(lines: list[str], line_index: int) -> str:
+    function_name = ""
+    for previous in range(line_index, -1, -1):
+        match = re.match(
+            r"^\s*(?:async\s+def|def)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+            lines[previous],
+        )
+        if match:
+            function_name = match.group(1)
+            break
+    line_label = f"{line_index + 1}行目付近"
+    return f"{function_name} 内 / {line_label}" if function_name else line_label
+
+
+def _source_code_section_from_evidence(evidence: str) -> str:
+    if not evidence:
+        return "該当箇所"
+    return evidence.split(":", 1)[0].strip() or "該当箇所"
+
+
+def _has_event_payload_logging(lowered_text: str) -> bool:
+    return any(re.search(pattern, lowered_text) for pattern in _EVENT_LOGGING_PATTERNS)
 
 
 def _has_hardcoded_secret(text: str) -> bool:

@@ -3809,7 +3809,16 @@ def _extract_template_section(template: str, label: str) -> str:
     return value
 
 
-def _step4_item_fields(item) -> dict[str, str]:
+def _step4_item_fields(item, *, code_analysis: bool = False) -> dict[str, str]:
+    if code_analysis:
+        return {
+            "検出根拠": getattr(item, "current_state", "") or "静的根拠は自動特定できていません。対象コードを確認してください。",
+            "該当箇所": item.target_section or "該当箇所",
+            "リスク": item.problem,
+            "推奨確認": item.fix_policy,
+            "運用影響": getattr(item, "impact", "") or "未対応時の運用影響を確認してください。",
+            "再解析条件": item.re_review_condition,
+        }
     return {
         "現状": getattr(item, "current_state", "") or _extract_template_section(item.template, "現状"),
         "問題点": item.problem,
@@ -3923,6 +3932,8 @@ def _render_step4_field_grid(fields: dict[str, str]) -> None:
 def _step4_item_source_label(item) -> str:
     if item.source_type == "structure_check":
         return "文書構成チェック由来"
+    if item.origin == "static_code_analysis":
+        return "静的検出由来"
     if item.origin == "document_deep_dive":
         return "文書深堀で追加"
     if item.origin == "chapter_deep_dive":
@@ -3957,7 +3968,10 @@ def _render_step4_issue_card(
 ) -> None:
     label = _step4_issue_list_label(item, index, show_document=show_document_in_label)
     with st.expander(label, expanded=expanded):
-        matched_chapter = _find_chapter_for_remediation_item(item, preview_docs)
+        code_analysis = _is_code_analysis_review(preview_docs, document_profile_override)
+        matched_chapter = (
+            None if code_analysis else _find_chapter_for_remediation_item(item, preview_docs)
+        )
         header_col, action_col = st.columns([5, 1.35])
         with header_col:
             st.markdown(
@@ -3991,7 +4005,7 @@ def _render_step4_issue_card(
                         document_profile_override,
                     )
         st.markdown("<div class='step4-card-body'>", unsafe_allow_html=True)
-        _render_step4_field_grid(_step4_item_fields(item))
+        _render_step4_field_grid(_step4_item_fields(item, code_analysis=code_analysis))
         st.markdown("</div>", unsafe_allow_html=True)
         if show_document_draft:
             copy_key = f"step4_template_copy_{index}_{item.item_id}"
@@ -4006,28 +4020,40 @@ def _render_step4_issue_cards(
     preview_docs: list[SanitizedDocument],
     document_profile_override: str | None,
 ) -> None:
+    code_analysis = _is_code_analysis_review(preview_docs, document_profile_override)
+    section_caption = (
+        "重要度の高いものから、検出根拠・リスク・推奨確認・再解析条件を確認します。"
+        if code_analysis
+        else "重要度の高いものから、担当者・追記内容・再レビュー条件を確認します。"
+    )
+    download_label = "📒 コード確認メモ JSON" if code_analysis else "📒 修正計画 JSON"
+    download_help = (
+        "次回、修正後のコードまたは差分と一緒に読み込ませると、前回指摘の解消状況を照合できます。"
+        if code_analysis
+        else "次回、修正後の文書と一緒に読み込ませると、前回指摘の解消状況を照合できます。"
+    )
     left, right = st.columns([4, 1.55])
     with left:
         st.markdown(
             "<div class='step4-section-title'>対応すべき指摘</div>"
-            "<div class='step4-section-caption'>重要度の高いものから、担当者・追記内容・再レビュー条件を確認します。</div>",
+            f"<div class='step4-section-caption'>{html.escape(section_caption)}</div>",
             unsafe_allow_html=True,
         )
     with right:
         st.download_button(
-            "📒 修正計画 JSON",
+            download_label,
             data=json.dumps(plan.to_dict(), ensure_ascii=False, indent=2),
             file_name=remediation_plan_json_filename(),
             mime="application/json",
             type="primary",
             width="stretch",
-            help="次回、修正後の文書と一緒に読み込ませると、前回指摘の解消状況を照合できます。",
+            help=download_help,
         )
     items = _sorted_step4_items(plan)
     if not items:
         st.success("対応が必要な修正計画カードはありません。")
         return
-    show_document_draft = not _is_code_analysis_review(preview_docs, document_profile_override)
+    show_document_draft = not code_analysis
     items, showing_all_documents = _filter_step4_items_by_document(items)
     if not items:
         st.info("選択した文書に対応すべき指摘はありません。")

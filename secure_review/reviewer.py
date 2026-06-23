@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import logging
@@ -665,6 +666,9 @@ class HttpLlmReviewProvider(ReviewProvider):
         # own summary; fall back to an explicit Japanese notice when absent.
         # B2: extract structured summary too; assign profile-based issue IDs.
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        issues = _filter_source_code_issues_by_static_facts(
+            issues, documents, classification.document_profile
+        )
         issues = _source_code_static_fallback_if_empty(
             issues, documents, classification.document_profile
         )
@@ -888,6 +892,9 @@ class GeminiApiReviewProvider(ReviewProvider):
                 "Consider reducing input size or raising GEMINI_MAX_OUTPUT_TOKENS."
             )
         model_summary, summary_struct, issues = _parse_review_payload(content, documents)
+        issues = _filter_source_code_issues_by_static_facts(
+            issues, documents, classification.document_profile
+        )
         issues = _source_code_static_fallback_if_empty(
             issues, documents, classification.document_profile
         )
@@ -979,6 +986,9 @@ class GeminiApiReviewProvider(ReviewProvider):
                     )
                 # 1 文書のレビュー結果から issues を抽出
                 doc_summary, _struct, doc_issues = _parse_review_payload(content, [doc])
+                doc_issues = _filter_source_code_issues_by_static_facts(
+                    doc_issues, [doc], classification.document_profile
+                )
                 doc_issues = _source_code_static_fallback_if_empty(
                     doc_issues, [doc], classification.document_profile
                 )
@@ -2635,6 +2645,123 @@ def _source_code_static_fallback_if_empty(
         return issues
     fallback_issues = _source_code_static_issues(documents)
     return fallback_issues or issues
+
+
+def _filter_source_code_issues_by_static_facts(
+    issues: list[ReviewIssue],
+    documents: list[SanitizedDocument],
+    document_profile: str,
+) -> list[ReviewIssue]:
+    """Remove LLM findings that contradict locally verifiable code facts.
+
+    This tool reviews code; it should not invent code edits, and it should not
+    accept LLM claims for facts that Python can verify deterministically.
+    """
+    if document_profile != "source_code" or not issues:
+        return issues
+
+    facts_by_name = {
+        document.name: _source_code_static_facts(document)
+        for document in documents
+    }
+    if not facts_by_name:
+        return issues
+    default_facts = next(iter(facts_by_name.values()))
+
+    filtered: list[ReviewIssue] = []
+    for issue in issues:
+        facts = facts_by_name.get(issue.source_document) or default_facts
+        if _source_code_issue_contradicts_static_facts(issue, facts):
+            continue
+        filtered.append(issue)
+    return filtered
+
+
+def _source_code_static_facts(document: SanitizedDocument) -> dict[str, object]:
+    text = document.outbound_text or ""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        return {
+            "syntax_ok": False,
+            "syntax_error": exc,
+            "defined_functions": set(),
+        }
+    defined_functions = {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    return {
+        "syntax_ok": True,
+        "syntax_error": None,
+        "defined_functions": defined_functions,
+    }
+
+
+def _source_code_issue_contradicts_static_facts(
+    issue: ReviewIssue,
+    facts: dict[str, object],
+) -> bool:
+    issue_text = " ".join(
+        [
+            issue.title or "",
+            issue.details or "",
+            issue.recommendation or "",
+            issue.current_state or "",
+            issue.issue or "",
+            issue.impact or "",
+        ]
+    ).lower()
+
+    if facts.get("syntax_ok") and _claims_syntax_error(issue_text):
+        return True
+
+    if _claims_missing_function_definition(issue_text):
+        defined_functions = facts.get("defined_functions")
+        if isinstance(defined_functions, set):
+            mentioned = {
+                name
+                for name in defined_functions
+                if name and name.lower() in issue_text
+            }
+            if mentioned:
+                return True
+    return False
+
+
+def _claims_syntax_error(issue_text: str) -> bool:
+    syntax_markers = (
+        "syntaxerror",
+        "syntax error",
+        "構文エラー",
+        "構文",
+    )
+    return any(marker in issue_text for marker in syntax_markers)
+
+
+def _claims_missing_function_definition(issue_text: str) -> bool:
+    missing_markers = (
+        "定義欠落",
+        "定義が欠落",
+        "定義されていない",
+        "存在しない",
+        "未定義",
+        "undefined",
+        "not defined",
+        "missing function",
+        "missing definition",
+    )
+    function_markers = (
+        "関数",
+        "function",
+        "method",
+        "呼び出し",
+        "call",
+    )
+    return any(marker in issue_text for marker in missing_markers) and any(
+        marker in issue_text for marker in function_markers
+    )
 
 
 def _has_actionable_source_code_issue(issues: list[ReviewIssue]) -> bool:

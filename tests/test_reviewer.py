@@ -1050,6 +1050,73 @@ class SourceCodeHeuristicTests(unittest.TestCase):
 
 
 class SourceCodeStaticFallbackTests(unittest.TestCase):
+    def test_static_fact_filter_removes_false_syntax_error(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="high",
+            title="構文エラー（Syntax Error）の存在",
+            details="このコードは構文エラーにより実行できません。",
+            recommendation="構文を修正してください。",
+            source_document="lambda_function.py",
+        )
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return 1\n")],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [])
+
+    def test_static_fact_filter_removes_false_missing_function_claim(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="high",
+            title="主要関数の定義欠落による実行不能",
+            details="lambda_handler内でgenerate_presigned_urlを呼び出すが、その定義が本文中に存在しない。",
+            recommendation="欠落している関数定義を実装してください。",
+            source_document="lambda_function.py",
+        )
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [
+                _doc(
+                    name="lambda_function.py",
+                    text=(
+                        "def lambda_handler(event, context):\n"
+                        "    return generate_presigned_url('key')\n\n"
+                        "def generate_presigned_url(key):\n"
+                        "    return key\n"
+                    ),
+                )
+            ],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [])
+
+    def test_static_fact_filter_keeps_non_verifiable_operational_risk(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="medium",
+            title="大量データ処理時のメモリ不足リスク",
+            details="S3イベントを全件リストに保持するため、件数増加時にメモリを圧迫する可能性がある。",
+            recommendation="ストリーミング処理または分割処理を検討してください。",
+            source_document="lambda_function.py",
+        )
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return []\n")],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [issue])
+
     def test_source_code_empty_llm_result_gets_static_fallback(self) -> None:
         from secure_review.reviewer import _source_code_static_fallback_if_empty
 

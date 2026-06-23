@@ -259,6 +259,43 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertIn("対象箇所: lambda_handler 内 / 8行目付近", item.template)
         self.assertNotIn("本文から現状の記載を自動抽出できませんでした", item.template)
 
+    def test_source_code_plan_uses_code_whole_when_section_is_generic(self) -> None:
+        review = self._source_code_review_with_issues(
+            self._issue(
+                title="入力イベントを丸ごとログ出力している",
+                issue_id="SC-003",
+                source_document="lambda_function.py",
+                section="該当箇所",
+                current_state="",
+                issue="Lambdaイベント全体をログに出している可能性があります。",
+                recommendation="ログ出力を必要なキーに限定してください。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+        item = plan.items[0]
+
+        self.assertEqual(item.target_section, "コード全体")
+        self.assertNotIn("LLM指摘に基づく確認候補", item.target_section)
+
+    def test_source_code_plan_derives_target_section_from_static_evidence(self) -> None:
+        review = self._source_code_review_with_issues(
+            self._issue(
+                title="入力イベントを丸ごとログ出力している",
+                issue_id="SC-004",
+                source_document="lambda_function.py",
+                section="該当箇所",
+                current_state="lambda_handler 関数 / 12行目付近: logger.info(event)",
+                issue="Lambdaイベント全体をログに出している可能性があります。",
+                recommendation="ログ出力を必要なキーに限定してください。",
+            )
+        )
+
+        plan = build_remediation_plan(review)
+        item = plan.items[0]
+
+        self.assertEqual(item.target_section, "lambda_handler 関数 / 12行目付近")
+
     def test_source_code_plan_ignores_structure_findings_even_if_passed(self) -> None:
         review = self._source_code_review_with_issues(
             self._issue(

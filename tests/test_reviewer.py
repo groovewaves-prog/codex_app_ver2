@@ -1069,6 +1069,25 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
 
         self.assertEqual(filtered, [])
 
+    def test_static_fact_filter_removes_llm_syntax_claim_even_when_python_is_broken(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="high",
+            title="構文エラー（Syntax Error）の存在",
+            details="このコードは構文エラーにより実行できません。",
+            recommendation="構文を修正してください。",
+            source_document="lambda_function.py",
+        )
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return (\n")],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [])
+
     def test_static_fact_filter_removes_false_missing_function_claim(self) -> None:
         from secure_review.models import ReviewIssue
         from secure_review.reviewer import _filter_source_code_issues_by_static_facts
@@ -1093,6 +1112,44 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
                     ),
                 )
             ],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [])
+
+    def test_static_fact_filter_removes_source_missing_claims(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="high",
+            title="ソースコードの欠落（実装不備）",
+            details="提供されたソースコードが途中で切れており、主要関数の定義が一切存在しない。",
+            recommendation="欠落している全関数を実装してください。",
+            source_document="lambda_function.py",
+        )
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return 1\n")],
+            "source_code",
+        )
+
+        self.assertEqual(filtered, [])
+
+    def test_static_fact_filter_removes_mask_placeholder_artifact_claims(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _filter_source_code_issues_by_static_facts
+
+        issue = ReviewIssue(
+            severity="medium",
+            title="匿名化プレースホルダによるロジック破綻",
+            details="匿名化プレースホルダにより処理が成立しない。",
+            recommendation="プレースホルダを修正してください。",
+            source_document="lambda_function.py",
+        )
+        filtered = _filter_source_code_issues_by_static_facts(
+            [issue],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return 1\n")],
             "source_code",
         )
 
@@ -1145,6 +1202,19 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
         titles = {issue.title for issue in issues}
         self.assertIn("入力イベントを丸ごとログ出力している", titles)
         self.assertIn("例外処理が広すぎる可能性", titles)
+
+    def test_source_code_static_fallback_reports_real_python_syntax_error(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        issues = _source_code_static_fallback_if_empty(
+            [],
+            [_doc(name="lambda_function.py", text="def lambda_handler(event, context):\n    return (\n")],
+            "source_code",
+        )
+
+        self.assertEqual(issues[0].title, "Python構文エラーを静的検出")
+        self.assertIn("2行目付近", issues[0].current_state)
+        self.assertIn("Lambda", issues[0].impact)
 
     def test_source_code_static_fallback_attaches_evidence_and_origin(self) -> None:
         from secure_review.reviewer import _source_code_static_fallback_if_empty
@@ -1202,6 +1272,27 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
         self.assertIn("コード解析で", summary)
         self.assertIn("確認候補", summary)
         self.assertNotIn("LLM がレビューサマリを返しませんでした", summary)
+
+    def test_source_code_summary_replaces_untrusted_incomplete_source_summary(self) -> None:
+        from secure_review.models import ReviewIssue
+        from secure_review.reviewer import _review_summary_or_fallback
+
+        summary = _review_summary_or_fallback(
+            "提供されたソースコードが途中で切れており、このままでは動作しません。",
+            [
+                ReviewIssue(
+                    severity="medium",
+                    title="入力イベントを丸ごとログ出力している",
+                    details="details",
+                    recommendation="recommendation",
+                    source_document="lambda_function.py",
+                )
+            ],
+            "source_code",
+        )
+
+        self.assertIn("コード解析で", summary)
+        self.assertNotIn("途中で切れて", summary)
 
     def test_source_code_static_fallback_does_not_override_model_issues(self) -> None:
         from secure_review.models import ReviewIssue

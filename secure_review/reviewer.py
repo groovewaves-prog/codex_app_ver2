@@ -2649,10 +2649,48 @@ def _source_code_static_fallback_if_empty(
     intentionally conservative and only runs for source_code reviews without
     high/medium/low model findings.
     """
-    if document_profile != "source_code" or _has_actionable_source_code_issue(issues):
+    if document_profile != "source_code":
+        return issues
+    syntax_issues = _source_code_static_syntax_issues(documents)
+    if syntax_issues:
+        return _dedupe_source_code_static_issues([*syntax_issues, *issues])
+    if _has_actionable_source_code_issue(issues):
         return issues
     fallback_issues = _source_code_static_issues(documents)
     return fallback_issues or issues
+
+
+def _source_code_static_syntax_issues(documents: list[SanitizedDocument]) -> list[ReviewIssue]:
+    issues: list[ReviewIssue] = []
+    for document in documents:
+        syntax_error = _python_syntax_error(document.outbound_text or "")
+        if syntax_error is None:
+            continue
+        evidence = _syntax_error_evidence(document.outbound_text or "", syntax_error)
+        issues.append(
+            _source_code_static_issue(
+                document=document,
+                severity="high",
+                title="Python構文エラーを静的検出",
+                details="Pythonとして構文解析できない箇所があります。",
+                recommendation="表示された行付近の括弧、引用符、インデント、途中で切れた式を確認してください。",
+                impact="この状態ではLambdaまたはPython実行環境で読み込み時に失敗します。",
+                evidence=evidence,
+            )
+        )
+    return issues
+
+
+def _dedupe_source_code_static_issues(issues: list[ReviewIssue]) -> list[ReviewIssue]:
+    seen: set[tuple[str, str, str]] = set()
+    deduped: list[ReviewIssue] = []
+    for issue in issues:
+        key = (issue.source_document, issue.title, issue.current_state or issue.details)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(issue)
+    return deduped
 
 
 def _filter_source_code_issues_by_static_facts(
@@ -2722,7 +2760,18 @@ def _source_code_issue_contradicts_static_facts(
         ]
     ).lower()
 
-    if facts.get("syntax_ok") and _claims_syntax_error(issue_text):
+    # Do not let the LLM be the authority for compile-time/code-existence
+    # facts. Those must come from local static analysis, otherwise a running
+    # Lambda/script can be incorrectly labelled as "unimplemented" or
+    # "syntax broken" just because the model inferred too much from a partial
+    # view.
+    if _claims_syntax_error(issue_text):
+        return True
+
+    if _claims_source_missing_or_incomplete(issue_text):
+        return True
+
+    if _claims_mask_placeholder_artifact(issue_text):
         return True
 
     if _claims_missing_function_definition(issue_text):
@@ -2746,6 +2795,39 @@ def _claims_syntax_error(issue_text: str) -> bool:
         "構文",
     )
     return any(marker in issue_text for marker in syntax_markers)
+
+
+def _claims_source_missing_or_incomplete(issue_text: str) -> bool:
+    source_markers = (
+        "ソースコードの欠落",
+        "コードの欠落",
+        "主要関数の定義欠落",
+        "実装不備",
+        "途中で切れて",
+        "途中で終了",
+        "コードが終了",
+        "それ以降の関数定義",
+        "一切存在しない",
+        "提供されたソースコードが途中",
+        "source code is incomplete",
+        "incomplete source",
+        "truncated source",
+        "missing implementation",
+        "not implemented",
+    )
+    return any(marker in issue_text for marker in source_markers)
+
+
+def _claims_mask_placeholder_artifact(issue_text: str) -> bool:
+    placeholder_markers = (
+        "匿名化プレースホルダ",
+        "マスクプレースホルダ",
+        "プレースホルダによるロジック",
+        "sanitized placeholder",
+        "mask placeholder",
+        "placeholder broke",
+    )
+    return any(marker in issue_text for marker in placeholder_markers)
 
 
 def _claims_missing_function_definition(issue_text: str) -> bool:
@@ -2777,7 +2859,10 @@ def _review_summary_or_fallback(
     issues: list[ReviewIssue],
     document_profile: str,
 ) -> str:
-    if model_summary:
+    if model_summary and not (
+        document_profile == "source_code"
+        and _source_code_summary_should_be_replaced(model_summary)
+    ):
         return model_summary
     if document_profile == "source_code" and _has_actionable_source_code_issue(issues):
         high_count = sum(1 for issue in issues if issue.severity == "high")
@@ -2792,7 +2877,21 @@ def _review_summary_or_fallback(
             f"コード解析で {severity_text} の確認候補を検出しました。"
             "根拠、リスク、推奨確認をカードで確認してください。"
         )
+    if document_profile == "source_code":
+        return (
+            "コード解析で対応が必要な高・中重要度の確認候補は検出されませんでした。"
+            "必要に応じてログ、例外処理、外部通信、設定値だけをセルフチェックしてください。"
+        )
     return "LLM がレビューサマリを返しませんでした。生レスポンスを確認してください。"
+
+
+def _source_code_summary_should_be_replaced(summary: str) -> bool:
+    text = (summary or "").lower()
+    return (
+        _claims_syntax_error(text)
+        or _claims_source_missing_or_incomplete(text)
+        or _claims_mask_placeholder_artifact(text)
+    )
 
 
 def _has_actionable_source_code_issue(issues: list[ReviewIssue]) -> bool:
@@ -2840,6 +2939,20 @@ def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[Revie
     for document in documents:
         text = document.outbound_text or ""
         lowered = text.lower()
+        syntax_error = _python_syntax_error(text)
+        if syntax_error is not None:
+            evidence = _syntax_error_evidence(text, syntax_error)
+            issues.append(
+                _source_code_static_issue(
+                    document=document,
+                    severity="high",
+                    title="Python構文エラーを静的検出",
+                    details="Pythonとして構文解析できない箇所があります。",
+                    recommendation="表示された行付近の括弧、引用符、インデント、途中で切れた式を確認してください。",
+                    impact="この状態ではLambdaまたはPython実行環境で読み込み時に失敗します。",
+                    evidence=evidence,
+                )
+            )
 
         if _has_hardcoded_secret(lowered):
             details = "コード内にパスワード、トークン、秘密情報を直接埋め込んでいる可能性があります。"
@@ -2967,6 +3080,26 @@ def _source_code_static_issues(documents: list[SanitizedDocument]) -> list[Revie
             )
 
     return issues
+
+
+def _python_syntax_error(text: str) -> SyntaxError | None:
+    try:
+        ast.parse(text or "")
+    except SyntaxError as exc:
+        return exc
+    return None
+
+
+def _syntax_error_evidence(text: str, exc: SyntaxError) -> str:
+    line_no = exc.lineno or 0
+    lines = text.splitlines()
+    snippet = ""
+    if 1 <= line_no <= len(lines):
+        snippet = re.sub(r"\s+", " ", lines[line_no - 1]).strip()
+    message = exc.msg or "SyntaxError"
+    if snippet:
+        return f"{line_no}行目付近: {message}: {snippet}"
+    return f"{line_no or '不明'}行目付近: {message}"
 
 
 def _source_code_static_issue(

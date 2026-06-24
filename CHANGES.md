@@ -10,6 +10,7 @@ Baseline commit: `eaf605a`.
 - Replaced the empty-summary fallback for source-code reviews with an actionable code-analysis summary when findings exist.
 - Hardened source-code review filtering so LLM-only claims about syntax errors, truncated/missing source, missing implementation, or anonymization placeholder breakage are suppressed unless represented by deterministic local static findings.
 - Reworked source-code review anchoring so deterministic local findings are always merged into code-analysis results, syntax checks are skipped for anonymized placeholder-mutated code, and broad LLM claims about missing implementation / incomplete later phases are filtered out.
+- Added language-aware code static analysis so shell / PowerShell / SQL scripts are not parsed as Python; Python syntax checks now run only for Python-like uploads that are safe to parse after anonymization.
 
 ### Code analysis mode — hide document-draft templates
 

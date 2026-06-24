@@ -11,6 +11,7 @@ Baseline commit: `eaf605a`.
 - Hardened source-code review filtering so LLM-only claims about syntax errors, truncated/missing source, missing implementation, or anonymization placeholder breakage are suppressed unless represented by deterministic local static findings.
 - Reworked source-code review anchoring so deterministic local findings are always merged into code-analysis results, syntax checks are skipped for anonymized placeholder-mutated code, and broad LLM claims about missing implementation / incomplete later phases are filtered out.
 - Added language-aware code static analysis so shell / PowerShell / SQL scripts are not parsed as Python; Python syntax checks now run only for Python-like uploads that are safe to parse after anonymization.
+- Extended code-analysis JSON exports with code-specific metadata (`review_mode`, `code_languages`, `code_language`, evidence snippet/line, basis, confidence, total/low counts) so saved "コード確認メモ JSON" can be reused safely in follow-up reviews.
 
 ### Code analysis mode — hide document-draft templates
 

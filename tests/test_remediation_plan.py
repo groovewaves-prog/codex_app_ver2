@@ -238,6 +238,81 @@ class RemediationPlanTests(unittest.TestCase):
         self.assertNotIn("該当章", item.template)
         self.assertNotIn("構成チェック", " ".join(step.detail for step in plan.re_review_steps))
 
+    def test_source_code_plan_exports_code_analysis_metadata(self) -> None:
+        review = self._source_code_review_with_issues(
+            self._issue(
+                title="対象ルール名のハードコードによる保守性の低下",
+                issue_id="SC-001",
+                source_document="collect_eb_templates.sh",
+                section="コード全体",
+                current_state="for r in managed-prod-eb-rule-config managed-prod-eb-rule-guardduty; do",
+                issue="対象ルール名が直接記述されています。",
+                recommendation="ルール名を外部設定または接頭辞検索に切り出してください。",
+                severity="medium",
+            ),
+            self._issue(
+                title="実行アカウントの検証処理の不足",
+                issue_id="SC-002",
+                source_document="collect_eb_templates.sh",
+                section="コード全体",
+                current_state="aws sts get-caller-identity を表示しているが期待値検証はない。",
+                issue="誤ったAWSアカウントでも処理が続行されます。",
+                recommendation="期待アカウントIDと一致しない場合は終了してください。",
+                severity="low",
+            ),
+        )
+
+        payload = build_remediation_plan(review).to_dict()
+
+        self.assertEqual(payload["review_mode"], "code_analysis")
+        self.assertIn("中重要度 1 件、低重要度 1 件", payload["summary"])
+        self.assertEqual(payload["code_languages"], ["shell"])
+        self.assertEqual(payload["total_count"], 2)
+        self.assertEqual(payload["medium_count"], 1)
+        self.assertEqual(payload["low_count"], 1)
+        self.assertEqual(payload["items"][0]["review_mode"], "code_analysis")
+        self.assertEqual(payload["items"][0]["code_language"], "shell")
+        self.assertEqual(payload["items"][0]["basis"], "llm_with_evidence")
+        self.assertEqual(payload["items"][0]["confidence"], "medium")
+        self.assertIn("managed-prod-eb-rule-config", payload["items"][0]["evidence_snippet"])
+
+    def test_source_code_plan_metadata_round_trips_from_saved_json(self) -> None:
+        payload = {
+            "headline": "コード確認メモ",
+            "summary": "summary",
+            "items": [
+                {
+                    "item_id": "SC-001",
+                    "source_type": "review_issue",
+                    "severity": "medium",
+                    "title": "対象ルール名のハードコード",
+                    "target_document": "collect_eb_templates.sh",
+                    "target_section": "コード全体",
+                    "problem": "problem",
+                    "fix_policy": "fix",
+                    "template": "template",
+                    "re_review_scope": "collect_eb_templates.sh / コード全体",
+                    "re_review_condition": "condition",
+                    "effort": "中",
+                    "review_mode": "code_analysis",
+                    "code_language": "shell",
+                    "evidence_snippet": "for r in managed-prod-eb-rule-config",
+                    "evidence_line": "15",
+                    "basis": "llm_with_evidence",
+                    "confidence": "medium",
+                }
+            ],
+        }
+
+        plan = remediation_plan_from_dict(payload)
+        item = plan.items[0]
+
+        self.assertEqual(item.review_mode, "code_analysis")
+        self.assertEqual(item.code_language, "shell")
+        self.assertEqual(item.evidence_line, "15")
+        self.assertEqual(item.basis, "llm_with_evidence")
+        self.assertEqual(plan.to_dict()["code_languages"], ["shell"])
+
     def test_source_code_plan_uses_actionable_code_evidence_fallback(self) -> None:
         review = self._source_code_review_with_issues(
             self._issue(

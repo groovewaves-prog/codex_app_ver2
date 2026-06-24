@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import asdict, dataclass
+from pathlib import PurePath
 from typing import Any, Iterable
 
 from secure_review.models import ReviewIssue, ReviewResult
@@ -28,6 +29,12 @@ class RemediationItem:
     current_state: str = ""
     impact: str = ""
     completion_condition: str = ""
+    review_mode: str = ""
+    code_language: str = ""
+    evidence_snippet: str = ""
+    evidence_line: str = ""
+    basis: str = ""
+    confidence: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -58,15 +65,41 @@ class RemediationPlan:
     def medium_count(self) -> int:
         return sum(1 for item in self.items if item.severity == "medium")
 
+    @property
+    def low_count(self) -> int:
+        return sum(1 for item in self.items if item.severity == "low")
+
+    @property
+    def total_count(self) -> int:
+        return len(self.items)
+
+    @property
+    def review_mode(self) -> str:
+        modes = {item.review_mode for item in self.items if item.review_mode}
+        return "code_analysis" if "code_analysis" in modes else ""
+
+    @property
+    def code_languages(self) -> tuple[str, ...]:
+        return tuple(
+            sorted({item.code_language for item in self.items if item.code_language})
+        )
+
     def to_dict(self) -> dict:
-        return {
+        payload = {
             "headline": self.headline,
             "summary": self.summary,
+            "total_count": self.total_count,
             "high_count": self.high_count,
             "medium_count": self.medium_count,
+            "low_count": self.low_count,
             "items": [item.to_dict() for item in self.items],
             "re_review_steps": [step.to_dict() for step in self.re_review_steps],
         }
+        if self.review_mode:
+            payload["review_mode"] = self.review_mode
+        if self.code_languages:
+            payload["code_languages"] = list(self.code_languages)
+        return payload
 
 
 @dataclass(frozen=True)
@@ -257,6 +290,7 @@ def build_remediation_plan(
 
     high_count = sum(1 for item in items if item.severity == "high")
     medium_count = sum(1 for item in items if item.severity == "medium")
+    low_count = sum(1 for item in items if item.severity == "low")
     if high_count:
         headline = "重要指摘から修正計画を作成しました"
         summary = f"高重要度 {high_count} 件を最優先にし、中重要度 {medium_count} 件は次に対応してください。"
@@ -267,15 +301,16 @@ def build_remediation_plan(
         headline = "軽微な改善計画を作成しました"
         summary = "レビュー指摘のうち、文章品質や補足説明の改善候補を整理しています。"
     if is_code_analysis:
+        count_text = _code_severity_count_text(high_count, medium_count, low_count)
         if high_count:
             headline = "コード解析結果から修正チェックリストを作成しました"
-            summary = f"高重要度 {high_count} 件を最優先にし、中重要度 {medium_count} 件は次に修正してください。"
+            summary = f"{count_text} を検出しました。高重要度から順に根拠と推奨確認を確認してください。"
         elif medium_count:
             headline = "コード解析結果から確認チェックリストを作成しました"
-            summary = f"中重要度 {medium_count} 件を、関数・処理単位で順に確認してください。"
+            summary = f"{count_text} を検出しました。関数・処理単位で順に確認してください。"
         else:
             headline = "軽微なコード改善チェックリストを作成しました"
-            summary = "低重要度のコード改善候補を整理しています。"
+            summary = f"{count_text} を整理しています。必要に応じて軽微な改善として扱ってください。"
 
     return RemediationPlan(
         headline=headline,
@@ -285,6 +320,17 @@ def build_remediation_plan(
         if is_code_analysis
         else _build_re_review_steps(items),
     )
+
+
+def _code_severity_count_text(high_count: int, medium_count: int, low_count: int) -> str:
+    parts: list[str] = []
+    if high_count:
+        parts.append(f"高重要度 {high_count} 件")
+    if medium_count:
+        parts.append(f"中重要度 {medium_count} 件")
+    if low_count:
+        parts.append(f"低重要度 {low_count} 件")
+    return "、".join(parts) or "コード改善候補 0 件"
 
 
 def _specific_code_target_from_evidence(evidence: str) -> str:
@@ -311,10 +357,54 @@ def _target_section_for_issue(issue: ReviewIssue, *, code_analysis: bool = False
     return section or "該当箇所"
 
 
+def _code_language_for_document_name(name: str) -> str:
+    lowered = (name or "").lower()
+    suffixes = tuple(s.lower() for s in PurePath(lowered).suffixes)
+    if lowered.endswith((".sh.txt", ".bash.txt")) or any(
+        suffix in {".sh", ".bash", ".bsh", ".ksh", ".zsh"} for suffix in suffixes
+    ):
+        return "shell"
+    if lowered.endswith(".ps1.txt") or any(
+        suffix in {".ps1", ".psm1", ".psd1"} for suffix in suffixes
+    ):
+        return "powershell"
+    if lowered.endswith(".py.txt") or ".py" in suffixes:
+        return "python"
+    if lowered.endswith(".sql.txt") or any(suffix in {".sql", ".psql"} for suffix in suffixes):
+        return "sql"
+    return "generic"
+
+
+def _code_evidence_line(evidence: str) -> str:
+    match = re.search(r"(\d+)\s*行目付近", evidence or "")
+    if match:
+        return match.group(1)
+    match = re.search(r"\bline\s+(\d+)\b", evidence or "", flags=re.IGNORECASE)
+    return match.group(1) if match else ""
+
+
+def _code_basis_for_issue(issue: ReviewIssue, evidence: str) -> str:
+    if issue.origin == "static_code_analysis":
+        return "static_detection"
+    if _specific_code_target_from_evidence(evidence):
+        return "llm_with_evidence"
+    return "llm_advisory"
+
+
+def _code_confidence_for_basis(basis: str) -> str:
+    if basis == "static_detection":
+        return "high"
+    if basis == "llm_with_evidence":
+        return "medium"
+    return "low"
+
+
 def _item_from_issue(issue: ReviewIssue, *, code_analysis: bool = False) -> RemediationItem:
     problem = issue.issue or issue.details or issue.title
     fix_policy = issue.recommendation or "指摘箇所に、判断根拠・設計方針・完了条件を追記してください。"
     target_section = _target_section_for_issue(issue, code_analysis=code_analysis)
+    code_evidence = _code_evidence_for_issue(issue) if code_analysis else ""
+    code_basis = _code_basis_for_issue(issue, code_evidence) if code_analysis else ""
     re_review_condition = (
         _code_re_review_condition_for_issue(issue, target_section)
         if code_analysis
@@ -354,6 +444,12 @@ def _item_from_issue(issue: ReviewIssue, *, code_analysis: bool = False) -> Reme
         current_state=current_state,
         impact=impact,
         completion_condition=completion_condition,
+        review_mode="code_analysis" if code_analysis else "",
+        code_language=_code_language_for_document_name(issue.source_document) if code_analysis else "",
+        evidence_snippet=code_evidence if code_analysis else "",
+        evidence_line=_code_evidence_line(code_evidence) if code_analysis else "",
+        basis=code_basis,
+        confidence=_code_confidence_for_basis(code_basis) if code_analysis else "",
     )
 
 
@@ -744,6 +840,12 @@ def _remediation_item_from_dict(data: dict[str, Any]) -> RemediationItem:
         current_state=_coerce_text(data.get("current_state")),
         impact=_coerce_text(data.get("impact")),
         completion_condition=_coerce_text(data.get("completion_condition")),
+        review_mode=_coerce_text(data.get("review_mode")),
+        code_language=_coerce_text(data.get("code_language")),
+        evidence_snippet=_coerce_text(data.get("evidence_snippet")),
+        evidence_line=_coerce_text(data.get("evidence_line")),
+        basis=_coerce_text(data.get("basis")),
+        confidence=_coerce_text(data.get("confidence")),
     )
 
 

@@ -3107,9 +3107,42 @@ _SANITIZED_CODE_PLACEHOLDER_RE = re.compile(
 
 def _source_code_text_is_safe_for_syntax_parse(document: SanitizedDocument) -> bool:
     text = document.outbound_text or ""
+    if _source_code_language_for_document(document) != "python":
+        return False
     if document.replacements:
         return False
     return _SANITIZED_CODE_PLACEHOLDER_RE.search(text) is None
+
+
+def _source_code_language_for_document(document: SanitizedDocument) -> str:
+    name = (document.name or "").lower()
+    text = (document.outbound_text or "").lstrip()
+    lowered = text.lower()
+
+    # Double extensions are common when users upload scripts saved as .txt.
+    if name.endswith((".sh", ".bash", ".bsh", ".ksh", ".zsh", ".sh.txt", ".bash.txt")):
+        return "shell"
+    if name.endswith((".ps1", ".psm1", ".psd1", ".ps1.txt")):
+        return "powershell"
+    if name.endswith((".sql", ".psql", ".sql.txt")):
+        return "sql"
+    if name.endswith((".py", ".py.txt")):
+        return "python"
+
+    first_line = text.splitlines()[0].lower() if text.splitlines() else ""
+    if first_line.startswith("#!") and any(shell in first_line for shell in ("sh", "bash", "ksh", "zsh")):
+        return "shell"
+    if first_line.startswith("#!") and "python" in first_line:
+        return "python"
+    if lowered.startswith("param(") or "$erroractionpreference" in lowered or "invoke-" in lowered:
+        return "powershell"
+    if re.search(r"^\s*(?:async\s+def|def)\s+[A-Za-z_][A-Za-z0-9_]*\s*\(", text, flags=re.MULTILINE):
+        return "python"
+    if re.search(r"^\s*(?:select|insert|update|delete|create|alter)\b", lowered, flags=re.MULTILINE):
+        return "sql"
+    if any(marker in lowered for marker in ("set -e", "set -u", "pipefail", "awk ", "sed ", "grep ")):
+        return "shell"
+    return "generic"
 
 
 def _python_syntax_error_for_document(document: SanitizedDocument) -> SyntaxError | None:

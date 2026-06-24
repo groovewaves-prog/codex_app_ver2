@@ -1235,6 +1235,43 @@ class SourceCodeStaticFallbackTests(unittest.TestCase):
 
         self.assertNotIn("Python構文エラーを静的検出", {issue.title for issue in issues})
 
+    def test_source_code_static_fallback_does_not_parse_shell_script_as_python(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        issues = _source_code_static_fallback_if_empty(
+            [],
+            [
+                _doc(
+                    name="collect_param_data.sh",
+                    text=(
+                        "#!/bin/bash\n"
+                        "set -uo pipefail\n"
+                        "ACCOUNT=$(aws sts get-caller-identity --query Account --output text)\n"
+                        "echo \"$ACCOUNT\"\n"
+                    ),
+                )
+            ],
+            "source_code",
+        )
+
+        self.assertNotIn("Python構文エラーを静的検出", {issue.title for issue in issues})
+
+    def test_source_code_static_fallback_does_not_parse_powershell_as_python(self) -> None:
+        from secure_review.reviewer import _source_code_static_fallback_if_empty
+
+        issues = _source_code_static_fallback_if_empty(
+            [],
+            [
+                _doc(
+                    name="Close-StaleProblems.ps1",
+                    text="param([switch]$DryRun)\nInvoke-RestMethod -Uri $url\nWrite-Output 'ok'\n",
+                )
+            ],
+            "source_code",
+        )
+
+        self.assertNotIn("Python構文エラーを静的検出", {issue.title for issue in issues})
+
     def test_static_fact_filter_removes_implementation_missing_variants(self) -> None:
         from secure_review.models import ReviewIssue
         from secure_review.reviewer import _filter_source_code_issues_by_static_facts
